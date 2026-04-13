@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
-import { LogOut, User, ChevronDown, ShieldCheck, Home, Terminal, Activity } from "lucide-react";
+import { LogOut, User, ChevronDown, Home, Terminal, Activity, Printer } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function Navbar() {
@@ -19,8 +19,6 @@ export default function Navbar() {
   }, [user]);
 
   const isAdminOrOwner = userRole === "ADMIN" || userRole === "SUPER_ADMIN" || userRole === "BUSINESS_OWNER";
-
-  const consoleLabel = userRole === "BUSINESS_OWNER" ? "Business Terminal" : "System Admin";
   const consoleHref = userRole === "BUSINESS_OWNER" ? "/owner" : "/admin";
 
   useEffect(() => {
@@ -31,7 +29,6 @@ export default function Navbar() {
       setUser(currentUser || null);
       setLoading(false);
     };
-
     loadUser();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -68,105 +65,90 @@ export default function Navbar() {
   };
 
   return (
-    <header className="sticky top-0 z-[100] bg-[#F4F4F1] border-b-4 border-[#1A1A1A] w-full">
+    <header className="sticky top-0 z-[100] bg-[#1A1A1A] text-white border-b-4 border-[#1A1A1A] w-full shadow-xl">
       <div className="w-full px-8 h-20 flex items-center justify-between">
 
-        {/* Brand - Clickable for Customers, Static for Admins/Owners */}
-        {isAdminOrOwner ? (
-          <div className="flex items-center gap-3 shrink-0 cursor-default select-none">
-            <div className="w-10 h-10 bg-[#1A1A1A] flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(255,62,0,1)]">
-              <div className="w-4 h-4 bg-[#FF3E00] rounded-full" />
-            </div>
-            <span className="font-mono text-2xl font-black tracking-tighter uppercase italic">
-              Print<span className="text-[#FF3E00]">.</span>Studio
+        {/* Brand - Styled exactly like the footer logo */}
+        <Link href="/" className="flex flex-col group shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="font-black text-2xl uppercase italic tracking-tighter leading-none">
+              Press <span className="text-[#00FFFF]">&</span> Present
             </span>
+            {/* CMYK Chips from the footer */}
+            <div className="flex gap-1 ml-2">
+              <div className="w-2 h-2 bg-[#00FFFF]" />
+              <div className="w-2 h-2 bg-[#EC008C]" />
+              <div className="w-2 h-2 bg-[#FFF200]" />
+            </div>
           </div>
-        ) : (
-          <Link href="/" className="flex items-center gap-3 group shrink-0">
-            <div className="w-10 h-10 bg-[#1A1A1A] flex items-center justify-center transition-transform group-hover:rotate-90 shadow-[3px_3px_0px_0px_rgba(255,62,0,1)]">
-              <div className="w-4 h-4 bg-[#FF3E00] rounded-full" />
-            </div>
-            <span className="font-mono text-2xl font-black tracking-tighter uppercase italic">
-              Print<span className="text-[#FF3E00]">.</span>Studio
-            </span>
-          </Link>
-        )}
+          <span className="font-mono text-[8px] tracking-[0.3em] opacity-40 uppercase">
+            Production Grade Portal // 2026
+          </span>
+        </Link>
 
-        {/* Navigation - Conditional Rendering */}
+        {/* Navigation */}
         <nav className="hidden md:flex items-center h-full">
           {!isAdminOrOwner ? (
             <>
-              <NavLink href="/" active={pathname === "/"}>
-                <Home size={14} className="mr-2" /> Home
-              </NavLink>
-              <NavLink href="/browse" active={pathname === "/browse"}>Browse Catalog</NavLink>
-
-              {/* Only show Track Order if user is logged in */}
-              {user && (
-                <NavLink href="/track" active={pathname === "/track"}>Track Order</NavLink>
-              )}
+              <NavLink href="/" active={pathname === "/"}>Home</NavLink>
+              <NavLink href="/browse" active={pathname === "/browse"}>Browse</NavLink>
+              {user && <NavLink href="/track" active={pathname === "/track"}>Tracking</NavLink>}
             </>
           ) : (
             <div className="px-8 flex items-center gap-2 opacity-30 select-none">
               <Terminal size={12} />
-              <span className="font-mono text-[10px] uppercase tracking-[0.2em]">Restricted_Console_View</span>
+              <span className="font-mono text-[9px] uppercase tracking-[0.2em]">Console_Active</span>
             </div>
           )}
         </nav>
 
         {/* Auth Actions */}
-        <div className="flex items-center gap-4 shrink-0">
+        <div className="flex items-center gap-6">
           {!loading && user ? (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-4">
               {isAdminOrOwner && (
                 <Link
                   href={consoleHref}
-                  className="hidden sm:flex items-center gap-2 bg-[#FFF200] border-2 border-[#1A1A1A] px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest hover:bg-[#1A1A1A] hover:text-[#FFF200] transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none relative group"
+                  className="bg-[#FFF200] text-[#1A1A1A] px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest hover:invert transition-all flex items-center gap-2"
                 >
-                  <Terminal size={12} />
-                  {consoleLabel}
-                  <span className="flex h-2 w-2 relative">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-[#FF3E00]"></span>
-                  </span>
+                  <Terminal size={12} /> Terminal
                 </Link>
               )}
 
               <div className="relative" ref={dropdownRef}>
                 <button
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className={`flex items-center gap-3 px-4 py-2 border-2 transition-all ${isDropdownOpen ? "bg-[#1A1A1A] text-white border-[#1A1A1A]" : "bg-transparent border-transparent hover:border-[#1A1A1A]"
-                    }`}
+                  className="flex items-center gap-3 group"
                 >
-                  <div className="flex flex-col items-end text-right">
-                    <span className="font-mono text-[8px] uppercase opacity-50 tracking-[0.2em]">Node_Connected</span>
-                    <span className="font-bold text-xs uppercase tracking-tight">{displayName}</span>
+                  <div className="flex flex-col items-end">
+                    <span className="font-mono text-[8px] uppercase opacity-40 tracking-[0.2em]">Node_Active</span>
+                    <span className="font-bold text-xs uppercase tracking-widest group-hover:text-[#00FFFF]">{displayName}</span>
                   </div>
-                  <ChevronDown size={16} className={`transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
+                  <ChevronDown size={16} className={`text-[#EC008C] transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
                 </button>
 
                 {isDropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-64 bg-white border-4 border-[#1A1A1A] shadow-[10px_10px_0px_0px_rgba(26,26,26,1)] animate-in fade-in zoom-in-95 duration-100 z-[9999]">
-                    <div className="p-4 border-b-2 border-[#1A1A1A] bg-[#F4F4F1]">
-                      <p className="font-mono text-[10px] uppercase text-gray-400">Registry_ID</p>
-                      <p className="font-bold text-sm truncate">{user.email}</p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <Activity size={10} className="text-[#FF3E00]" />
-                        <p className="font-mono text-[9px] text-[#FF3E00] font-black uppercase tracking-tighter">Permission: {userRole}</p>
+                  <div className="absolute right-0 mt-4 w-64 bg-white text-[#1A1A1A] border-4 border-[#1A1A1A] shadow-[10px_10px_0px_0px_rgba(0,255,255,1)] animate-in fade-in slide-in-from-top-2">
+                    <div className="p-4 border-b-2 border-[#1A1A1A] bg-[#F9F9F9]">
+                      <p className="font-mono text-[9px] uppercase opacity-40">Identity_Registry</p>
+                      <p className="font-bold text-xs truncate">{user.email}</p>
+                      <div className="flex items-center gap-2 mt-2">
+                        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                        <p className="font-mono text-[9px] font-black uppercase tracking-widest">{userRole}</p>
                       </div>
                     </div>
 
                     <Link
                       href="/dashboard"
-                      className="flex items-center gap-3 w-full px-4 py-4 text-left font-mono text-[11px] uppercase font-black hover:bg-[#1A1A1A] hover:text-white transition-colors border-b-2 border-[#1A1A1A]"
+                      className="flex items-center gap-3 w-full px-4 py-4 font-mono text-[10px] uppercase font-black hover:bg-[#00FFFF] transition-colors border-b-2 border-[#1A1A1A]"
                       onClick={() => setIsDropdownOpen(false)}
                     >
-                      <User size={14} /> View_Profile
+                      <User size={14} /> Profile_Settings
                     </Link>
 
                     <button
                       onClick={handleSignOut}
-                      className="flex items-center gap-3 w-full px-4 py-4 text-left font-mono text-[11px] uppercase font-black text-[#FF3E00] hover:bg-[#FF3E00] hover:text-white transition-colors"
+                      className="flex items-center gap-3 w-full px-4 py-4 font-mono text-[10px] uppercase font-black text-[#EC008C] hover:bg-[#EC008C] hover:text-white transition-colors"
                     >
                       <LogOut size={14} /> Terminate_Session
                     </button>
@@ -175,9 +157,9 @@ export default function Navbar() {
               </div>
             </div>
           ) : (
-            <div className="flex items-center border-2 border-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
-              <Link href="/login" className="px-6 py-2 text-xs font-mono font-black uppercase hover:bg-gray-200 transition-colors border-r-2 border-[#1A1A1A] bg-white">Login</Link>
-              <Link href="/signup" className="px-6 py-2 text-xs font-mono font-black uppercase bg-[#1A1A1A] text-white hover:bg-[#FF3E00] transition-colors">Register</Link>
+            <div className="flex items-center border-2 border-white">
+              <Link href="/login" className="px-5 py-2 text-[10px] font-mono font-black uppercase hover:bg-white hover:text-[#1A1A1A] transition-colors border-r-2 border-white">Login</Link>
+              <Link href="/signup" className="px-5 py-2 text-[10px] font-mono font-black uppercase bg-[#00FFFF] text-[#1A1A1A] hover:bg-[#EC008C] hover:text-white transition-colors">Join</Link>
             </div>
           )}
         </div>
@@ -190,11 +172,14 @@ function NavLink({ href, children, active }) {
   return (
     <Link
       href={href}
-      className={`px-6 h-20 flex items-center font-mono text-xs font-bold uppercase tracking-widest transition-all relative group ${active ? "text-[#1A1A1A] bg-white" : "text-gray-500 hover:text-[#1A1A1A] hover:bg-white"
-        }`}
+      className={`px-8 h-20 flex flex-col items-center justify-center font-mono text-[10px] font-black uppercase tracking-[0.2em] transition-all relative group ${
+        active ? "text-[#00FFFF]" : "text-white/60 hover:text-white"
+      }`}
     >
       {children}
-      <span className={`absolute bottom-0 left-0 h-1 bg-[#FF3E00] transition-all ${active ? "w-full" : "w-0 group-hover:w-full"}`} />
+      {/* Active Indicator: A CMYK-inspired bar */}
+      <span className={`absolute bottom-0 left-0 h-1 bg-[#00FFFF] transition-all duration-300 ${active ? "w-full" : "w-0 group-hover:w-full"}`} />
+      {active && <span className="absolute bottom-0 left-0 h-1 w-full shadow-[0_0_15px_rgba(0,255,255,0.8)]" />}
     </Link>
   );
 }

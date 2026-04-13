@@ -1,6 +1,6 @@
 import { Inter, Outfit } from "next/font/google";
 import Navbar from "@/components/Navbar";
-import ChatbotWidget from "@/components/ChatbotWidget";
+import LiveChatWidget from "@/components/LiveChatWidget";
 import "@/assets/styles/globals.css";
 
 const inter = Inter({
@@ -24,7 +24,7 @@ export default function RootLayout({ children }) {
       <body>
         <Navbar />
         {children}
-        <ChatbotWidget />
+        <LiveChatWidget />
       </body>
     </html>
   );
