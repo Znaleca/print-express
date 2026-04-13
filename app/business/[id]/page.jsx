@@ -7,8 +7,11 @@ import { supabase } from "@/lib/supabaseClient";
 import {
   UploadCloud, CheckCircle2, CreditCard, Banknote,
   FileText, Star, MapPin, Loader2, Hash, ArrowRight,
-  ChevronRight, Info, AlertTriangle, MessageSquare
+  ChevronRight, Info, AlertTriangle, MessageSquare, Package, Truck
 } from "lucide-react";
+import dynamic from "next/dynamic";
+
+const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker"), { ssr: false });
 
 export default function BusinessDetailsPage({ params }) {
   const { id } = use(params);
@@ -27,6 +30,10 @@ export default function BusinessDetailsPage({ params }) {
   const [paymentMethod, setPaymentMethod] = useState("COD");
   const [receiptFile, setReceiptFile] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  const [deliveryType, setDeliveryType] = useState("PICKUP");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [deliveryCoordinates, setDeliveryCoordinates] = useState({ lat: 14.6806, lng: 120.5375 });
 
   useEffect(() => {
     async function init() {
@@ -103,6 +110,11 @@ export default function BusinessDetailsPage({ params }) {
     if (!selectedServices.length) return alert("Please select at least one service.");
     if (paymentMethod === "E-Wallet" && !receiptFile) return alert("Please upload your E-Wallet payment receipt.");
     if (!uploadedFiles.length) return alert("Please upload design files for proofing.");
+    
+    if (deliveryType === "DELIVERY") {
+      if (!deliveryAddress.trim()) return alert("Please enter your exact delivery address.");
+      if (!deliveryCoordinates.lat || !deliveryCoordinates.lng) return alert("Please pin your exact location on the map.");
+    }
 
     setIsProcessing(true);
 
@@ -153,7 +165,10 @@ export default function BusinessDetailsPage({ params }) {
           total: total,
           items: selectedServices,
           receipt_url: receiptUrl,
-          design_files: designFileUrls
+          design_files: designFileUrls,
+          delivery_type: deliveryType,
+          delivery_address: deliveryType === "DELIVERY" ? deliveryAddress : null,
+          delivery_coordinates: deliveryType === "DELIVERY" ? deliveryCoordinates : null,
         });
 
       if (orderError) throw new Error("Failed to place order: " + orderError.message);
@@ -409,6 +424,48 @@ export default function BusinessDetailsPage({ params }) {
                     <span className="font-mono text-[11px] uppercase tracking-[0.3em] font-black text-gray-500">Gross_Total</span>
                     <span className="text-5xl font-black italic leading-none">₱{total.toFixed(2)}</span>
                   </div>
+                </div>
+
+                {/* DELIVERY SELECTION */}
+                <div className="mb-10 text-black border-b-4 border-[#1A1A1A] pb-8 space-y-4">
+                   <p className="font-black uppercase italic text-sm tracking-widest">Fulfillment_Type</p>
+                   <div className="grid grid-cols-2 gap-4">
+                     <button 
+                       onClick={() => setDeliveryType("PICKUP")}
+                       className={`py-4 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${deliveryType === 'PICKUP' ? 'bg-[#00FFFF] border-[#1A1A1A] text-[#1A1A1A]' : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'}`}
+                     >
+                       <Package size={16} /> PICK_UP
+                     </button>
+                     <button 
+                       onClick={() => setDeliveryType("DELIVERY")}
+                       className={`py-4 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${deliveryType === 'DELIVERY' ? 'bg-[#EC008C] border-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]' : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'}`}
+                     >
+                       <Truck size={16} /> DELIVERY
+                     </button>
+                   </div>
+                   
+                   {deliveryType === "DELIVERY" && (
+                     <div className="mt-6 p-6 bg-[#F9F9F7] border-4 border-[#1A1A1A] space-y-6">
+                       <div>
+                         <p className="font-mono text-[10px] font-black uppercase tracking-widest mb-2 opacity-80">Full Address</p>
+                         <textarea 
+                           className="w-full border-2 border-[#1A1A1A] p-3 text-xs font-mono uppercase bg-white focus:outline-none focus:ring-2 focus:ring-[#EC008C]"
+                           placeholder="Enter your exact delivery address..."
+                           value={deliveryAddress}
+                           onChange={(e) => setDeliveryAddress(e.target.value)}
+                           rows={3}
+                         />
+                       </div>
+                       <div>
+                         <p className="font-mono text-[10px] font-black uppercase tracking-widest mb-2 opacity-80 flex gap-2 items-center"><MapPin size={12} /> Pin Location</p>
+                         <LocationPicker 
+                           lat={deliveryCoordinates.lat} 
+                           lng={deliveryCoordinates.lng} 
+                           onChange={(lat, lng) => setDeliveryCoordinates({ lat, lng })}
+                         />
+                       </div>
+                     </div>
+                   )}
                 </div>
 
                 {/* PAYMENT METHOD SELECTION */}

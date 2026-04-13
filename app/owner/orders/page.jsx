@@ -5,13 +5,17 @@ import { supabase } from "@/lib/supabaseClient";
 import {
   ShoppingBag, ChevronDown, CheckCircle, Eye,
   ExternalLink, Activity, Package, Clock,
-  CreditCard, FileText, AlertCircle
+  CreditCard, FileText, AlertCircle, MapPin, Truck, X
 } from "lucide-react";
+import dynamic from "next/dynamic";
+
+const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker"), { ssr: false });
 
 export default function OwnerOrdersPage() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
+  const [viewMapOrder, setViewMapOrder] = useState(null);
 
   useEffect(() => {
     const load = async () => {
@@ -94,7 +98,7 @@ export default function OwnerOrdersPage() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b-4 border-black bg-black text-white">
-                {["Timestamp", "Operation_ID", "Assets", "Valuation", "Receipt", "Intel", "Execution_State"].map((h) => (
+                {["Timestamp", "Operation_ID", "Assets", "Fulfillment", "Valuation", "Receipt", "Intel", "Execution_State"].map((h) => (
                   <th key={h} className="p-4 font-mono text-[10px] uppercase tracking-widest font-black whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -131,12 +135,39 @@ export default function OwnerOrdersPage() {
                       {order.items?.length || 0} UNITS
                     </td>
 
+                    {/* Fulfillment */}
+                    <td className="p-4">
+                      <div className="flex flex-col gap-1">
+                        {order.delivery_type === 'DELIVERY' ? (
+                          <>
+                            <span className="bg-[#EC008C] text-white px-2 py-0.5 text-[9px] font-black tracking-widest uppercase w-fit inline-flex items-center gap-1">
+                              <Truck size={10} /> DELIVERY
+                            </span>
+                            {order.delivery_address && (
+                              <span className="text-[9px] font-mono mt-1 opacity-70 truncate max-w-[150px]" title={order.delivery_address}>
+                                {order.delivery_address}
+                              </span>
+                            )}
+                            {order.delivery_coordinates && order.delivery_coordinates.lat && (
+                              <button onClick={() => setViewMapOrder(order)} className="text-[#FF3E00] hover:underline font-mono text-[9px] flex items-center gap-1 mt-1 text-left">
+                                <MapPin size={10} /> View Map
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <span className="bg-[#00FFFF] text-[#1A1A1A] px-2 py-0.5 text-[9px] font-black tracking-widest uppercase w-fit inline-flex items-center gap-1">
+                            <Package size={10} /> PICK_UP
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
                     {/* Valuation */}
                     <td className="p-4">
                       <div className="flex flex-col">
                         <span className="font-black text-[#FF3E00] text-sm">₱{Number(order.total).toFixed(2)}</span>
                         <span className="text-[9px] opacity-50 uppercase flex items-center gap-1">
-                          <CreditCard size={8} /> {order.payment_method}
+                           <CreditCard size={8} /> {order.payment_method}
                         </span>
                       </div>
                     </td>
@@ -207,6 +238,46 @@ export default function OwnerOrdersPage() {
         </div>
         <span>Total_Records: {orders.length}</span>
       </div>
+
+      {/* ── MAP MODAL ── */}
+      {viewMapOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white border-4 border-black p-6 shadow-[12px_12px_0px_0px_rgba(255,62,0,1)] max-w-2xl w-full relative">
+            <button 
+              onClick={() => setViewMapOrder(null)}
+              className="absolute top-4 right-4 text-black hover:text-[#FF3E00] transition-colors"
+            >
+              <X size={24} />
+            </button>
+            <h2 className="text-2xl font-black uppercase italic tracking-tighter flex items-center gap-2 mb-2">
+              <MapPin className="text-[#FF3E00]" /> Delivery Route
+            </h2>
+            <div className="flex gap-2 font-mono text-[10px] uppercase font-bold tracking-widest bg-gray-100 p-2 border-2 border-black mb-6">
+               <span className="text-black/50">Destination //</span>
+               <span>{viewMapOrder.delivery_address || 'ADDRESS_UNAVAILABLE'}</span>
+            </div>
+            
+            {viewMapOrder.delivery_coordinates && viewMapOrder.delivery_coordinates.lat && (
+              <div className="border-4 border-black relative pointer-events-none">
+                {/* Pointer events none to make it view-only */}
+                <LocationPicker 
+                  lat={viewMapOrder.delivery_coordinates.lat} 
+                  lng={viewMapOrder.delivery_coordinates.lng} 
+                />
+              </div>
+            )}
+            
+            <a 
+              href={`https://www.google.com/maps?q=${viewMapOrder.delivery_coordinates?.lat},${viewMapOrder.delivery_coordinates?.lng}`} 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="block w-full bg-black text-white text-center py-3 mt-6 font-mono text-[10px] font-black uppercase tracking-widest hover:bg-[#FF3E00] transition-colors shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)]"
+            >
+              Open in Google Maps
+            </a>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

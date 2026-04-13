@@ -6,7 +6,7 @@ import {
   PackageSearch, Truck, Printer, Clock, 
   MapPin, CheckCircle2, Hash, 
   Loader2, AlertTriangle, FileText, ShoppingBag,
-  Star, Activity, Terminal
+  Star, Activity, Terminal, Package
 } from "lucide-react";
 
 const STATUS_MAP = {
@@ -204,6 +204,25 @@ export default function TrackOrderPage() {
                               <FileText size={12} className="text-[#00FFFF]" /> {(order.design_files || []).length} ASSETS
                             </p>
                           </div>
+                        </div>
+
+                        {/* Fulfillment Route */}
+                        <div className="pt-4 border-t-2 border-[#1A1A1A]/10">
+                           <p className="font-mono text-[8px] uppercase tracking-widest opacity-40 font-black mb-2">Fulfillment_Route</p>
+                           {order.delivery_type === 'DELIVERY' ? (
+                             <div className="bg-[#1A1A1A] text-white p-3 border-l-4 border-[#EC008C]">
+                               <div className="flex items-center gap-2 font-black text-[10px] mb-1">
+                                 <Truck size={12} className="text-[#EC008C]" /> DELIVERY_REQUESTED
+                               </div>
+                               <p className="font-mono text-[9px] uppercase opacity-70 mt-2">{order.delivery_address || 'ADDRESS_NOT_PROVIDED'}</p>
+                             </div>
+                           ) : (
+                             <div className="bg-white border-2 border-[#1A1A1A] p-3 text-[#1A1A1A]">
+                               <div className="flex items-center gap-2 font-black text-[10px]">
+                                 <Package size={12} className="text-[#00FFFF]" /> PICK_UP_ONLY
+                               </div>
+                             </div>
+                           )}
                         </div>
 
                         {/* RATING MODULE */}
