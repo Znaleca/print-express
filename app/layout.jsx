@@ -14,8 +14,8 @@ const outfit = Outfit({
 });
 
 export const metadata = {
-  title: "Print Express | Premium Directory & Marketplace",
-  description: "Find the best printing businesses, get instant quotes, and manage your orders online.",
+  title: "Press & Present | Find. Print. Deliver.",
+  description: "Your go-to platform for discovering printing shops and managing print jobs online.",
 };
 
 export default function RootLayout({ children }) {
