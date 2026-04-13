@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
-  ShoppingBag, ChevronDown, CheckCircle, Eye,
+  ChevronDown, CheckCircle, Eye,
   ExternalLink, Activity, Package, Clock,
-  CreditCard, FileText, AlertCircle, MapPin, Truck, X
+  CreditCard, AlertCircle, MapPin, Truck, X, ShoppingBag
 } from "lucide-react";
 import dynamic from "next/dynamic";
 
@@ -53,52 +53,51 @@ export default function OwnerOrdersPage() {
       .eq("id", id);
 
     if (error) {
-      alert("Failed to update status: " + error.message);
+      alert("Status update failed: " + error.message);
     } else {
-      setToast({ type: "success", msg: `ORDER_${id.split("-")[0]} STATE: ${newStatus}` });
+      setToast({ type: "success", msg: `ORDER_${id.split("-")[0]} SET TO ${newStatus}` });
       setTimeout(() => setToast(null), 3000);
     }
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#F4F4F1] flex flex-col items-center justify-center font-mono p-8">
-        <Activity className="animate-spin mb-4 text-[#FF3E00]" size={48} />
-        <p className="uppercase tracking-[0.3em] text-xs animate-pulse">Syncing_Order_Registry...</p>
+      <div className="min-h-screen bg-[#E5E5E5] flex flex-col items-center justify-center font-mono p-8">
+        <Activity className="animate-spin mb-4 text-[#EC008C]" size={48} />
+        <p className="uppercase tracking-[0.3em] text-[10px] font-black animate-pulse text-[#1A1A1A]">
+          Loading_Order_Registry...
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#F4F4F1] p-4 lg:p-8 font-sans text-black">
+    <div className="min-h-screen bg-[#E5E5E5] p-4 lg:p-8 font-sans text-[#1A1A1A]">
       {/* ── HEADER ── */}
-      <div className="border-b-4 border-black pb-8 mb-8 flex flex-col md:flex-row justify-between items-end gap-4">
+      <div className="border-b-4 border-[#1A1A1A] pb-8 mb-8 flex flex-col md:flex-row justify-between items-end gap-4">
         <div>
           <h1 className="text-4xl font-black uppercase italic tracking-tighter flex items-center gap-3">
-            <Package size={32} className="text-[#FF3E00]" /> Fleet_Operations
+            <ShoppingBag size={32} className="text-[#00FFFF]" /> Order_Management
           </h1>
           <p className="font-mono text-[10px] uppercase tracking-widest opacity-60 mt-2">
-            Control center for fulfillment, blueprint intel, and payment verification.
+            Transaction Tracking // Order Fulfillment & Status Registry
           </p>
         </div>
 
         {toast && (
-          <div className="bg-black text-[#FFF200] px-4 py-2 font-mono text-[10px] uppercase animate-in fade-in slide-in-from-right-4 border-2 border-black">
+          <div className="bg-[#FFF200] text-[#1A1A1A] px-4 py-2 font-mono text-[10px] font-black uppercase animate-in fade-in slide-in-from-right-4 border-2 border-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
             <CheckCircle size={12} className="inline mr-2" /> {toast.msg}
           </div>
         )}
       </div>
 
       {/* ── ORDERS TABLE ── */}
-      <div className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] relative overflow-hidden">
-        {/* CRT Overlay Effect */}
-        <div className="absolute inset-0 pointer-events-none opacity-[0.02] bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%]" />
-
+      <div className="bg-white border-4 border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(26,26,26,1)] relative overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="border-b-4 border-black bg-black text-white">
-                {["Timestamp", "Operation_ID", "Assets", "Fulfillment", "Valuation", "Receipt", "Intel", "Execution_State"].map((h) => (
+              <tr className="border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
+                {["Date", "Order_ID", "Qty", "Delivery_Type", "Transaction", "Payment_Proof", "Design_Files", "Order_Status"].map((h) => (
                   <th key={h} className="p-4 font-mono text-[10px] uppercase tracking-widest font-black whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -106,51 +105,42 @@ export default function OwnerOrdersPage() {
             <tbody className="font-mono text-xs">
               {orders.length === 0 ? (
                 <tr>
-                  <td colSpan="7" className="p-12 text-center text-black/40 italic uppercase tracking-[0.2em]">
-                    No active operations detected in registry.
+                  <td colSpan="8" className="p-12 text-center text-black/40 italic uppercase tracking-[0.2em]">
+                    No transactions found in database.
                   </td>
                 </tr>
               ) : orders.map((order) => {
                 const isPaidViaWallet = order.payment_method === 'E-Wallet';
 
                 return (
-                  <tr key={order.id} className="border-b-2 border-black/10 hover:bg-[#FFF200]/10 transition-colors group">
-                    {/* Timestamp */}
+                  <tr key={order.id} className="border-b-2 border-[#1A1A1A]/10 hover:bg-[#00FFFF]/5 transition-colors group">
                     <td className="p-4 whitespace-nowrap font-bold">
                       <div className="flex items-center gap-2">
-                        <Clock size={12} className="opacity-30" />
+                        <Clock size={12} className="text-[#EC008C]" />
                         {new Date(order.created_at).toLocaleDateString()}
                       </div>
                     </td>
 
-                    {/* Operation ID */}
                     <td className="p-4">
-                      <span className="bg-black text-[#FFF200] px-2 py-0.5 font-bold tracking-tighter">
-                        {order.id.split('-')[0].toUpperCase()}
+                      <span className="bg-[#1A1A1A] text-[#FFF200] px-2 py-0.5 font-bold tracking-tighter">
+                        #{order.id.split('-')[0].toUpperCase()}
                       </span>
                     </td>
 
-                    {/* Assets Count */}
                     <td className="p-4 font-black italic">
-                      {order.items?.length || 0} UNITS
+                      {order.items?.length || 0} ITEMS
                     </td>
 
-                    {/* Fulfillment */}
                     <td className="p-4">
                       <div className="flex flex-col gap-1">
                         {order.delivery_type === 'DELIVERY' ? (
                           <>
                             <span className="bg-[#EC008C] text-white px-2 py-0.5 text-[9px] font-black tracking-widest uppercase w-fit inline-flex items-center gap-1">
-                              <Truck size={10} /> DELIVERY
+                              <Truck size={10} /> SHIPPING
                             </span>
-                            {order.delivery_address && (
-                              <span className="text-[9px] font-mono mt-1 opacity-70 truncate max-w-[150px]" title={order.delivery_address}>
-                                {order.delivery_address}
-                              </span>
-                            )}
-                            {order.delivery_coordinates && order.delivery_coordinates.lat && (
-                              <button onClick={() => setViewMapOrder(order)} className="text-[#FF3E00] hover:underline font-mono text-[9px] flex items-center gap-1 mt-1 text-left">
-                                <MapPin size={10} /> View Map
+                            {order.delivery_coordinates?.lat && (
+                              <button onClick={() => setViewMapOrder(order)} className="text-[#EC008C] hover:text-[#1A1A1A] font-mono text-[9px] font-black flex items-center gap-1 mt-1 text-left underline underline-offset-2">
+                                <MapPin size={10} /> VIEW_LOCATION
                               </button>
                             )}
                           </>
@@ -162,64 +152,64 @@ export default function OwnerOrdersPage() {
                       </div>
                     </td>
 
-                    {/* Valuation */}
                     <td className="p-4">
                       <div className="flex flex-col">
-                        <span className="font-black text-[#FF3E00] text-sm">₱{Number(order.total).toFixed(2)}</span>
-                        <span className="text-[9px] opacity-50 uppercase flex items-center gap-1">
+                        <span className="font-black text-[#1A1A1A] text-sm">₱{Number(order.total).toFixed(2)}</span>
+                        <span className="text-[9px] opacity-50 uppercase flex items-center gap-1 font-bold">
                            <CreditCard size={8} /> {order.payment_method}
                         </span>
                       </div>
                     </td>
 
-                    {/* Receipt Verification */}
                     <td className="p-4">
                       {isPaidViaWallet ? (
                         order.receipt_url ? (
-                          <a href={order.receipt_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-1 hover:bg-blue-700 hover:text-white transition-all font-black text-[9px] uppercase border border-blue-700/20">
-                            <Eye size={10} /> Verify_Proof
+                          <a href={order.receipt_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-[#1A1A1A] text-white px-2 py-1 hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all font-black text-[9px] uppercase">
+                            <Eye size={10} /> Check_Receipt
                           </a>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-red-600 font-black text-[9px] uppercase animate-pulse">
-                            <AlertCircle size={10} /> Payment_Missing
+                          <span className="inline-flex items-center gap-1 text-[#EC008C] font-black text-[9px] uppercase animate-pulse">
+                            <AlertCircle size={10} /> Unpaid_Transaction
                           </span>
                         )
                       ) : (
-                        <span className="text-[9px] opacity-30 uppercase">Offline_Cash</span>
+                        <span className="text-[9px] opacity-30 uppercase font-black">Cash_Payment</span>
                       )}
                     </td>
 
-                    {/* Intel (Files) */}
                     <td className="p-4">
                       <div className="flex flex-wrap gap-1 max-w-[120px]">
                         {(order.design_files || []).length > 0 ? (
                           order.design_files.map((df, i) => (
-                            <a key={i} href={df.url} target="_blank" rel="noopener noreferrer" className="bg-[#EBEBE8] border border-black/10 p-1 hover:border-[#FF3E00] group/file transition-all">
-                              <ExternalLink size={12} className="group-hover/file:text-[#FF3E00]" />
+                            <a key={i} href={df.url} target="_blank" rel="noopener noreferrer" className="bg-white border-2 border-[#1A1A1A] p-1 hover:bg-[#FFF200] transition-all">
+                              <ExternalLink size={12} />
                             </a>
                           ))
                         ) : (
-                          <span className="text-[9px] opacity-30 uppercase font-bold">No_Data</span>
+                          <span className="text-[9px] opacity-30 uppercase font-bold">No_Files</span>
                         )}
                       </div>
                     </td>
 
-                    {/* Execution State (Select) */}
                     <td className="p-4">
                       <div className="relative group/select">
                         <select
                           value={order.status}
                           onChange={(e) => updateStatus(order.id, e.target.value)}
-                          className={`appearance-none w-full bg-[#EBEBE8] border-2 border-black py-2 pl-3 pr-8 font-black italic uppercase text-[10px] tracking-tight cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#FFF200] transition-all ${order.status === 'COMPLETED' ? 'bg-[#FF3E00] text-white' : ''
-                            }`}
+                          className={`appearance-none w-full border-2 border-[#1A1A1A] py-2 pl-3 pr-8 font-black italic uppercase text-[10px] tracking-tight cursor-pointer focus:outline-none transition-all ${
+                            order.status === 'COMPLETED' ? 'bg-[#00FFFF] text-[#1A1A1A]' : 'bg-white'
+                          }`}
                         >
-                          <option value="PLACED">01_PLACED</option>
-                          <option value="PREPARING">02_PREPARING</option>
-                          <option value="READY_TO_PICK_UP">03_READY</option>
-                          <option value="RIDER_ON_THE_WAY">04_TRANSIT</option>
-                          <option value="COMPLETED">05_COMPLETE</option>
+                          <option value="PENDING">PENDING</option>
+                          <option value="PLACED">PLACED</option>
+                          <option value="PREPARING">PREPARING</option>
+                          <option value="READY_TO_PICK_UP">READY</option>
+                          <option value="RIDER_ON_THE_WAY">TRANSIT</option>
+                          <option value="COMPLETED">COMPLETE</option>
+                          <option value="CANCELLED">CANCELLED</option>
+                          <option value="REFUNDED">REFUNDED</option>
                         </select>
-                        <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none group-hover/select:translate-y-[-40%] transition-transform" />
+                        <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none transition-transform" />
                       </div>
                     </td>
                   </tr>
@@ -230,36 +220,35 @@ export default function OwnerOrdersPage() {
         </div>
       </div>
 
-      {/* ── FOOTER TELEMETRY ── */}
+      {/* ── FOOTER ── */}
       <div className="mt-6 flex justify-between items-center font-mono text-[9px] uppercase opacity-40">
         <div className="flex gap-4">
-          <span>Buffer: Nominal</span>
-          <span>Security: Level_2_Auth</span>
+          <span>Log: Verified</span>
+          <span>Access: Business_Owner</span>
         </div>
-        <span>Total_Records: {orders.length}</span>
+        <span>Total_Orders: {orders.length}</span>
       </div>
 
       {/* ── MAP MODAL ── */}
       {viewMapOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white border-4 border-black p-6 shadow-[12px_12px_0px_0px_rgba(255,62,0,1)] max-w-2xl w-full relative">
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-[#1A1A1A]/90 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white border-4 border-[#1A1A1A] p-6 shadow-[12px_12px_0px_0px_rgba(0,255,242,1)] max-w-2xl w-full relative">
             <button 
               onClick={() => setViewMapOrder(null)}
-              className="absolute top-4 right-4 text-black hover:text-[#FF3E00] transition-colors"
+              className="absolute top-4 right-4 text-[#1A1A1A] hover:text-[#EC008C] transition-colors"
             >
               <X size={24} />
             </button>
             <h2 className="text-2xl font-black uppercase italic tracking-tighter flex items-center gap-2 mb-2">
-              <MapPin className="text-[#FF3E00]" /> Delivery Route
+              <MapPin className="text-[#EC008C]" /> Location_Intel
             </h2>
-            <div className="flex gap-2 font-mono text-[10px] uppercase font-bold tracking-widest bg-gray-100 p-2 border-2 border-black mb-6">
-               <span className="text-black/50">Destination //</span>
-               <span>{viewMapOrder.delivery_address || 'ADDRESS_UNAVAILABLE'}</span>
+            <div className="font-mono text-[10px] uppercase font-bold tracking-widest bg-gray-100 p-2 border-2 border-[#1A1A1A] mb-6">
+               <span className="opacity-40">Destination // </span>
+               <span>{viewMapOrder.delivery_address || 'UNSPECIFIED'}</span>
             </div>
             
-            {viewMapOrder.delivery_coordinates && viewMapOrder.delivery_coordinates.lat && (
-              <div className="border-4 border-black relative pointer-events-none">
-                {/* Pointer events none to make it view-only */}
+            {viewMapOrder.delivery_coordinates?.lat && (
+              <div className="border-4 border-[#1A1A1A] h-[300px] overflow-hidden pointer-events-none relative">
                 <LocationPicker 
                   lat={viewMapOrder.delivery_coordinates.lat} 
                   lng={viewMapOrder.delivery_coordinates.lng} 
@@ -268,12 +257,12 @@ export default function OwnerOrdersPage() {
             )}
             
             <a 
-              href={`https://www.google.com/maps?q=${viewMapOrder.delivery_coordinates?.lat},${viewMapOrder.delivery_coordinates?.lng}`} 
+              href={`https://www.google.com/maps/search/?api=1&query=${viewMapOrder.delivery_coordinates?.lat},${viewMapOrder.delivery_coordinates?.lng}`} 
               target="_blank" 
               rel="noopener noreferrer" 
-              className="block w-full bg-black text-white text-center py-3 mt-6 font-mono text-[10px] font-black uppercase tracking-widest hover:bg-[#FF3E00] transition-colors shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)]"
+              className="block w-full bg-[#1A1A1A] text-white text-center py-4 mt-6 font-mono text-[10px] font-black uppercase tracking-widest hover:bg-[#EC008C] transition-colors"
             >
-              Open in Google Maps
+              OPEN_IN_MAPS
             </a>
           </div>
         </div>

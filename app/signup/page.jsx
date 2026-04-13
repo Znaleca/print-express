@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { Store, User, Loader2, ArrowRight, Mail, Briefcase, Scan, HardDrive, Cpu } from "lucide-react";
+import { Store, User, Loader2, ArrowRight, Mail, Briefcase, Scan, HardDrive, Cpu, Eye, EyeOff } from "lucide-react";
 
 const Requirement = ({ label, met }) => (
   <div className={`flex items-center gap-2 font-mono text-[9px] uppercase tracking-tighter transition-colors ${met ? "text-[#EC008C]" : "text-gray-400"}`}>
@@ -26,6 +26,8 @@ export default function SignUpPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const passwordRequirements = {
     length: formData.password.length >= 8,
@@ -52,7 +54,7 @@ export default function SignUpPage() {
         email: formData.email.trim().toLowerCase(),
         password: formData.password,
         options: {
-          emailRedirectTo: `${window.location.origin}/login`,
+          emailRedirectTo: `${process.env.NEXT_PUBLIC_URL || window.location.origin}/`,
           data: { full_name: formData.fullName, role: role },
         },
       };
@@ -188,7 +190,9 @@ export default function SignUpPage() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="group">
-                    <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">Nickname</label>
+                    <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">
+                      {role === "BUSINESS_OWNER" ? "Owner Nickname" : "Nickname"}
+                    </label>
                     <input name="fullName" type="text" required value={formData.fullName} onChange={handleChange}
                       className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm font-bold outline-none focus:border-[#EC008C] uppercase" placeholder="NAME" />
                   </div>
@@ -202,13 +206,23 @@ export default function SignUpPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="group">
                     <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">Password</label>
-                    <input name="password" type="password" required value={formData.password} onChange={handleChange}
-                      className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm outline-none focus:border-[#EC008C]" placeholder="••••••••" />
+                    <div className="relative">
+                      <input name="password" type={showPassword ? "text" : "password"} required value={formData.password} onChange={handleChange}
+                        className="w-full bg-transparent border-b-2 border-gray-200 py-2 pr-8 text-sm outline-none focus:border-[#EC008C]" placeholder="••••••••" />
+                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#EC008C] transition-colors">
+                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
                   </div>
                   <div className="group">
                     <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">Confirm Password</label>
-                    <input name="confirmPassword" type="password" required value={formData.confirmPassword} onChange={handleChange}
-                      className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm outline-none focus:border-[#00FFFF]" placeholder="••••••••" />
+                    <div className="relative">
+                      <input name="confirmPassword" type={showConfirmPassword ? "text" : "password"} required value={formData.confirmPassword} onChange={handleChange}
+                        className="w-full bg-transparent border-b-2 border-gray-200 py-2 pr-8 text-sm outline-none focus:border-[#00FFFF]" placeholder="••••••••" />
+                      <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#00FFFF] transition-colors">
+                        {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
                   </div>
                 </div>
 

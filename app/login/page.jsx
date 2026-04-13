@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { Loader2, ArrowRight, ShieldCheck, Activity, Mail } from "lucide-react";
+import { Loader2, ArrowRight, ShieldCheck, Activity, Mail, Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,9 +12,9 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   
-  // Forgot Password States
   const [isResetMode, setIsResetMode] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const getReadableError = (err) => {
     const message = err?.message?.toLowerCase() || "";
@@ -31,7 +31,7 @@ export default function LoginPage() {
     setError(null);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(formData.email, {
-        redirectTo: `${window.location.origin}/reset-password`,
+        redirectTo: `${process.env.NEXT_PUBLIC_URL || window.location.origin}/reset-password`,
       });
       if (error) throw error;
       setResetSent(true);
@@ -184,15 +184,24 @@ export default function LoginPage() {
               {!isResetMode && (
                 <div className="group relative animate-in fade-in slide-in-from-top-4">
                   <label className="block font-mono text-[10px] uppercase tracking-[0.2em] mb-1 text-gray-400 font-bold">Password</label>
-                  <input
-                    name="password"
-                    type="password"
-                    required
-                    value={formData.password}
-                    onChange={handleChange}
-                    className="w-full bg-transparent border-b-4 border-[#1A1A1A]/10 py-3 text-2xl font-black outline-none focus:border-[#00FFFF] transition-all placeholder:text-black/10"
-                    placeholder="••••••••"
-                  />
+                  <div className="relative">
+                    <input
+                      name="password"
+                      type={showPassword ? "text" : "password"}
+                      required
+                      value={formData.password}
+                      onChange={handleChange}
+                      className="w-full bg-transparent border-b-4 border-[#1A1A1A]/10 py-3 pr-10 text-2xl font-black outline-none focus:border-[#00FFFF] transition-all placeholder:text-black/10"
+                      placeholder="••••••••"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#00FFFF] transition-colors"
+                    >
+                      {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                    </button>
+                  </div>
                   <div className="flex justify-end mt-2">
                     <button
                       type="button"

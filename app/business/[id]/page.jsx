@@ -160,7 +160,7 @@ export default function BusinessDetailsPage({ params }) {
         .insert({
           customer_id: uid,
           business_id: business.id,
-          status: "PLACED",
+          status: "PENDING",
           payment_method: paymentMethod,
           total: total,
           items: selectedServices,

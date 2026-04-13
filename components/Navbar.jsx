@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
-import { LogOut, User, ChevronDown, Home, Terminal, Activity, Printer } from "lucide-react";
+import { LogOut, User, ChevronDown, Terminal, Printer, LayoutDashboard } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function Navbar() {
@@ -19,6 +19,9 @@ export default function Navbar() {
   }, [user]);
 
   const isAdminOrOwner = userRole === "ADMIN" || userRole === "SUPER_ADMIN" || userRole === "BUSINESS_OWNER";
+  
+  // Updated console labels
+  const consoleLabel = userRole === "BUSINESS_OWNER" ? "Shop_Console" : "Admin_Console";
   const consoleHref = userRole === "BUSINESS_OWNER" ? "/owner" : "/admin";
 
   useEffect(() => {
@@ -68,13 +71,12 @@ export default function Navbar() {
     <header className="sticky top-0 z-[100] bg-[#1A1A1A] text-white border-b-4 border-[#1A1A1A] w-full shadow-xl">
       <div className="w-full px-8 h-20 flex items-center justify-between">
 
-        {/* Brand - Styled exactly like the footer logo */}
+        {/* Brand */}
         <Link href="/" className="flex flex-col group shrink-0">
           <div className="flex items-center gap-2">
             <span className="font-black text-2xl uppercase italic tracking-tighter leading-none">
               Press <span className="text-[#00FFFF]">&</span> Present
             </span>
-            {/* CMYK Chips from the footer */}
             <div className="flex gap-1 ml-2">
               <div className="w-2 h-2 bg-[#00FFFF]" />
               <div className="w-2 h-2 bg-[#EC008C]" />
@@ -92,12 +94,13 @@ export default function Navbar() {
             <>
               <NavLink href="/" active={pathname === "/"}>Home</NavLink>
               <NavLink href="/browse" active={pathname === "/browse"}>Browse</NavLink>
+              <NavLink href="/shops" active={pathname === "/shops"}>Shops</NavLink>
               {user && <NavLink href="/track" active={pathname === "/track"}>Tracking</NavLink>}
             </>
           ) : (
             <div className="px-8 flex items-center gap-2 opacity-30 select-none">
               <Terminal size={12} />
-              <span className="font-mono text-[9px] uppercase tracking-[0.2em]">Console_Active</span>
+              <span className="font-mono text-[9px] uppercase tracking-[0.2em]">System_Interface_Active</span>
             </div>
           )}
         </nav>
@@ -111,7 +114,7 @@ export default function Navbar() {
                   href={consoleHref}
                   className="bg-[#FFF200] text-[#1A1A1A] px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest hover:invert transition-all flex items-center gap-2"
                 >
-                  <Terminal size={12} /> Terminal
+                  <LayoutDashboard size={12} /> {consoleLabel}
                 </Link>
               )}
 
@@ -121,7 +124,7 @@ export default function Navbar() {
                   className="flex items-center gap-3 group"
                 >
                   <div className="flex flex-col items-end">
-                    <span className="font-mono text-[8px] uppercase opacity-40 tracking-[0.2em]">Node_Active</span>
+                    <span className="font-mono text-[8px] uppercase opacity-40 tracking-[0.2em]">User_Active</span>
                     <span className="font-bold text-xs uppercase tracking-widest group-hover:text-[#00FFFF]">{displayName}</span>
                   </div>
                   <ChevronDown size={16} className={`text-[#EC008C] transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
@@ -143,14 +146,14 @@ export default function Navbar() {
                       className="flex items-center gap-3 w-full px-4 py-4 font-mono text-[10px] uppercase font-black hover:bg-[#00FFFF] transition-colors border-b-2 border-[#1A1A1A]"
                       onClick={() => setIsDropdownOpen(false)}
                     >
-                      <User size={14} /> Profile_Settings
+                      <User size={14} /> Account_Settings
                     </Link>
 
                     <button
                       onClick={handleSignOut}
                       className="flex items-center gap-3 w-full px-4 py-4 font-mono text-[10px] uppercase font-black text-[#EC008C] hover:bg-[#EC008C] hover:text-white transition-colors"
                     >
-                      <LogOut size={14} /> Terminate_Session
+                      <LogOut size={14} /> Sign_Out
                     </button>
                   </div>
                 )}
@@ -177,7 +180,6 @@ function NavLink({ href, children, active }) {
       }`}
     >
       {children}
-      {/* Active Indicator: A CMYK-inspired bar */}
       <span className={`absolute bottom-0 left-0 h-1 bg-[#00FFFF] transition-all duration-300 ${active ? "w-full" : "w-0 group-hover:w-full"}`} />
       {active && <span className="absolute bottom-0 left-0 h-1 w-full shadow-[0_0_15px_rgba(0,255,255,0.8)]" />}
     </Link>
