@@ -1,5 +1,6 @@
 import { Inter, Outfit } from "next/font/google";
 import Navbar from "@/components/Navbar";
+import Footer from "@/components/Footer";
 import LiveChatWidget from "@/components/LiveChatWidget";
 import "@/assets/styles/globals.css";
 
@@ -21,9 +22,10 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en" className={`${inter.variable} ${outfit.variable}`} data-scroll-behavior="smooth">
-      <body>
+      <body className="min-h-screen flex flex-col">
         <Navbar />
-        {children}
+        <main className="flex-1">{children}</main>
+        <Footer />
         <LiveChatWidget />
       </body>
     </html>

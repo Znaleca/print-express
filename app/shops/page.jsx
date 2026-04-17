@@ -20,7 +20,9 @@ export default function ShopsPage() {
           services ( name, category, available ),
           business_reviews ( rating )
         `)
-        .eq("status", "APPROVED");
+        .eq("status", "APPROVED")
+        .not("lat", "is", null)
+        .not("lng", "is", null);
 
       if (bizError) {
         console.error("Error loading businesses:", bizError);
@@ -64,48 +66,70 @@ export default function ShopsPage() {
   );
 
   return (
-    <div className="min-h-screen bg-[#FDFDFD] text-[#1A1A1A] font-sans p-6 md:p-12">
-      {/* HEADER SECTION */}
-      <div className="max-w-7xl mx-auto mb-16">
-        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-8">
-          <div className="flex-1">
-            <div className="inline-flex items-center gap-2 px-4 py-1 border-2 border-[#1A1A1A] mb-6 font-mono text-[10px] font-black uppercase tracking-[0.2em] bg-white shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]">
-              <Printer size={12} />
-              <span>Directory // Establishments_Online</span>
-            </div>
+    <main className="min-h-screen bg-[#FDFDFD] text-[#1A1A1A] font-sans overflow-x-hidden">
+      <section className="relative border-b-8 border-[#1A1A1A] px-6 py-14 md:px-10 md:py-16">
+        <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
+        <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
+        <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
 
-            <h1 className="text-6xl md:text-8xl font-black uppercase italic tracking-tighter leading-[0.8] mb-6">
-              All_<span className="text-[#EC008C]">Shops</span>
-            </h1>
-
-            <div className="flex h-3 w-full max-w-sm mb-6">
-              <div className="flex-1 bg-[#00FFFF]" />
-              <div className="flex-1 bg-[#EC008C]" />
-              <div className="flex-1 bg-[#FFF200]" />
-              <div className="flex-1 bg-[#1A1A1A]" />
-            </div>
+        <div className="relative w-full">
+          <div className="inline-flex items-center gap-3 border-4 border-[#1A1A1A] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
+            <span className="flex gap-1">
+              <span className="h-2 w-2 bg-[#00FFFF]" />
+              <span className="h-2 w-2 bg-[#EC008C]" />
+              <span className="h-2 w-2 bg-[#FFF200]" />
+            </span>
+            Shop_Directory // Discovery_Mode
           </div>
 
-          <div className="w-full lg:w-[450px] shrink-0">
-            <div className="relative group">
-              <div className="absolute -inset-1 bg-[#EC008C] opacity-20 group-focus-within:opacity-40 transition-opacity" />
-              <div className="relative flex items-center bg-white border-4 border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(26,26,26,1)]">
-                <Search className="ml-4 text-[#1A1A1A]" size={24} />
-                <input
-                  type="text"
-                  className="w-full bg-transparent px-4 py-5 text-[#1A1A1A] placeholder:text-[#1A1A1A]/30 focus:outline-none font-mono text-xs font-black uppercase tracking-widest"
-                  placeholder="Search by name, service or location..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
+          <div className="mt-8 grid gap-8 lg:grid-cols-[1.15fr_0.85fr] lg:items-end">
+            <div>
+              <h1 className="text-5xl font-black uppercase italic tracking-tighter leading-[0.92] md:text-7xl">
+                All_<span className="bg-[#1A1A1A] px-4 py-1 text-white not-italic">Shops</span>
+              </h1>
+              <p className="mt-4 max-w-3xl font-mono text-[11px] uppercase tracking-[0.2em] leading-relaxed text-gray-600 md:text-sm">
+                Browse approved print providers, inspect available services, and jump directly into order setup.
+              </p>
+
+              <div className="mt-6 flex h-3 w-full max-w-sm">
+                <div className="flex-1 bg-[#00FFFF]" />
+                <div className="flex-1 bg-[#EC008C]" />
+                <div className="flex-1 bg-[#FFF200]" />
+                <div className="flex-1 bg-[#1A1A1A]" />
+              </div>
+            </div>
+
+            <div className="w-full">
+              <div className="relative group">
+                <div className="absolute -inset-1 bg-[#EC008C] opacity-20 group-focus-within:opacity-40 transition-opacity" />
+                <div className="relative flex items-center bg-white border-4 border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(26,26,26,1)]">
+                  <Search className="ml-4 text-[#1A1A1A]" size={24} />
+                  <input
+                    type="text"
+                    className="w-full bg-transparent px-4 py-5 text-[#1A1A1A] placeholder:text-[#1A1A1A]/30 focus:outline-none font-mono text-xs font-black uppercase tracking-widest"
+                    placeholder="Search by name, service or location..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
               </div>
             </div>
           </div>
         </div>
+      </section>
+
+      <div className="border-b-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
+        <div className="flex w-full items-center gap-6 px-6 font-mono text-[10px] font-black uppercase tracking-[0.35em] md:px-10">
+          <span className="text-[#00FFFF]">Cyan</span>
+          <span className="text-[#EC008C]">Magenta</span>
+          <span className="text-[#FFF200]">Yellow</span>
+          <span className="text-white">Black</span>
+          <Printer size={14} className="text-white" />
+        </div>
       </div>
 
       {/* GRID SECTION */}
-      <div className="max-w-7xl mx-auto">
+      <section className="w-full px-6 py-10 md:px-10 md:py-14">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-32 font-mono uppercase text-[12px] tracking-[0.3em] text-[#1A1A1A]">
             <Loader2 className="animate-spin mb-6 text-[#00FFFF]" size={64} strokeWidth={3} />
@@ -193,10 +217,10 @@ export default function ShopsPage() {
             ))}
           </div>
         )}
-      </div>
+      </section>
 
       {/* FOOTER STATUS */}
-      <div className="max-w-7xl mx-auto mt-20 py-8 border-t-4 border-[#1A1A1A] flex flex-col sm:flex-row justify-between items-center gap-6">
+      <div className="mt-20 flex w-full flex-col items-center justify-between gap-6 border-t-4 border-[#1A1A1A] py-8 sm:flex-row">
         <span className="font-mono text-xs font-black uppercase tracking-[0.3em] bg-[#1A1A1A] text-white px-4 py-1">
           Active_Shops: {filtered.length}
         </span>
@@ -207,6 +231,6 @@ export default function ShopsPage() {
           <div className="w-12 h-3 bg-[#1A1A1A]" />
         </div>
       </div>
-    </div>
+    </main>
   );
 }

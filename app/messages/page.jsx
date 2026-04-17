@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
   MessageSquare, Send, Loader2, User, Store,
-  ChevronRight, Hash, AlertTriangle
+  ChevronRight, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar
 } from "lucide-react";
 
 function MessagesInner() {
@@ -21,8 +21,14 @@ function MessagesInner() {
   const [loadingConvs, setLoadingConvs] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [sending, setSending] = useState(false);
+  const [sendingImage, setSendingImage] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editingText, setEditingText] = useState("");
+  const [unreadByConv, setUnreadByConv] = useState({});
+  const [menuMessageId, setMenuMessageId] = useState(null);
   const bottomRef = useRef(null);
   const channelRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   /* ── 1. Auth ── */
   useEffect(() => {
@@ -38,8 +44,8 @@ function MessagesInner() {
     loadConversations();
   }, [user]);
 
-  const loadConversations = async () => {
-    setLoadingConvs(true);
+  const loadConversations = async (isBg = false) => {
+    if (!isBg) setLoadingConvs(true);
     let data, error;
 
     ({ data, error } = await supabase
@@ -50,6 +56,25 @@ function MessagesInner() {
 
     if (!error && data) {
       setConversations(data);
+
+      if (data.length > 0) {
+        const convIds = data.map((c) => c.id);
+        const { data: unreadRows } = await supabase
+          .from("chat_messages")
+          .select("conversation_id")
+          .in("conversation_id", convIds)
+          .eq("is_read", false)
+          .neq("sender_id", user.id);
+
+        const unreadMap = {};
+        (unreadRows || []).forEach((row) => {
+          unreadMap[row.conversation_id] = (unreadMap[row.conversation_id] || 0) + 1;
+        });
+        setUnreadByConv(unreadMap);
+      } else {
+        setUnreadByConv({});
+      }
+
       // Auto-open conversation if ?business= param present
       if (initBizId) {
         const existing = data.find((c) => c.business_id === initBizId);
@@ -61,7 +86,7 @@ function MessagesInner() {
         }
       }
     }
-    setLoadingConvs(false);
+    if (!isBg) setLoadingConvs(false);
   };
 
   /* ── 3. Start a new conversation with a business ── */
@@ -88,6 +113,7 @@ function MessagesInner() {
   const openConversation = (conv) => {
     setActiveConv(conv);
     setMessages([]);
+    setUnreadByConv((prev) => ({ ...prev, [conv.id]: 0 }));
   };
 
   /* ── 5. Load messages + subscribe realtime + poll fallback ── */
@@ -108,31 +134,28 @@ function MessagesInner() {
       .on(
         "postgres_changes",
         {
-          event: "INSERT",
+          event: "*",
           schema: "public",
           table: "chat_messages",
         },
-        (payload) => {
-          // Only handle messages for this conversation
-          if (payload.new.conversation_id !== activeConv.id) return;
-          setMessages((prev) => {
-            if (prev.find((m) => m.id === payload.new.id)) return prev;
-            return [...prev, payload.new];
-          });
+        async (payload) => {
+          const row = payload.new || payload.old;
+          if (!row?.conversation_id) return;
+
+          if (row.conversation_id === activeConv.id) {
+            await fetchMessages(activeConv.id, true);
+            await markConversationRead(activeConv.id);
+          }
+
+          await loadConversations(true);
         }
       )
       .subscribe();
 
     channelRef.current = channel;
 
-    // Polling fallback every 5s in case realtime drops
-    const pollInterval = setInterval(() => {
-      fetchMessages(activeConv.id);
-    }, 5000);
-
     return () => {
       if (channelRef.current) supabase.removeChannel(channelRef.current);
-      clearInterval(pollInterval);
     };
   }, [activeConv]);
 
@@ -140,16 +163,32 @@ function MessagesInner() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const fetchMessages = async (convId) => {
-    setLoadingMsgs(true);
+  const fetchMessages = async (convId, isBg = false) => {
+    if (!isBg) setLoadingMsgs(true);
     const { data } = await supabase
       .from("chat_messages")
       .select("*")
       .eq("conversation_id", convId)
       .order("created_at", { ascending: true });
     setMessages(data || []);
-    setLoadingMsgs(false);
+    if (!isBg) setLoadingMsgs(false);
   };
+
+  const markConversationRead = async (convId) => {
+    await supabase
+      .from("chat_messages")
+      .update({ is_read: true })
+      .eq("conversation_id", convId)
+      .neq("sender_id", user.id)
+      .eq("is_read", false);
+
+    setUnreadByConv((prev) => ({ ...prev, [convId]: 0 }));
+  };
+
+  useEffect(() => {
+    if (!activeConv || !user) return;
+    markConversationRead(activeConv.id);
+  }, [activeConv, user]);
 
   const sendMessage = async (e) => {
     e.preventDefault();
@@ -161,10 +200,82 @@ function MessagesInner() {
       sender_id: user.id,
       sender_role: "CUSTOMER",
       content: input.trim(),
+      is_read: false,
     });
 
     setInput("");
     setSending(false);
+  };
+
+  const sendImageMessage = async (file) => {
+    if (!file || !activeConv || !user) return;
+    setSendingImage(true);
+
+    const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+    const filePath = `${activeConv.id}/${user.id}-${Date.now()}.${ext}`;
+
+    const { error: uploadErr } = await supabase.storage
+      .from("chat-images")
+      .upload(filePath, file, { upsert: false });
+
+    if (!uploadErr) {
+      const { data } = supabase.storage.from("chat-images").getPublicUrl(filePath);
+      await supabase.from("chat_messages").insert({
+        conversation_id: activeConv.id,
+        sender_id: user.id,
+        sender_role: "CUSTOMER",
+        content: "[image]",
+        image_url: data?.publicUrl || null,
+        is_read: false,
+      });
+    }
+
+    setSendingImage(false);
+  };
+
+  const startEditMessage = (msg) => {
+    setMenuMessageId(null);
+    setEditingId(msg.id);
+    if (msg.content === "[image]" || msg.content === "[VIDEO_CALL_REQUEST]" || msg.content.startsWith("[VIDEO_CALL_INVITE:")) {
+      setEditingText("");
+    } else {
+      setEditingText(msg.content || "");
+    }
+  };
+
+  const sendVideoCallRequest = async () => {
+    if (!activeConv || !user) return;
+    setSending(true);
+    await supabase.from("chat_messages").insert({
+      conversation_id: activeConv.id,
+      sender_id: user.id,
+      sender_role: "CUSTOMER",
+      content: "[VIDEO_CALL_REQUEST]",
+      is_read: false,
+    });
+    setSending(false);
+  };
+
+  const saveEditMessage = async (msgId) => {
+    if (!editingText.trim()) return;
+    await supabase
+      .from("chat_messages")
+      .update({ content: editingText.trim(), edited_at: new Date().toISOString() })
+      .eq("id", msgId)
+      .eq("sender_id", user.id);
+    setEditingId(null);
+    setEditingText("");
+    fetchMessages(activeConv.id, true);
+  };
+
+  const deleteMessage = async (msg) => {
+    setMenuMessageId(null);
+    await supabase
+      .from("chat_messages")
+      .delete()
+      .eq("id", msg.id)
+      .eq("sender_id", user.id);
+    fetchMessages(activeConv.id, true);
   };
 
   const convLabel = (conv) => conv.businesses?.name || "Unknown Shop";
@@ -221,6 +332,7 @@ function MessagesInner() {
             ) : (
               conversations.map((conv) => {
                 const isActive = activeConv?.id === conv.id;
+                const unread = unreadByConv[conv.id] || 0;
                 return (
                   <button
                     key={conv.id}
@@ -247,6 +359,11 @@ function MessagesInner() {
                         {new Date(conv.updated_at).toLocaleDateString()}
                       </p>
                     </div>
+                    {unread > 0 && (
+                      <div className="min-w-6 h-6 px-2 bg-[#EC008C] text-white border-2 border-[#1A1A1A] flex items-center justify-center font-mono text-[9px] font-black">
+                        {unread}
+                      </div>
+                    )}
                     <ChevronRight size={14} className={`shrink-0 ${isActive ? "text-[#00FFFF]" : "opacity-0 group-hover:opacity-100 text-[#EC008C]"} transition-opacity`} />
                   </button>
                 );
@@ -303,6 +420,7 @@ function MessagesInner() {
                 ) : (
                   messages.map((msg) => {
                     const isMine = msg.sender_id === user.id;
+                    const isEditing = editingId === msg.id;
                     return (
                       <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
                         {!isMine && (
@@ -310,14 +428,115 @@ function MessagesInner() {
                             <Store size={13} className="text-[#00FFFF]" />
                           </div>
                         )}
-                        <div className={`max-w-[65%] px-5 py-4 border-2 ${
+                        <div className={`relative max-w-[65%] px-5 py-4 border-2 ${
                           isMine
                             ? "bg-[#1A1A1A] text-white border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(0,255,255,1)]"
                             : "bg-white text-[#1A1A1A] border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(236,0,140,0.3)]"
                         }`}>
-                          <p className="text-sm font-bold leading-relaxed">{msg.content}</p>
+                          {msg.image_url && (
+                            <a href={msg.image_url} target="_blank" rel="noopener noreferrer">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={msg.image_url}
+                                alt="Chat upload"
+                                className="mb-3 max-h-64 w-auto rounded border-2 border-black/20"
+                              />
+                            </a>
+                          )}
+
+                          {isEditing ? (
+                            <div className="space-y-2">
+                              <input
+                                value={editingText}
+                                onChange={(e) => setEditingText(e.target.value)}
+                                className="w-full px-3 py-2 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A] font-mono text-sm"
+                              />
+                              <div className="flex gap-2 justify-end">
+                                <button type="button" onClick={() => saveEditMessage(msg.id)} className="p-1 border-2 border-[#1A1A1A] bg-[#00FFFF] text-[#1A1A1A]"><Check size={12} /></button>
+                                <button type="button" onClick={() => { setEditingId(null); setEditingText(""); }} className="p-1 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A]"><X size={12} /></button>
+                              </div>
+                            </div>
+                          ) : msg.content === "[VIDEO_CALL_REQUEST]" ? (
+                            <div className="flex flex-col items-center p-3 text-center w-48">
+                              <Video size={28} className={`mb-2 ${isMine ? "text-[#00FFFF]" : "text-[#EC008C]"}`} />
+                              <p className="font-black uppercase text-xs whitespace-normal">Video Call Requested</p>
+                              <p className="font-mono text-[9px] uppercase mt-1 opacity-70">Awaiting owner's invite</p>
+                            </div>
+                          ) : msg.content.startsWith("[VIDEO_CALL_INVITE:") ? (
+                            (() => {
+                              const timeStr = msg.content.replace("[VIDEO_CALL_INVITE:", "").replace("]", "");
+                              const schedTime = new Date(timeStr);
+                              // We can update the state to re-render, but usually polling/realtime makes changing components remount enough.
+                              // Check if time is past, or at least if it's within 15 minutes before the time
+                              const isExpired = Date.now() - schedTime.getTime() > (30 * 60 * 1000);
+                              const joinable = !isExpired && (schedTime.getTime() - Date.now()) <= (15 * 60 * 1000);
+                              return (
+                                <div className="flex flex-col items-center p-3 text-center border-t-4 border-[#00FFFF] bg-white/5 w-56">
+                                  <Calendar size={28} className={`mb-2 ${isMine ? "text-[#00FFFF]" : "text-[#EC008C]"}`} />
+                                  <p className="font-black uppercase text-xs text-[#00FFFF]">Video Call Scheduled</p>
+                                  <p className="font-mono text-[10px] uppercase font-bold mt-1 opacity-90">{schedTime.toLocaleString()}</p>
+                                  {isExpired ? (
+                                    <button disabled className="mt-3 px-4 py-2 w-full bg-[#1A1A1A]/50 text-white/50 font-black uppercase text-xs border border-[#1A1A1A]/50 cursor-not-allowed">
+                                      Link Expired
+                                    </button>
+                                  ) : joinable ? (
+                                    <a
+                                      href={`https://meet.jit.si/print-app-call-${activeConv.id}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="mt-3 px-4 py-2 w-full bg-[#EC008C] hover:bg-[#FFF200] hover:text-[#1A1A1A] text-white font-black uppercase text-xs border border-transparent hover:border-[#1A1A1A] transition-all"
+                                    >
+                                      Join Call
+                                    </a>
+                                  ) : (
+                                    <button disabled className="mt-3 px-4 py-2 w-full bg-[#1A1A1A]/50 text-white/50 font-black uppercase text-xs border border-[#1A1A1A]/50 cursor-not-allowed">
+                                      Not yet available
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })()
+                          ) : (
+                            msg.content !== "[image]" && <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap word-break break-words">{msg.content}</p>
+                          )}
+
+                          {isMine && !isEditing && (
+                            <>
+                              <div className="mt-2 flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => setMenuMessageId((prev) => (prev === msg.id ? null : msg.id))}
+                                  className={`p-1 border ${isMine ? "border-white/40" : "border-black/40"}`}
+                                  aria-label="More actions"
+                                >
+                                  <MoreVertical size={12} />
+                                </button>
+                              </div>
+
+                              {menuMessageId === msg.id && (
+                                <div className="absolute right-3 top-12 z-20 w-28 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+                                  <button
+                                    type="button"
+                                    onClick={() => startEditMessage(msg)}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-left font-mono text-[10px] font-black uppercase hover:bg-[#00FFFF]"
+                                  >
+                                    <Pencil size={11} /> Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteMessage(msg)}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-left font-mono text-[10px] font-black uppercase hover:bg-[#EC008C] hover:text-white"
+                                  >
+                                    <Trash2 size={11} /> Delete
+                                  </button>
+                                </div>
+                              )}
+                            </>
+                          )}
+
                           <p className={`font-mono text-[8px] uppercase mt-2 font-black tracking-wider ${isMine ? "opacity-40 text-right" : "opacity-40"}`}>
                             {new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                            {msg.edited_at ? " • edited" : ""}
                           </p>
                         </div>
                         {isMine && (
@@ -341,6 +560,35 @@ function MessagesInner() {
                   placeholder="Type a message..."
                   className="flex-1 px-5 py-4 border-2 border-[#1A1A1A] font-mono text-sm bg-[#F9F9F7] focus:outline-none focus:bg-white focus:ring-4 ring-[#00FFFF]/40 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
                 />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) sendImageMessage(file);
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={sendingImage}
+                  className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#FFF200] transition-all disabled:opacity-40 shrink-0"
+                  title="Attach Image"
+                >
+                  {sendingImage ? <Loader2 size={20} className="animate-spin" /> : <ImagePlus size={20} />}
+                </button>
+                <button
+                  type="button"
+                  onClick={sendVideoCallRequest}
+                  disabled={sending}
+                  className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#00FFFF] transition-all disabled:opacity-40 shrink-0"
+                  title="Request Video Call"
+                >
+                  <Video size={20} />
+                </button>
                 <button
                   type="submit"
                   disabled={!input.trim() || sending}

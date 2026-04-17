@@ -35,15 +35,20 @@ function CenterToMarker({ position }) {
 }
 
 export default function LocationPicker({ lat, lng, onChange }) {
+  const [isMounted, setIsMounted] = useState(false);
   const [position, setPosition] = useState(lat && lng ? { lat, lng } : null);
   const defaultCenter = [14.6806, 120.5375]; // Default to Balanga, Bataan, Philippines
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Ensure map updates position properly from props, but not if user drags
   useEffect(() => {
     if (lat && lng && (!position || lat !== position.lat || lng !== position.lng)) {
       setPosition({ lat, lng });
     }
-  }, [lat, lng]);
+  }, [lat, lng, position]);
 
   const handlePositionChange = (pos) => {
     setPosition(pos);
@@ -53,11 +58,14 @@ export default function LocationPicker({ lat, lng, onChange }) {
   };
 
   return (
-    <div style={{ height: "300px", width: "100%", border: "2px solid #1A1A1A", borderRadius: "8px", overflow: "hidden" }}>
+    <div style={{ height: "300px", width: "100%", border: "2px solid #1A1A1A", borderRadius: "8px", overflow: "hidden", position: "relative", zIndex: 0, isolation: "isolate" }}>
+      {!isMounted ? (
+        <div style={{ width: "100%", height: "100%", background: "#f9f9f7" }} />
+      ) : (
       <MapContainer
-        center={position || defaultCenter}
+        center={position ? [position.lat, position.lng] : defaultCenter}
         zoom={13}
-        style={{ width: "100%", height: "100%" }}
+        style={{ width: "100%", height: "100%", zIndex: 0 }}
         scrollWheelZoom={true}
       >
         <TileLayer
@@ -72,6 +80,7 @@ export default function LocationPicker({ lat, lng, onChange }) {
           </>
         )}
       </MapContainer>
+      )}
     </div>
   );
 }

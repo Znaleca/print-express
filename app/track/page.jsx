@@ -6,7 +6,7 @@ import {
   Truck, Printer, Clock, 
   MapPin, CheckCircle2, Hash, 
   Loader2, AlertTriangle, FileText, ShoppingBag,
-  Star, Activity, Terminal, Package, XCircle, RefreshCcw
+  Star, Activity, Terminal, Package, XCircle, RefreshCcw, Upload, Eye
 } from "lucide-react";
 
 // Updated Status Map with exact requested labels
@@ -18,22 +18,50 @@ const STATUS_MAP = {
   RIDER_ON_THE_WAY:  { icon: <Truck size={16} />,        label: "RIDER_ON_THE_WAY",  color: "bg-[#EC008C] text-white border-[#EC008C]" },
   COMPLETED:         { icon: <CheckCircle2 size={16} />, label: "COMPLETED",         color: "bg-black text-[#00FFFF] border-[#00FFFF]" },
   CANCELLED:         { icon: <XCircle size={16} />,      label: "CANCELLED",         color: "bg-red-500 text-white border-red-500" },
-  REFUNDED:          { icon: <RefreshCcw size={16} />,   label: "REFUNDED",          color: "bg-orange-500 text-white border-orange-500" },
+  REFUND_PENDING:    { icon: <RefreshCcw size={16} />,   label: "REFUND_PENDING",    color: "bg-orange-400 text-white border-orange-400" },
+  REFUNDED:          { icon: <RefreshCcw size={16} />,   label: "REFUNDED_BY_SELLER", color: "bg-green-500 text-white border-green-500" },
+  REFUND_CONFIRMED:  { icon: <CheckCircle2 size={16} />, label: "REFUND_CONFIRMED",  color: "bg-green-700 text-white border-green-700" },
 };
 
 export default function TrackOrderPage() {
   const [user, setUser] = useState(null);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isCustomer, setIsCustomer] = useState(false);
   const [reviewsState, setReviewsState] = useState({});
   const [submittingReviewId, setSubmittingReviewId] = useState(null);
+  const [confirmingRefundId, setConfirmingRefundId] = useState(null);
 
   useEffect(() => {
+    let isActive = true;
+    let subscription;
+
     async function loadUserAndOrders() {
       const { data: { user: authUser } } = await supabase.auth.getUser();
+      if (!isActive) return;
       setUser(authUser);
 
-      if (authUser && authUser.user_metadata?.role === "CUSTOMER") {
+      if (!authUser) {
+        setLoading(false);
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", authUser.id)
+        .single();
+
+      const resolvedRole = profile?.role || authUser.user_metadata?.role;
+      const customer = resolvedRole === "CUSTOMER";
+      setIsCustomer(customer);
+
+      if (!customer) {
+        setLoading(false);
+        return;
+      }
+
+      const fetchOrders = async () => {
         const { data, error } = await supabase
           .from("orders")
           .select(`
@@ -42,22 +70,50 @@ export default function TrackOrderPage() {
           `)
           .eq("customer_id", authUser.id)
           .order("created_at", { ascending: false });
-          
-        if (!error && data) {
-          setOrders(data);
-          const initReviews = {};
-          data.forEach(o => {
-            initReviews[o.id] = {
-              rating: o.rating || 0,
-              feedback: o.feedback || ""
-            };
-          });
-          setReviewsState(initReviews);
-        }
-      }
+
+        if (!isActive || error || !data) return;
+
+        setOrders(data);
+        const initReviews = {};
+        data.forEach((o) => {
+          initReviews[o.id] = {
+            rating: o.rating || 0,
+            feedback: o.feedback || "",
+          };
+        });
+        setReviewsState(initReviews);
+      };
+
+      await fetchOrders();
+
+      // Realtime subscription for status and order lifecycle changes.
+      const channelName = `customer_orders_status_${authUser.id}_${Date.now()}`;
+      subscription = supabase
+        .channel(channelName)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "orders",
+            filter: `customer_id=eq.${authUser.id}`,
+          },
+          async () => {
+            await fetchOrders();
+          }
+        )
+        .subscribe();
+
       setLoading(false);
     }
     loadUserAndOrders();
+
+    return () => {
+      isActive = false;
+      if (subscription) {
+        supabase.removeChannel(subscription);
+      }
+    };
   }, []);
 
   const updateReviewState = (orderId, key, value) => {
@@ -97,6 +153,22 @@ export default function TrackOrderPage() {
     }
   };
 
+  const confirmRefundReceived = async (orderId) => {
+    if (!confirm("Confirm that you have received your refund from the seller?")) return;
+    setConfirmingRefundId(orderId);
+    const { error } = await supabase
+      .from('orders')
+      .update({ status: 'REFUND_CONFIRMED' })
+      .eq('id', orderId)
+      .eq('customer_id', user.id);
+    setConfirmingRefundId(null);
+    if (error) {
+      alert("Failed to confirm: " + error.message);
+    } else {
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'REFUND_CONFIRMED' } : o));
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[calc(100vh-80px)] bg-[#1A1A1A] text-[#00FFFF] font-mono">
@@ -106,7 +178,7 @@ export default function TrackOrderPage() {
     );
   }
 
-  if (!user || user.user_metadata?.role !== "CUSTOMER") {
+  if (!user || !isCustomer) {
     return (
       <div className="flex items-center justify-center min-h-[calc(100vh-80px)] bg-[#FDFDFD] p-6">
          <div className="bg-[#1A1A1A] border-l-8 border-[#EC008C] p-10 text-white max-w-lg w-full">
@@ -119,8 +191,13 @@ export default function TrackOrderPage() {
   }
 
   return (
-    <div className="min-h-[calc(100vh-80px)] bg-[#FDFDFD] p-8 font-sans pb-32">
-      <div className="max-w-6xl mx-auto space-y-12">
+    <main className="min-h-screen w-full bg-[#FDFDFD] font-sans overflow-x-hidden">
+      <section className="relative px-6 pb-24 pt-10 md:px-10 md:pt-12">
+        <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
+        <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
+        <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
+
+        <div className="relative w-full space-y-12">
         
         {/* INDUSTRIAL HEADER */}
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 border-b-8 border-[#1A1A1A] pb-10">
@@ -139,6 +216,15 @@ export default function TrackOrderPage() {
                 <p className="text-2xl font-black leading-none">{orders.length}</p>
                </div>
              </div>
+          </div>
+        </div>
+
+        <div className="border-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
+          <div className="flex items-center gap-6 px-5 font-mono text-[10px] font-black uppercase tracking-[0.35em] text-white md:px-6">
+            <span className="text-[#00FFFF]">Cyan</span>
+            <span className="text-[#EC008C]">Magenta</span>
+            <span className="text-[#FFF200]">Yellow</span>
+            <span>Black</span>
           </div>
         </div>
 
@@ -198,8 +284,14 @@ export default function TrackOrderPage() {
                           ))}
                         </div>
                         <div className="mt-6 pt-4 border-t-4 border-[#1A1A1A] flex justify-between items-end">
-                           <p className="font-mono text-[9px] uppercase tracking-widest opacity-40">Payment: {order.payment_method}</p>
-                           <p className="text-3xl font-black">₱{Number(order.total).toFixed(2)}</p>
+                           <div>
+                             <p className="font-mono text-[9px] uppercase tracking-widest opacity-60 font-black text-[#EC008C]">DP Paid: ₱{Number(order.downpayment_amount || 0).toFixed(2)}</p>
+                             <p className="font-mono text-[9px] uppercase tracking-widest opacity-60 font-black mt-1">Balance ({order.payment_method}): ₱{Number(order.balance_amount || 0).toFixed(2)}</p>
+                           </div>
+                           <div className="text-right">
+                             <p className="font-mono text-[9px] uppercase tracking-widest opacity-40 mb-1">Gross Total</p>
+                             <p className="text-3xl font-black leading-none">₱{Number(order.total).toFixed(2)}</p>
+                           </div>
                         </div>
                       </div>
                     </div>
@@ -238,6 +330,19 @@ export default function TrackOrderPage() {
                              </div>
                            )}
                         </div>
+
+                        {/* FULLY PAID BADGE for completed orders */}
+                        {order.status === 'COMPLETED' && (
+                          <div className="pt-4 border-t-4 border-[#00FFFF]/30">
+                            <div className="bg-[#00FFFF] border-4 border-[#1A1A1A] p-4 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] flex items-center gap-3">
+                              <CheckCircle2 size={20} className="text-[#1A1A1A] flex-shrink-0" />
+                              <div>
+                                <p className="font-black text-[11px] uppercase tracking-[0.2em] text-[#1A1A1A]">FULLY_PAID</p>
+                                <p className="font-mono text-[9px] uppercase opacity-60 text-[#1A1A1A]">Order complete. Balance: ₱0.00</p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
 
                         {/* RATING MODULE */}
                         {order.status === 'COMPLETED' && (
@@ -282,6 +387,41 @@ export default function TrackOrderPage() {
                             )}
                           </div>
                         )}
+
+                        {/* REFUND MODULE — customer confirms after seller sends money */}
+                        {order.status === 'REFUNDED' && (
+                          <div className="pt-6 border-t-4 border-green-500/20">
+                            <p className="font-black text-[10px] uppercase tracking-[0.2em] mb-3 text-green-600">Refund_Sent_By_Seller</p>
+                            <p className="font-mono text-[9px] uppercase opacity-60 mb-4">The seller has marked your ₱{Number(order.downpayment_amount || 0).toFixed(2)} refund as sent. Click below once you have received it.</p>
+                            <button
+                              onClick={() => confirmRefundReceived(order.id)}
+                              disabled={confirmingRefundId === order.id}
+                              className="w-full bg-green-500 text-white border-4 border-[#1A1A1A] py-4 font-black font-mono text-[10px] uppercase tracking-[0.3em] hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:shadow-none flex items-center justify-center gap-2"
+                            >
+                              <CheckCircle2 size={16} />
+                              {confirmingRefundId === order.id ? 'CONFIRMING...' : 'I RECEIVED MY REFUND'}
+                            </button>
+                          </div>
+                        )}
+
+                        {order.status === 'REFUND_CONFIRMED' && (
+                          <div className="pt-6 border-t-4 border-green-700/20">
+                            <div className="bg-green-50 border-4 border-green-700 p-4 flex items-center gap-3">
+                              <CheckCircle2 size={20} className="text-green-700 flex-shrink-0" />
+                              <div>
+                                <p className="font-black text-[10px] uppercase tracking-[0.2em] text-green-700">Refund_Confirmed</p>
+                                <p className="font-mono text-[9px] uppercase opacity-60">You confirmed receiving your refund.</p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {order.status === 'CANCELLED' && (
+                          <div className="pt-6 border-t-4 border-red-500/20">
+                            <p className="font-black text-[10px] uppercase tracking-[0.2em] mb-3 text-red-500">Order_Cancelled</p>
+                            <p className="font-mono text-[9px] uppercase opacity-60">Your order has been cancelled. The seller will process your refund of ₱{Number(order.downpayment_amount || 0).toFixed(2)} and you will be notified here.</p>
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex justify-between items-center mt-4 pt-4 border-t-2 border-[#1A1A1A]/5">
@@ -303,6 +443,7 @@ export default function TrackOrderPage() {
           </div>
         )}
       </div>
-    </div>
+      </section>
+    </main>
   );
 }

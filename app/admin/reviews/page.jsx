@@ -57,24 +57,63 @@ export default function AdminReviews() {
   const starColor = ["#EC008C", "#00FFFF", "#FFF200", "#FFF200", "#00FFFF"];
 
   return (
-    <section className="text-[#1A1A1A] font-sans">
-      {/* PAGE HEADER */}
-      <header className="mb-10 border-b-8 border-[#1A1A1A] pb-8">
-        <div className="flex items-center gap-2 mb-4">
-          <div className="flex gap-1">
-            <div className="w-4 h-1 bg-[#00FFFF]" />
-            <div className="w-4 h-1 bg-[#EC008C]" />
-            <div className="w-4 h-1 bg-[#FFF200]" />
+    <main className="bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden font-sans">
+      <section className="relative border-b-8 border-[#1A1A1A] px-6 py-12 md:px-10 md:py-14">
+        <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
+        <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
+        <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
+
+        <div className="relative mx-auto w-full max-w-[1920px]">
+          <div className="inline-flex items-center gap-3 border-4 border-[#1A1A1A] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
+            <span className="flex gap-1">
+              <span className="h-2 w-2 bg-[#00FFFF]" />
+              <span className="h-2 w-2 bg-[#EC008C]" />
+              <span className="h-2 w-2 bg-[#FFF200]" />
+            </span>
+            Review_Intel // Stream_Analysis
           </div>
-          <span className="font-mono text-[9px] uppercase tracking-[0.5em] text-gray-400">Access_Level: 00</span>
+
+          <div className="mt-8 grid gap-8 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
+            <div>
+              <h1 className="text-5xl font-black uppercase italic tracking-tighter leading-[0.95] md:text-7xl">
+                Global_<span className="bg-[#1A1A1A] px-4 py-1 text-white not-italic">Review Log</span>
+              </h1>
+              <p className="mt-4 max-w-3xl font-mono text-[11px] uppercase tracking-[0.2em] leading-relaxed text-gray-600 md:text-sm">
+                Monitor sentiment signals, inspect customer feedback packets, and track quality trends across all shops.
+              </p>
+            </div>
+
+            <div className="border-4 border-[#1A1A1A] bg-white p-5 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-mono text-[9px] uppercase tracking-[0.35em] text-gray-500">Signal Snapshot</p>
+                  <p className="mt-1 text-lg font-black uppercase tracking-tighter">Avg // {avgRating}</p>
+                </div>
+                <div className="flex h-12 w-12 items-center justify-center bg-[#1A1A1A] text-white">
+                  <Star className="h-6 w-6 text-[#FFF200]" />
+                </div>
+              </div>
+              <div className="mt-4 flex gap-1">
+                <div className="h-1 flex-1 bg-[#00FFFF]" />
+                <div className="h-1 flex-1 bg-[#EC008C]" />
+                <div className="h-1 flex-1 bg-[#FFF200]" />
+              </div>
+            </div>
+          </div>
         </div>
-        <h1 className="text-5xl font-black uppercase italic tracking-tighter leading-none mb-3">
-          Global_Intel_Log
-        </h1>
-        <p className="font-mono text-[10px] uppercase tracking-widest opacity-50">
-          Monitoring All Feedback Streams Across All Business Nodes
-        </p>
-      </header>
+      </section>
+
+      <div className="border-b-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
+        <div className="mx-auto flex w-full max-w-[1920px] items-center gap-6 px-6 font-mono text-[10px] font-black uppercase tracking-[0.35em] md:px-10">
+          <span className="text-[#00FFFF]">Cyan</span>
+          <span className="text-[#EC008C]">Magenta</span>
+          <span className="text-[#FFF200]">Yellow</span>
+          <span className="text-white">Black</span>
+          <MessageSquare size={14} className="text-white" />
+        </div>
+      </div>
+
+      <section className="mx-auto w-full max-w-[1920px] px-6 py-10 md:px-10 md:py-14">
 
       {/* STATS ROW */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
@@ -250,6 +289,7 @@ export default function AdminReviews() {
           )}
         </div>
       </div>
-    </section>
+      </section>
+    </main>
   );
 }

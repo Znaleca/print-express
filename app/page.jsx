@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Sparkles, MapPin, FileUp, CreditCard, ShieldCheck, ArrowRight, Printer } from "lucide-react";
+import AboutSection from "@/components/owner/AboutSection";
 
 const features = [
   {
@@ -36,7 +37,7 @@ const features = [
 
 export default function Home() {
   return (
-    <main className="bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden">
+    <main className="min-h-screen w-full bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden">
       {/* HERO SECTION */}
       <section className="relative min-h-screen flex flex-col items-center justify-center px-6 py-20 border-b-8 border-[#1A1A1A]">
         
@@ -45,7 +46,7 @@ export default function Home() {
         <div className="absolute top-0 right-0 w-16 h-16 bg-[#EC008C] opacity-20" />
         <div className="absolute bottom-0 left-0 w-16 h-16 bg-[#FFF200] opacity-20" />
 
-        <div className="relative z-10 max-w-6xl mx-auto text-center">
+        <div className="relative z-10 w-full text-center">
           {/* Status Badge */}
           <div className="inline-flex items-center gap-3 px-6 py-2 mb-12 border-4 border-[#1A1A1A] bg-white font-mono text-[11px] font-black uppercase tracking-widest shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
             <span className="flex gap-1">
@@ -108,7 +109,7 @@ export default function Home() {
       </div>
 
       {/* FEATURES SECTION */}
-      <section className="py-32 px-6 lg:px-12 max-w-7xl mx-auto">
+      <section className="w-full px-6 py-32 lg:px-12">
         <div className="grid lg:grid-cols-2 gap-16 mb-24 items-end">
           <div>
             <h2 className="text-6xl md:text-8xl font-black uppercase leading-[0.9] tracking-tighter mb-8">
@@ -149,31 +150,8 @@ export default function Home() {
         </div>
       </section>
 
-      {/* FOOTER */}
-      <footer className="bg-[#1A1A1A] text-white py-16 px-8 border-t-8 border-[#EC008C]">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-12 text-center md:text-left">
-          <div>
-            <h4 className="text-4xl font-black uppercase italic tracking-tighter mb-2">
-              Press <span className="text-[#00FFFF]">&</span> Present
-            </h4>
-            <p className="font-mono text-[10px] tracking-widest opacity-40 uppercase">
-              Production Grade Portal // Est. 2026
-            </p>
-          </div>
-          
-          <div className="flex flex-col items-center md:items-end gap-6">
-            <div className="flex gap-4">
-              <div className="w-10 h-10 border-2 border-[#00FFFF] flex items-center justify-center text-[#00FFFF] hover:bg-[#00FFFF] hover:text-black transition-all cursor-pointer font-bold">C</div>
-              <div className="w-10 h-10 border-2 border-[#EC008C] flex items-center justify-center text-[#EC008C] hover:bg-[#EC008C] hover:text-white transition-all cursor-pointer font-bold">M</div>
-              <div className="w-10 h-10 border-2 border-[#FFF200] flex items-center justify-center text-[#FFF200] hover:bg-[#FFF200] hover:text-black transition-all cursor-pointer font-bold">Y</div>
-              <div className="w-10 h-10 border-2 border-white flex items-center justify-center text-white hover:bg-white hover:text-black transition-all cursor-pointer font-bold">K</div>
-            </div>
-            <span className="font-mono text-[10px] uppercase tracking-[0.4em] opacity-30">
-              Validated // Secure_Access_Only
-            </span>
-          </div>
-        </div>
-      </footer>
+      <AboutSection />
+
     </main>
   );
 }

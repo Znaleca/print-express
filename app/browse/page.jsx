@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Search, Star, Loader2, Map as MapIcon, ChevronRight, Printer, Store } from "lucide-react";
@@ -19,9 +19,39 @@ const MapComponent = dynamic(() => import("@/components/MapComponent"), {
 export default function BrowsePage() {
   const router = useRouter();
   const [search, setSearch] = useState("");
+  const [sortMode, setSortMode] = useState("recommended");
   const [selectedId, setSelectedId] = useState(null);
   const [businesses, setBusinesses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [userLocation, setUserLocation] = useState(null);
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserLocation({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        });
+      },
+      () => {
+        // Location is optional. Recommendations will still work with other metrics.
+        setUserLocation(null);
+      },
+      { enableHighAccuracy: true, timeout: 7000 }
+    );
+  }, []);
+
+  const haversineKm = (lat1, lon1, lat2, lon2) => {
+    const toRad = (deg) => (deg * Math.PI) / 180;
+    const R = 6371;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  };
 
   useEffect(() => {
     async function loadBusinesses() {
@@ -32,7 +62,9 @@ export default function BrowsePage() {
           services ( name, category, available ),
           business_reviews ( rating )
         `)
-        .eq("status", "APPROVED");
+        .eq("status", "APPROVED")
+        .not("lat", "is", null)
+        .not("lng", "is", null);
 
       if (bizError) {
         console.error("Error loading businesses:", bizError);
@@ -54,11 +86,12 @@ export default function BrowsePage() {
           id: b.id,
           name: b.name || "UNNAMED_UNIT",
           address: b.address || "LOC_UNKNOWN",
-          lat: parseFloat(b.lat) || 14.6806,
-          lng: parseFloat(b.lng) || 120.5375,
+          lat: parseFloat(b.lat),
+          lng: parseFloat(b.lng),
           logo_url: b.logo_url,
           rating: parseFloat(avgRating),
           reviewCount: reviews.length,
+          serviceCount: availableServices.length,
           services: availableServices.slice(0, 3)
         };
       });
@@ -70,12 +103,70 @@ export default function BrowsePage() {
     loadBusinesses();
   }, []);
 
-  const filtered = businesses.filter(
-    (b) =>
-      b.name.toLowerCase().includes(search.toLowerCase()) ||
-      b.services.some((s) => s.toLowerCase().includes(search.toLowerCase())) ||
-      b.address.toLowerCase().includes(search.toLowerCase())
+  const filtered = useMemo(
+    () =>
+      businesses.filter(
+        (b) =>
+          b.name.toLowerCase().includes(search.toLowerCase()) ||
+          b.services.some((s) => s.toLowerCase().includes(search.toLowerCase())) ||
+          b.address.toLowerCase().includes(search.toLowerCase())
+      ),
+    [businesses, search]
   );
+
+  const recommended = useMemo(() => {
+    if (filtered.length === 0) return [];
+
+    const withDistance = filtered.map((b) => {
+      const distanceKm = userLocation
+        ? haversineKm(userLocation.lat, userLocation.lng, b.lat, b.lng)
+        : null;
+      return { ...b, distanceKm };
+    });
+
+    const maxReviews = Math.max(...withDistance.map((b) => b.reviewCount), 1);
+    const maxServices = Math.max(...withDistance.map((b) => b.serviceCount), 1);
+    const maxDistance = Math.max(
+      ...withDistance.map((b) => (b.distanceKm == null ? 0 : b.distanceKm)),
+      1
+    );
+
+    const scored = withDistance.map((b) => {
+      const ratingScore = (b.rating || 0) / 5;
+      const reviewScore = b.reviewCount / maxReviews;
+      const serviceScore = b.serviceCount / maxServices;
+      const distanceScore =
+        b.distanceKm == null ? 0 : Math.max(0, 1 - b.distanceKm / maxDistance);
+
+      const recommendationScore =
+        ratingScore * 0.4 + reviewScore * 0.25 + serviceScore * 0.2 + distanceScore * 0.15;
+
+      return {
+        ...b,
+        recommendationScore,
+      };
+    });
+
+    return scored.sort((a, b) => b.recommendationScore - a.recommendationScore);
+  }, [filtered, userLocation]);
+
+  const displayedBusinesses = useMemo(() => {
+    const list = [...recommended];
+
+    if (sortMode === "nearest") {
+      return list.sort((a, b) => {
+        const da = a.distanceKm == null ? Number.POSITIVE_INFINITY : a.distanceKm;
+        const db = b.distanceKm == null ? Number.POSITIVE_INFINITY : b.distanceKm;
+        return da - db;
+      });
+    }
+
+    if (sortMode === "most_reviews") {
+      return list.sort((a, b) => b.reviewCount - a.reviewCount);
+    }
+
+    return list;
+  }, [recommended, sortMode]);
 
   return (
     <div className="flex h-[calc(100vh-80px)] overflow-hidden bg-[#FDFDFD] font-sans">
@@ -110,6 +201,19 @@ export default function BrowsePage() {
               />
             </div>
           </div>
+
+          <div className="mt-4 flex items-center gap-3">
+            <span className="font-mono text-[9px] uppercase tracking-[0.25em] text-white/50 font-black">Sort_By</span>
+            <select
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value)}
+              className="bg-[#2A2A2A] border-2 border-white/20 px-3 py-2 font-mono text-[10px] uppercase tracking-widest font-black text-white focus:outline-none focus:border-[#00FFFF]"
+            >
+              <option value="recommended">Recommended</option>
+              <option value="nearest">Nearest</option>
+              <option value="most_reviews">Most Reviewed</option>
+            </select>
+          </div>
         </div>
 
         {/* Shop List Container */}
@@ -119,12 +223,12 @@ export default function BrowsePage() {
               <Loader2 className="animate-spin mb-4" size={40} />
               <p>Syncing_Shop_Data...</p>
             </div>
-          ) : filtered.length === 0 ? (
+          ) : displayedBusinesses.length === 0 ? (
             <div className="p-10 border-4 border-dashed border-white/10 text-center font-mono text-xs uppercase opacity-40">
               No active shops detected in sector.
             </div>
           ) : (
-            filtered.map((b) => {
+            displayedBusinesses.map((b, index) => {
               const isSelected = selectedId === b.id;
               return (
                 <div key={b.id} className="w-full">
@@ -183,6 +287,15 @@ export default function BrowsePage() {
                         </div>
                       </div>
 
+                      <div className={`mt-2 grid grid-cols-2 gap-2 font-mono text-[9px] uppercase ${isSelected ? "text-[#1A1A1A]/70" : "text-white/50"}`}>
+                        <span>Reviews: {b.reviewCount}</span>
+                        <span>Services: {b.serviceCount}</span>
+                        <span>
+                          Distance: {b.distanceKm == null ? "--" : `${b.distanceKm.toFixed(1)} km`}
+                        </span>
+                        <span>{sortMode === "recommended" ? "Rec" : sortMode === "nearest" ? "Near" : "Rev"} Rank: #{index + 1}</span>
+                      </div>
+
                       {isSelected && (
                         <button
                           onClick={(e) => {
@@ -210,14 +323,14 @@ export default function BrowsePage() {
             <div className="w-8 h-2 bg-[#FFF200]" />
           </div>
           <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF]">
-            {filtered.length}_Shops_Online
+            {displayedBusinesses.length}_Shops_Online
           </span>
         </div>
       </aside>
 
       {/* ── Map ── */}
       <div className="flex-1 relative border-l-8 border-[#1A1A1A] z-0 bg-[#E5E5E5]">
-        <MapComponent businesses={filtered} selectedBusinessId={selectedId} />
+        <MapComponent businesses={displayedBusinesses} selectedBusinessId={selectedId} />
 
         {/* Floating Sector Label */}
         <div className="absolute top-8 right-8 z-10 bg-[#1A1A1A] text-white px-6 py-4 font-black italic uppercase tracking-widest text-sm flex items-center gap-4 border-4 border-[#00FFFF] shadow-[8px_8px_0px_0px_rgba(236,0,140,1)]">

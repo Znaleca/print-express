@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { supabase } from "@/lib/supabaseClient";
 import {
   Store, Save, Loader2, CheckCircle, AlertCircle,
-  UploadCloud, ImageOff, X,
+  UploadCloud, ImageOff, X, Printer,
 } from "lucide-react";
 
 const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker"), { ssr: false });
@@ -28,7 +28,8 @@ export default function ShopProfilePage() {
   const [form, setForm] = useState({
     name: "", description: "", address: "",
     phone: "", email: "", website: "", logo_url: "",
-    lat: null, lng: null
+    lat: null, lng: null,
+    min_downpayment_percent: 30,
   });
   const [businessId, setBusinessId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -51,7 +52,7 @@ export default function ShopProfilePage() {
 
       const { data: biz } = await supabase
         .from("businesses")
-        .select("id, name, description, address, phone, email, website, logo_url, lat, lng")
+        .select("id, name, description, address, phone, email, website, logo_url, lat, lng, min_downpayment_percent")
         .eq("owner_id", user.id)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -69,6 +70,7 @@ export default function ShopProfilePage() {
           logo_url: biz.logo_url || "",
           lat: biz.lat || null,
           lng: biz.lng || null,
+          min_downpayment_percent: Math.min(100, Math.max(1, Number.parseInt(String(biz.min_downpayment_percent ?? 30), 10) || 30)),
         });
         if (biz.logo_url) setLogoPreview(biz.logo_url);
       }
@@ -158,7 +160,17 @@ export default function ShopProfilePage() {
       finalLogoUrl = uploaded;
     }
 
-    const payload = { ...form, logo_url: finalLogoUrl, updated_at: new Date().toISOString() };
+    const normalizedMinDownpayment = Math.min(
+      100,
+      Math.max(1, Number.parseInt(String(form.min_downpayment_percent ?? 30), 10) || 30)
+    );
+
+    const payload = {
+      ...form,
+      min_downpayment_percent: normalizedMinDownpayment,
+      logo_url: finalLogoUrl,
+      updated_at: new Date().toISOString(),
+    };
 
     const { error } = await supabase
       .from("businesses")
@@ -170,7 +182,11 @@ export default function ShopProfilePage() {
     if (error) {
       setToast({ type: "error", msg: `Save failed: ${error.message}` });
     } else {
-      setForm((f) => ({ ...f, logo_url: finalLogoUrl }));
+      setForm((f) => ({
+        ...f,
+        logo_url: finalLogoUrl,
+        min_downpayment_percent: normalizedMinDownpayment,
+      }));
       setLogoFile(null); // clear pending file — preview stays
       setToast({ type: "success", msg: "Shop profile saved!" });
       setTimeout(() => setToast(null), 3500);
@@ -178,14 +194,16 @@ export default function ShopProfilePage() {
   };
 
   const handleChange = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  const fieldLabelClass = "mb-2 block font-mono text-[10px] font-black uppercase tracking-[0.2em] text-[#1A1A1A]/70";
+  const inputClass = "w-full border-2 border-[#1A1A1A]/20 bg-white px-3 py-2 text-sm text-[#1A1A1A] outline-none transition-colors focus:border-[#00FFFF]";
 
   // ── Loading ────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="owner-page">
-        <div className="owner-loading">
+      <div className="w-full max-w-[1920px] bg-transparent px-6 py-9 md:px-10">
+        <div className="flex items-center gap-3 py-16 font-mono text-[13px] text-[#555]">
           <Loader2 className="animate-spin" size={24} />
-          Loading shop profile…
+          Loading shop profile...
         </div>
       </div>
     );
@@ -194,28 +212,76 @@ export default function ShopProfilePage() {
   const isBusy = saving || logoUploading;
 
   return (
-    <div className="owner-page">
-      {/* Header */}
-      <div className="owner-page__header">
-        <div>
-          <h1 className="owner-page__title"><Store size={28} /> My Shop</h1>
-          <p className="owner-page__subtitle">Update your public shop profile and contact info.</p>
+    <main className="bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden">
+      <section className="relative z-20 border-b-8 border-[#1A1A1A] px-6 py-12 md:px-10 md:py-14">
+        <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
+        <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
+        <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
+
+        <div className="relative mx-auto w-full max-w-[1920px]">
+          <div className="inline-flex items-center gap-3 border-4 border-[#1A1A1A] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
+            <span className="flex gap-1">
+              <span className="h-2 w-2 bg-[#00FFFF]" />
+              <span className="h-2 w-2 bg-[#EC008C]" />
+              <span className="h-2 w-2 bg-[#FFF200]" />
+            </span>
+            Shop_Profile // Node_Identity
+          </div>
+
+          <div className="mt-8 grid gap-8 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
+            <div>
+              <h1 className="text-5xl font-black uppercase italic tracking-tighter leading-[0.95] md:text-7xl">
+                My_<span className="bg-[#1A1A1A] px-4 py-1 text-white not-italic">Shop Console</span>
+              </h1>
+              <p className="mt-4 max-w-3xl font-mono text-[11px] uppercase tracking-[0.2em] leading-relaxed text-gray-600 md:text-sm">
+                Configure your business identity, location intelligence, and public profile details for discovery.
+              </p>
+            </div>
+
+            <div className="border-4 border-[#1A1A1A] bg-white p-5 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-mono text-[9px] uppercase tracking-[0.35em] text-gray-500">Profile State</p>
+                  <p className="mt-1 text-lg font-black uppercase tracking-tighter">Editing Active</p>
+                </div>
+                <div className="flex h-12 w-12 items-center justify-center bg-[#1A1A1A] text-white">
+                  <Store className="h-6 w-6 text-[#00FFFF]" />
+                </div>
+              </div>
+              <div className="mt-4 flex gap-1">
+                <div className="h-1 flex-1 bg-[#00FFFF]" />
+                <div className="h-1 flex-1 bg-[#EC008C]" />
+                <div className="h-1 flex-1 bg-[#FFF200]" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="relative z-20 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
+        <div className="mx-auto flex w-full max-w-[1920px] items-center gap-6 px-6 font-mono text-[10px] font-black uppercase tracking-[0.35em] md:px-10">
+          <span className="text-[#00FFFF]">Cyan</span>
+          <span className="text-[#EC008C]">Magenta</span>
+          <span className="text-[#FFF200]">Yellow</span>
+          <span className="text-white">Black</span>
+          <Printer size={14} className="text-white" />
         </div>
       </div>
 
-      {/* Toast */}
-      {toast && (
-        <div className={`owner-toast owner-toast--${toast.type}`}>
-          {toast.type === "success" ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
-          {toast.msg}
-        </div>
-      )}
+      <section className="relative z-10 mx-auto w-full max-w-[1920px] bg-transparent px-6 py-9 md:px-10 md:py-14">
+        {/* Toast */}
+        {toast && (
+          <div className={`mb-6 inline-flex items-center gap-2 border-2 px-4 py-2 font-mono text-[10px] font-black uppercase tracking-[0.12em] ${toast.type === "success" ? "border-[#1A1A1A] bg-[#FFF200] text-[#1A1A1A]" : "border-[#EC008C] bg-[#FFF4FA] text-[#EC008C]"}`}>
+            {toast.type === "success" ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+            {toast.msg}
+          </div>
+        )}
 
-      <form onSubmit={handleSave} className="shop-form">
+        <form onSubmit={handleSave} className="space-y-6 border-4 border-[#1A1A1A] bg-white p-6 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)] md:p-8">
 
         {/* ── Location Picker ── */}
-        <div className="shop-form__field shop-form__field--full">
-          <label className="shop-form__label">Store Location (Map)</label>
+        <div>
+          <label className={fieldLabelClass}>Store Location (Map)</label>
           <p className="text-xs text-gray-500 mb-2">Click on the map to set your store's location. This helps customers find you.</p>
           <LocationPicker
             lat={form.lat}
@@ -225,35 +291,35 @@ export default function ShopProfilePage() {
         </div>
 
         {/* ── Logo Uploader ── */}
-        <div className="shop-form__field shop-form__field--full">
-          <label className="shop-form__label">Shop Logo</label>
+        <div>
+          <label className={fieldLabelClass}>Shop Logo</label>
 
-          <div className="logo-upload-area">
+          <div className="space-y-3">
             {/* Preview side */}
             {logoPreview ? (
-              <div className="logo-preview-block">
+              <div className="flex flex-col gap-4 rounded border-2 border-[#1A1A1A]/15 bg-[#F9F9F7] p-4 md:flex-row md:items-center">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={logoPreview}
                   alt="Logo preview"
-                  className="logo-preview-img"
+                  className="h-24 w-24 border-2 border-[#1A1A1A] bg-white object-contain"
                   onError={() => setLogoPreview(null)}
                 />
-                <div className="logo-preview-info">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
                   {logoFile ? (
                     <>
-                      <span className="logo-preview-filename">{logoFile.name}</span>
-                      <span className="logo-preview-size">
+                      <span className="truncate font-black uppercase tracking-tight text-[#1A1A1A]">{logoFile.name}</span>
+                      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#666]">
                         {(logoFile.size / 1024).toFixed(0)} KB · {logoFile.type.split("/")[1].toUpperCase()}
                       </span>
                     </>
                   ) : (
-                    <span className="logo-preview-filename">Current logo</span>
+                    <span className="font-black uppercase tracking-tight text-[#1A1A1A]">Current logo</span>
                   )}
                   <button
                     type="button"
                     onClick={handleRemoveLogo}
-                    className="logo-remove-btn"
+                    className="mt-1 inline-flex w-fit items-center gap-1 border-2 border-[#1A1A1A] bg-white px-3 py-1 font-mono text-[10px] font-black uppercase tracking-[0.12em] text-[#1A1A1A] transition-colors hover:bg-[#EC008C] hover:text-white"
                   >
                     <X size={13} /> Remove
                   </button>
@@ -262,7 +328,7 @@ export default function ShopProfilePage() {
             ) : (
               /* Drop zone */
               <div
-                className={`logo-dropzone ${dragOver ? "logo-dropzone--over" : ""}`}
+                className={`cursor-pointer rounded border-4 border-dashed px-6 py-10 text-center transition-colors ${dragOver ? "border-[#00FFFF] bg-[#EFFFFF]" : "border-[#1A1A1A]/20 bg-[#F9F9F7] hover:border-[#EC008C]"}`}
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={handleDrop}
@@ -273,16 +339,16 @@ export default function ShopProfilePage() {
                 aria-label="Upload logo"
               >
                 {dragOver
-                  ? <UploadCloud size={36} className="logo-dropzone__icon logo-dropzone__icon--active" />
-                  : <ImageOff size={36} className="logo-dropzone__icon" />
+                  ? <UploadCloud size={36} className="mx-auto mb-2 text-[#00FFFF]" />
+                  : <ImageOff size={36} className="mx-auto mb-2 text-[#999]" />
                 }
-                <p className="logo-dropzone__title">
+                <p className="font-black uppercase tracking-tight text-[#1A1A1A]">
                   {dragOver ? "Drop to upload" : "Upload shop logo"}
                 </p>
-                <p className="logo-dropzone__hint">
-                  Drag & drop or <span className="logo-dropzone__link">browse files</span>
+                <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.12em] text-[#666]">
+                  Drag & drop or <span className="font-black text-[#EC008C]">browse files</span>
                 </p>
-                <p className="logo-dropzone__formats">JPG, PNG, WebP, GIF, SVG · max {MAX_MB} MB</p>
+                <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.1em] text-[#999]">JPG, PNG, WebP, GIF, SVG · max {MAX_MB} MB</p>
               </div>
             )}
 
@@ -293,7 +359,7 @@ export default function ShopProfilePage() {
               type="file"
               accept={ALLOWED.join(",")}
               onChange={handleFileInput}
-              className="logo-file-input-hidden"
+              className="hidden"
             />
 
             {/* Change button when preview is shown */}
@@ -301,7 +367,7 @@ export default function ShopProfilePage() {
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="logo-change-btn"
+                className="inline-flex items-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] px-3 py-2 font-mono text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-[#EC008C]"
               >
                 <UploadCloud size={14} /> Change Logo
               </button>
@@ -310,27 +376,27 @@ export default function ShopProfilePage() {
 
           {/* Logo error */}
           {logoError && (
-            <div className="logo-error">
+            <div className="mt-3 inline-flex items-center gap-2 border-2 border-[#EC008C] bg-[#FFF4FA] px-3 py-2 font-mono text-[10px] font-black uppercase tracking-[0.12em] text-[#EC008C]">
               <AlertCircle size={13} /> {logoError}
             </div>
           )}
 
           {/* Upload indicator */}
           {logoUploading && (
-            <div className="logo-uploading">
-              <Loader2 size={13} className="animate-spin" /> Uploading logo…
+            <div className="mt-3 inline-flex items-center gap-2 border-2 border-[#1A1A1A]/15 bg-[#F9F9F7] px-3 py-2 font-mono text-[10px] font-black uppercase tracking-[0.12em] text-[#666]">
+              <Loader2 size={13} className="animate-spin" /> Uploading logo...
             </div>
           )}
         </div>
 
         {/* ── Other Fields ── */}
-        <div className="shop-form__grid">
+        <div className="grid gap-4 md:grid-cols-2">
           {FIELDS.map(({ key, label, type, placeholder }) => (
             <div
               key={key}
-              className={`shop-form__field ${type === "area" ? "shop-form__field--full" : ""}`}
+              className={type === "area" ? "md:col-span-2" : ""}
             >
-              <label className="shop-form__label" htmlFor={`field-${key}`}>{label}</label>
+              <label className={fieldLabelClass} htmlFor={`field-${key}`}>{label}</label>
               {type === "area" ? (
                 <textarea
                   id={`field-${key}`}
@@ -338,7 +404,7 @@ export default function ShopProfilePage() {
                   onChange={(e) => handleChange(key, e.target.value)}
                   placeholder={placeholder}
                   rows={4}
-                  className="shop-form__textarea"
+                  className={`${inputClass} resize-y`}
                 />
               ) : (
                 <input
@@ -347,23 +413,45 @@ export default function ShopProfilePage() {
                   value={form[key]}
                   onChange={(e) => handleChange(key, e.target.value)}
                   placeholder={placeholder}
-                  className="shop-form__input"
+                  className={inputClass}
                 />
               )}
             </div>
           ))}
         </div>
 
+        <div className="border-2 border-[#1A1A1A]/15 bg-[#F9F9F7] p-4">
+          <label className={fieldLabelClass} htmlFor="field-min-downpayment">Minimum Downpayment (%)</label>
+          <input
+            id="field-min-downpayment"
+            type="number"
+            min="1"
+            max="100"
+            step="1"
+            value={form.min_downpayment_percent}
+            onChange={(e) => handleChange("min_downpayment_percent", e.target.value)}
+            className="w-full border-2 border-[#1A1A1A]/20 bg-white px-3 py-2 text-sm font-black text-[#1A1A1A] outline-none transition-colors focus:border-[#00FFFF]"
+          />
+          <p className="mt-2 font-mono text-[9px] font-black uppercase tracking-[0.12em] text-[#1A1A1A]/60">
+            Customers must pay at least this percent as downpayment when ordering.
+          </p>
+        </div>
+
         {/* Save button */}
-        <div className="shop-form__actions">
-          <button type="submit" className="owner-btn owner-btn--primary" disabled={isBusy}>
+        <div className="flex justify-end border-t-2 border-[#1A1A1A]/10 pt-4">
+          <button
+            type="submit"
+            className="inline-flex items-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] px-4 py-3 font-mono text-[10px] font-black uppercase tracking-[0.18em] text-white transition-colors hover:bg-[#EC008C] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={isBusy}
+          >
             {isBusy
-              ? <><Loader2 size={15} className="animate-spin" /> {logoUploading ? "Uploading…" : "Saving…"}</>
+              ? <><Loader2 size={15} className="animate-spin" /> {logoUploading ? "Uploading..." : "Saving..."}</>
               : <><Save size={15} /> Save Changes</>
             }
           </button>
         </div>
-      </form>
-    </div>
+        </form>
+      </section>
+    </main>
   );
 }

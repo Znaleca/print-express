@@ -12,6 +12,7 @@ export default function Navbar() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [activeLandingSection, setActiveLandingSection] = useState("home");
   const dropdownRef = useRef(null);
 
   const userRole = useMemo(() => {
@@ -53,6 +54,33 @@ export default function Navbar() {
     };
   }, []);
 
+  useEffect(() => {
+    if (pathname !== "/") {
+      setActiveLandingSection("home");
+      return;
+    }
+
+    const updateActiveSection = () => {
+      const about = document.getElementById("about");
+      if (!about) {
+        setActiveLandingSection("home");
+        return;
+      }
+
+      const triggerY = about.offsetTop - 140;
+      setActiveLandingSection(window.scrollY >= triggerY ? "about" : "home");
+    };
+
+    updateActiveSection();
+    window.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+
+    return () => {
+      window.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("resize", updateActiveSection);
+    };
+  }, [pathname]);
+
   const displayName = useMemo(() => {
     if (!user) return "";
     return user.user_metadata?.full_name?.toUpperCase() || user.email?.split("@")[0].toUpperCase() || "ACCOUNT";
@@ -65,6 +93,23 @@ export default function Navbar() {
       router.push("/");
       router.refresh();
     }
+  };
+
+  const handleLandingNavClick = (target) => (event) => {
+    if (pathname !== "/") return;
+
+    event.preventDefault();
+    if (target === "about") {
+      const about = document.getElementById("about");
+      if (about) {
+        about.scrollIntoView({ behavior: "smooth", block: "start" });
+        setActiveLandingSection("about");
+      }
+      return;
+    }
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    setActiveLandingSection("home");
   };
 
   return (
@@ -92,7 +137,8 @@ export default function Navbar() {
         <nav className="hidden md:flex items-center h-full">
           {!isAdminOrOwner ? (
             <>
-              <NavLink href="/" active={pathname === "/"}>Home</NavLink>
+              <NavLink href="/" active={pathname === "/" && activeLandingSection === "home"} onClick={handleLandingNavClick("home")}>Home</NavLink>
+              <NavLink href="/#about" active={pathname === "/" && activeLandingSection === "about"} onClick={handleLandingNavClick("about")}>About</NavLink>
               <NavLink href="/browse" active={pathname === "/browse"}>Browse</NavLink>
               <NavLink href="/shops" active={pathname === "/shops"}>Shops</NavLink>
               {user && <NavLink href="/track" active={pathname === "/track"}>Tracking</NavLink>}
@@ -142,7 +188,7 @@ export default function Navbar() {
                     </div>
 
                     <Link
-                      href="/dashboard"
+                      href="/account-settings"
                       className="flex items-center gap-3 w-full px-4 py-4 font-mono text-[10px] uppercase font-black hover:bg-[#00FFFF] transition-colors border-b-2 border-[#1A1A1A]"
                       onClick={() => setIsDropdownOpen(false)}
                     >
@@ -171,10 +217,11 @@ export default function Navbar() {
   );
 }
 
-function NavLink({ href, children, active }) {
+function NavLink({ href, children, active, onClick }) {
   return (
     <Link
       href={href}
+      onClick={onClick}
       className={`px-8 h-20 flex flex-col items-center justify-center font-mono text-[10px] font-black uppercase tracking-[0.2em] transition-all relative group ${
         active ? "text-[#00FFFF]" : "text-white/60 hover:text-white"
       }`}

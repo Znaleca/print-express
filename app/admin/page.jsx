@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { 
-  ShieldCheck, Check, X, AlertTriangle, Users, 
-  Database, ArrowRight, Mail, Fingerprint, Shield 
+  ShieldCheck, Check, X, AlertTriangle, Users,
+  Database, ArrowRight, Printer, Sparkles
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -99,26 +99,71 @@ export default function AdminDashboard() {
   ];
 
   return (
-    <div className="text-[#1A1A1A] font-sans">
-      <div className="w-full">
-        
-        {/* HEADER */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-12 border-b-4 border-black pb-6 gap-4">
-          <div>
-            <h1 className="text-5xl font-black uppercase italic tracking-tighter leading-none">Console_Main</h1>
-            <p className="font-mono text-[10px] uppercase tracking-widest mt-2 opacity-50 flex items-center gap-2">
-              <Database size={12} /> System Status: Operational // v2.0
-            </p>
+    <main className="bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden font-sans">
+      <section className="relative border-b-8 border-[#1A1A1A] px-6 py-12 md:px-10 md:py-14">
+        <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
+        <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
+        <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
+
+        <div className="relative mx-auto w-full max-w-[1920px]">
+          <div className="inline-flex items-center gap-3 border-4 border-[#1A1A1A] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
+            <span className="flex gap-1">
+              <span className="h-2 w-2 bg-[#00FFFF]" />
+              <span className="h-2 w-2 bg-[#EC008C]" />
+              <span className="h-2 w-2 bg-[#FFF200]" />
+            </span>
+            Admin_Online // Core_Node_Stable
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full md:w-auto">
-            {statCards.map((s) => (
-              <div key={s.label} className="bg-white border-2 border-black p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                <p className="font-mono text-[9px] uppercase font-bold opacity-50 mb-1">{s.label}</p>
-                <p className={`text-2xl font-black italic leading-none ${s.color}`}>{s.value}</p>
+
+          <div className="mt-8 grid gap-8 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
+            <div>
+              <h1 className="text-5xl font-black uppercase italic tracking-tighter leading-[0.95] md:text-7xl">
+                Admin_<span className="bg-[#1A1A1A] px-4 py-1 text-white not-italic">Command Grid</span>
+              </h1>
+              <p className="mt-4 max-w-3xl font-mono text-[11px] uppercase tracking-[0.2em] leading-relaxed text-gray-600 md:text-sm">
+                Monitor onboarding, verify business nodes, and control account integrity across the full network.
+              </p>
+            </div>
+
+            <div className="border-4 border-[#1A1A1A] bg-white p-5 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-mono text-[9px] uppercase tracking-[0.35em] text-gray-500">Status</p>
+                  <p className="mt-1 text-lg font-black uppercase tracking-tighter">System Operational</p>
+                </div>
+                <div className="flex h-12 w-12 items-center justify-center bg-[#1A1A1A] text-white">
+                  <Sparkles className="h-6 w-6 text-[#FFF200]" />
+                </div>
               </div>
-            ))}
+              <div className="mt-4 flex gap-1">
+                <div className="h-1 flex-1 bg-[#00FFFF]" />
+                <div className="h-1 flex-1 bg-[#EC008C]" />
+                <div className="h-1 flex-1 bg-[#FFF200]" />
+              </div>
+            </div>
           </div>
-        </header>
+        </div>
+      </section>
+
+      <div className="border-b-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
+        <div className="mx-auto flex w-full max-w-[1920px] items-center gap-6 px-6 font-mono text-[10px] font-black uppercase tracking-[0.35em] md:px-10">
+          <span className="text-[#00FFFF]">Cyan</span>
+          <span className="text-[#EC008C]">Magenta</span>
+          <span className="text-[#FFF200]">Yellow</span>
+          <span className="text-white">Black</span>
+          <Printer size={14} className="text-white" />
+        </div>
+      </div>
+
+      <section className="mx-auto w-full max-w-[1920px] px-6 py-10 md:px-10 md:py-14">
+        <div className="mb-10 grid w-full grid-cols-2 gap-4 lg:grid-cols-4">
+          {statCards.map((s) => (
+            <div key={s.label} className="border-4 border-[#1A1A1A] bg-white p-5 shadow-[6px_6px_0px_0px_rgba(26,26,26,1)]">
+              <p className="mb-2 font-mono text-[9px] font-black uppercase tracking-[0.2em] opacity-50">{s.label}</p>
+              <p className={`text-3xl font-black italic leading-none ${s.color}`}>{s.value}</p>
+            </div>
+          ))}
+        </div>
 
         {/* PRIMARY ACTION TABLE */}
         <section className="mb-16">
@@ -133,7 +178,7 @@ export default function AdminDashboard() {
             <h2 className="font-black uppercase text-sm tracking-tight">Requires Validation</h2>
           </div>
 
-          <div className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] overflow-x-auto">
+          <div className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,255,255,1)] overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[600px]">
               <thead>
                 <tr className="bg-black text-white font-mono text-[10px] uppercase tracking-[0.2em]">
@@ -166,7 +211,7 @@ export default function AdminDashboard() {
                         <div className="flex justify-center gap-3">
                           <button 
                             onClick={() => validate(item.businessId, item.ownerId, "APPROVE")}
-                            className="flex-1 bg-black text-white font-black py-2 px-4 hover:bg-[#00A8E8] transition-all flex items-center justify-center gap-2 shadow-[3px_3px_0px_0px_rgba(0,0,0,0.2)] active:shadow-none"
+                            className="flex-1 bg-black text-white font-black py-2 px-4 hover:bg-[#00FFFF] transition-all flex items-center justify-center gap-2 shadow-[3px_3px_0px_0px_rgba(0,0,0,0.2)] active:shadow-none"
                           >
                             <Check size={16} /> VERIFY
                           </button>
@@ -191,8 +236,8 @@ export default function AdminDashboard() {
           
           {/* VERIFIED OPERATORS */}
           <section>
-            <h3 className="font-black uppercase italic mb-4 flex items-center gap-2 underline underline-offset-8 decoration-4 decoration-[#00A8E8]">
-              <ShieldCheck size={20} className="text-[#00A8E8]" /> Verified Operators
+            <h3 className="font-black uppercase italic mb-4 flex items-center gap-2 underline underline-offset-8 decoration-4 decoration-[#00FFFF]">
+              <ShieldCheck size={20} className="text-[#00FFFF]" /> Verified Operators
             </h3>
             <div className="bg-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               {verifiedQueue.length === 0 ? (
@@ -221,7 +266,7 @@ export default function AdminDashboard() {
                 <div key={user.id} className="bg-white border-2 border-black p-3 hover:-translate-y-1 transition-transform group">
                   <p className="font-bold text-[10px] uppercase truncate">{user.full_name || "NULL_USER"}</p>
                   <p className={`font-mono text-[8px] font-black uppercase mt-1 ${
-                    user.role === 'BUSINESS_OWNER' ? 'text-[#00A8E8]' : 
+                    user.role === 'BUSINESS_OWNER' ? 'text-[#00FFFF]' : 
                     user.role === 'ADMIN' ? 'text-[#FF3E00]' : 'text-zinc-400'
                   }`}>
                     {user.role || "CUSTOMER"}
@@ -232,7 +277,7 @@ export default function AdminDashboard() {
           </section>
         </div>
 
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }

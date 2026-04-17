@@ -14,6 +14,7 @@ export default function AdminLayout({ children }) {
   const router = useRouter();
   const [state, setState] = useState("checking"); // checking | approved | unauthorized
   const [mounted, setMounted] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   useEffect(() => {
     setMounted(true);
@@ -121,9 +122,12 @@ export default function AdminLayout({ children }) {
   /* ── Approved Portal ── */
   return (
     <div className="flex min-h-screen bg-[#F4F4F1]">
-      <AdminSidebar />
-      <main className="flex-1 min-w-0">
-        <div className="max-w-[1600px] mx-auto min-h-[calc(100vh-80px)] p-6 md:p-8">
+      <AdminSidebar
+        isOpen={sidebarOpen}
+        onToggle={() => setSidebarOpen((current) => !current)}
+      />
+      <main className="flex-1 min-w-0 w-full">
+        <div className="w-full max-w-none min-h-[calc(100vh-80px)] p-6 md:p-8">
           {children}
         </div>
       </main>

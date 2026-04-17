@@ -81,10 +81,14 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="min-h-screen bg-[#F4F4F1] text-[#1A1A1A] font-sans flex flex-col lg:flex-row overflow-hidden">
+    <main className="relative min-h-screen bg-[#FDFDFD] text-[#1A1A1A] font-sans overflow-hidden">
+      <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
+      <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
+      <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
+      <div className="flex min-h-screen w-full flex-col lg:flex-row border-x-4 border-[#1A1A1A]">
 
       {/* Sidebar Branding - Abstract/Industrial */}
-      <div className="lg:w-5/12 bg-[#1A1A1A] p-12 flex flex-col justify-between text-[#F4F4F1] relative">
+      <div className="lg:w-5/12 bg-[#1A1A1A] p-12 flex flex-col justify-between text-[#F4F4F1] relative border-b-8 lg:border-b-0 lg:border-r-8 border-[#1A1A1A]">
         {/* Background Decorative Grid - Cyan Dots */}
         <div className="absolute inset-0 opacity-10 pointer-events-none"
           style={{ backgroundImage: 'radial-gradient(#00FFFF 1px, transparent 1px)', backgroundSize: '30px 30px' }} />
@@ -129,18 +133,26 @@ export default function LoginPage() {
       </div>
 
       {/* Form Section */}
-      <div className="flex-1 flex items-center justify-center p-8 md:p-16 relative bg-[#F4F4F1]">
+      <div className="flex-1 flex items-center justify-center p-8 md:p-16 relative bg-[#FDFDFD]">
         {/* Decorative corner brackets */}
         <div className="absolute top-10 left-10 w-10 h-10 border-t-2 border-l-2 border-[#00FFFF]/20" />
         <div className="absolute bottom-10 right-10 w-10 h-10 border-b-2 border-r-2 border-[#EC008C]/20" />
 
         <div className="w-full max-w-md relative z-10">
+          <div className="inline-flex items-center gap-3 border-4 border-[#1A1A1A] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest shadow-[6px_6px_0px_0px_rgba(236,0,140,1)] mb-8">
+            <span className="flex gap-1">
+              <span className="w-2 h-2 bg-[#00FFFF]" />
+              <span className="w-2 h-2 bg-[#EC008C]" />
+              <span className="w-2 h-2 bg-[#FFF200]" />
+            </span>
+            Access_Gateway // Auth_Node
+          </div>
           <div className="mb-12">
             <div className="flex items-center gap-2 mb-2">
               <ShieldCheck className="text-[#00FFFF]" size={16} />
               <span className="font-mono text-[10px] font-bold uppercase tracking-[0.4em]">Validation_Required</span>
             </div>
-            <h2 className="text-6xl font-black tracking-tighter uppercase leading-none">WELCOME_BACK</h2>
+            <h2 className="text-5xl md:text-6xl font-black tracking-tighter uppercase italic leading-none">Welcome_<span className="bg-[#1A1A1A] px-2 py-1 text-white not-italic">Back</span></h2>
           </div>
 
           {error && (
@@ -244,6 +256,7 @@ export default function LoginPage() {
             </form>
           )}
         </div>
+      </div>
       </div>
     </main>
   );
