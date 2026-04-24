@@ -58,7 +58,7 @@ export default function BrowsePage() {
       const { data: bizData, error: bizError } = await supabase
         .from("businesses")
         .select(`
-          id, name, address, lat, lng, logo_url,
+          id, name, address, lat, lng, logo_url, is_open,
           services ( name, category, available ),
           business_reviews ( rating )
         `)
@@ -89,6 +89,7 @@ export default function BrowsePage() {
           lat: parseFloat(b.lat),
           lng: parseFloat(b.lng),
           logo_url: b.logo_url,
+          is_open: b.is_open ?? true,
           rating: parseFloat(avgRating),
           reviewCount: reviews.length,
           serviceCount: availableServices.length,
@@ -234,10 +235,11 @@ export default function BrowsePage() {
                 <div key={b.id} className="w-full">
                   <div
                     onClick={() => setSelectedId(b.id)}
-                    className={`w-full text-left p-6 border-4 transition-all relative group cursor-pointer ${isSelected
+                    className={`w-full text-left p-6 border-4 transition-all relative group cursor-pointer ${
+                      isSelected
                         ? "bg-white text-[#1A1A1A] border-[#00FFFF] shadow-[10px_10px_0px_0px_rgba(0,255,255,1)] -translate-x-1 -translate-y-1"
                         : "bg-[#222222] border-white/10 hover:border-white/30"
-                      }`}
+                    } ${!b.is_open ? "grayscale opacity-70" : ""}`}
                   >
                     <div className="flex flex-col gap-4">
                       {/* Logo & Identity */}
@@ -258,8 +260,11 @@ export default function BrowsePage() {
                         )}
 
                         <div className="flex flex-col">
-                          <span className={`font-mono text-[9px] uppercase font-black ${isSelected ? "text-[#EC008C]" : "text-white/40"}`}>
+                          <span className={`font-mono text-[9px] uppercase font-black flex items-center gap-2 ${isSelected ? "text-[#EC008C]" : "text-white/40"}`}>
                             ID_{b.id.split('-')[0]}
+                            {!b.is_open && (
+                              <span className="bg-[#1A1A1A] text-white px-1 py-0.5 border border-white/20">CLOSED</span>
+                            )}
                           </span>
                           <h2 className="text-3xl font-black uppercase italic leading-none tracking-tighter">
                             {b.name}

@@ -7,7 +7,7 @@ import { supabase } from "@/lib/supabaseClient";
 import {
   UploadCloud, CheckCircle2, CreditCard, Banknote,
   FileText, Star, MapPin, Loader2, Hash, ArrowRight,
-  ChevronRight, Info, AlertTriangle, MessageSquare, Package, Truck, Minus, Plus, Clock, X
+  ChevronRight, Info, AlertTriangle, MessageSquare, Package, Truck, Minus, Plus, Clock, X, QrCode, Power
 } from "lucide-react";
 import dynamic from "next/dynamic";
 
@@ -110,7 +110,7 @@ export default function BusinessDetailsPage({ params }) {
         const { data, error } = await supabase
           .from("businesses")
           .select(`
-            id, name, address, description, min_downpayment_percent,
+            id, name, address, description, min_downpayment_percent, qr_url, is_open,
             services ( id, name, price, description, category, available, image_url, stock_qty ),
             business_reviews ( rating, feedback, created_at, customer_name )
           `)
@@ -141,6 +141,96 @@ export default function BusinessDetailsPage({ params }) {
     init();
   }, [id]);
 
+  const reverseGeocode = async (lat, lng) => {
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`, { headers: { 'User-Agent': 'print-app-v1' }});
+      const data = await res.json();
+      if (data && data.display_name) {
+        setDeliveryAddress(data.display_name);
+      }
+    } catch (err) {
+      console.error("Reverse geocoding error:", err);
+    }
+  };
+
+  const geocodeAddress = async () => {
+    if (!deliveryAddress) return;
+    setDeliveryLocationLoading(true);
+    
+    try {
+      let lat, lng;
+      const addressToSearch = deliveryAddress.trim();
+
+      const parts = addressToSearch.split(/[\s,]+/);
+      const potentialCode = parts[0];
+
+      if (potentialCode.includes("+")) {
+        const { OpenLocationCode } = await import("open-location-code");
+        const olc = new OpenLocationCode();
+
+        if (olc.isFull(potentialCode)) {
+          const decoded = olc.decode(potentialCode);
+          lat = decoded.latitudeCenter;
+          lng = decoded.longitudeCenter;
+        } else if (olc.isShort(potentialCode) && parts.length > 1) {
+          const referenceLoc = addressToSearch.replace(potentialCode, "").trim();
+          const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(referenceLoc)}`, { headers: { 'User-Agent': 'print-app-v1' }});
+          const data = await res.json();
+
+          if (data && data.length > 0) {
+            const refLat = Number.parseFloat(data[0].lat);
+            const refLng = Number.parseFloat(data[0].lon);
+            const fullCode = olc.recoverNearest(potentialCode, refLat, refLng);
+            const decoded = olc.decode(fullCode);
+            lat = decoded.latitudeCenter;
+            lng = decoded.longitudeCenter;
+          }
+        }
+      }
+
+      if (!lat || !lng) {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressToSearch)}`, { headers: { 'User-Agent': 'print-app-v1' }});
+        const data = await res.json();
+        if (data && data.length > 0) {
+          lat = Number.parseFloat(data[0].lat);
+          lng = Number.parseFloat(data[0].lon);
+        }
+      }
+
+      if (lat && lng) {
+        setDeliveryCoordinates({ lat, lng });
+      } else {
+        alert("Location not found. Try adding more details like city or postal code.");
+      }
+    } catch (err) {
+      console.error("Geocoding error:", err);
+      alert("Failed to search location.");
+    } finally {
+      setDeliveryLocationLoading(false);
+    }
+  };
+
+  const getCurrentLocation = () => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      alert("Geolocation is not supported by your browser");
+      return;
+    }
+    setDeliveryLocationLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setDeliveryCoordinates({ lat: latitude, lng: longitude });
+        reverseGeocode(latitude, longitude);
+        setDeliveryLocationLoading(false);
+      },
+      (error) => {
+        alert("Unable to retrieve your location. Please check browser permissions.");
+        setDeliveryLocationLoading(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    );
+  };
+
   useEffect(() => {
     if (typeof navigator === "undefined" || !navigator.geolocation) {
       setDeliveryCoordinates({ lat: 14.6806, lng: 120.5375 });
@@ -150,10 +240,9 @@ export default function BusinessDetailsPage({ params }) {
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        setDeliveryCoordinates({
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-        });
+        const { latitude, longitude } = position.coords;
+        setDeliveryCoordinates({ lat: latitude, lng: longitude });
+        reverseGeocode(latitude, longitude);
         setDeliveryLocationLoading(false);
       },
       () => {
@@ -410,12 +499,38 @@ export default function BusinessDetailsPage({ params }) {
     );
   }
 
+  const isClosed = business.is_open === false;
+
   return (
-    <main className="min-h-[calc(100vh-80px)] bg-[#FDFDFD] font-sans overflow-x-hidden">
+    <main
+      className="min-h-[calc(100vh-80px)] bg-[#FDFDFD] font-sans overflow-x-hidden transition-all duration-500"
+      style={isClosed ? { filter: "grayscale(1)", background: "#F0F0F0" } : {}}
+    >
       <section className="relative px-6 pb-24 pt-10 md:px-10 md:pt-12">
         <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
         <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
         <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
+
+        {/* ── CLOSED BANNER ── */}
+        {isClosed && (
+          <div
+            className="relative z-30 mb-6 flex items-center justify-center gap-4 border-4 border-[#1A1A1A] bg-[#1A1A1A] py-5 px-6 shadow-[8px_8px_0px_0px_rgba(100,100,100,0.4)] overflow-hidden"
+          >
+            {/* diagonal stripes */}
+            <div className="absolute inset-0 opacity-10" style={{
+              backgroundImage: "repeating-linear-gradient(45deg, #fff 0px, #fff 10px, transparent 10px, transparent 20px)"
+            }} />
+            <div className="relative flex flex-col items-center gap-1 text-center">
+              <p className="font-mono text-[10px] font-black uppercase tracking-[0.4em] text-white/50">Status // Node_Offline</p>
+              <p className="text-4xl md:text-5xl font-black uppercase italic tracking-tighter text-white leading-none">
+                Shop is <span className="line-through opacity-40">Open</span>&nbsp;—&nbsp;CLOSED
+              </p>
+              <p className="font-mono text-[11px] font-black uppercase tracking-[0.25em] text-white/60 mt-1">
+                Orders cannot be placed at this time. Check back soon.
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="relative w-full space-y-12">
         {/* ── HEADER SECTION ── */}
@@ -441,6 +556,15 @@ export default function BusinessDetailsPage({ params }) {
                 <Star size={16} fill="#1A1A1A" className="text-[#1A1A1A]" /> 
                 <span className="font-black italic text-lg leading-none">{business.ratingAvg}</span>
                 <span className="text-[10px] uppercase font-mono opacity-60 not-italic tracking-widest font-bold ml-2 pt-1 border-l-2 border-[#1A1A1A] pl-2">({business.reviewCount} INTEL)</span>
+              </div>
+              {/* Open / Closed badge */}
+              <div className={`inline-flex items-center gap-2 border-4 px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest ${
+                business.is_open !== false
+                  ? "border-[#1A1A1A] bg-[#00FFFF] text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
+                  : "border-[#1A1A1A] bg-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(236,0,140,1)]"
+              }`}>
+                <Power size={12} className={business.is_open !== false ? "text-[#1A1A1A]" : "text-[#EC008C]"} />
+                {business.is_open !== false ? "● Open" : "○ Closed"}
               </div>
               <div className="font-mono text-[10px] uppercase opacity-40 tracking-tighter font-black flex items-center gap-2 mt-2 md:mt-0">
                 <Hash size={12} className="text-[#00FFFF]" /> ID: {business.id.split('-')[0]} // STATUS: ONLINE
@@ -663,7 +787,34 @@ export default function BusinessDetailsPage({ params }) {
           </div>
 
           {/* ── RIGHT COLUMN: SUMMARY ── */}
-          <aside className="lg:sticky lg:top-12 h-fit">
+          <aside className="lg:sticky lg:top-12 h-fit space-y-6">
+
+            {/* QR Payment Card */}
+            {business.qr_url && (
+              <div className="bg-white border-4 border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(255,242,0,1)] overflow-hidden">
+                <div className="bg-[#1A1A1A] text-white px-6 py-4 flex items-center justify-between border-b-4 border-[#FFF200]">
+                  <h2 className="font-black uppercase italic tracking-widest text-sm">QR_Payment</h2>
+                  <QrCode size={20} className="text-[#FFF200]" />
+                </div>
+                <div className="p-6 flex flex-col items-center gap-4">
+                  <p className="font-mono text-[10px] font-black uppercase tracking-[0.2em] text-[#1A1A1A]/60 text-center">
+                    Scan to pay your downpayment via GCash / Maya / Bank
+                  </p>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <div className="mx-auto overflow-hidden border-4 border-[#1A1A1A] bg-white" style={{ aspectRatio: "9/16", width: "160px" }}>
+                    <img
+                      src={business.qr_url}
+                      alt="Payment QR code"
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                  <p className="font-mono text-[9px] font-black uppercase tracking-[0.15em] text-[#1A1A1A]/40 text-center">
+                    Upload your receipt below after scanning
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="bg-white border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)] overflow-hidden">
               <div className="bg-[#1A1A1A] text-white px-8 py-6 flex items-center justify-between border-b-4 border-[#00FFFF]">
                 <h2 className="font-black uppercase italic tracking-widest text-lg">Order_Specification</h2>
@@ -751,30 +902,52 @@ export default function BusinessDetailsPage({ params }) {
                    {deliveryType === "DELIVERY" && (
                      <div className="mt-6 p-6 bg-[#F9F9F7] border-4 border-[#1A1A1A] space-y-6">
                        <div>
-                         <p className="font-mono text-[10px] font-black uppercase tracking-widest mb-2 opacity-80">Full Address</p>
-                         <textarea 
-                           className="w-full border-2 border-[#1A1A1A] p-3 text-xs font-mono uppercase bg-white focus:outline-none focus:ring-2 focus:ring-[#EC008C]"
-                           placeholder="Enter your exact delivery address..."
-                           value={deliveryAddress}
-                           onChange={(e) => setDeliveryAddress(e.target.value)}
-                           rows={3}
-                         />
+                         <div className="flex items-center justify-between mb-2">
+                           <p className="font-mono text-[10px] font-black uppercase tracking-widest opacity-80">Full Address / Plus Code</p>
+                           <button
+                             type="button"
+                             onClick={getCurrentLocation}
+                             className="flex items-center gap-1 font-mono text-[9px] font-black uppercase tracking-widest text-[#EC008C] hover:text-[#00FFFF] transition-colors"
+                           >
+                             <MapPin size={10} /> Use My Location
+                           </button>
+                         </div>
+                         <div className="flex gap-2">
+                           <input 
+                             type="text"
+                             className="flex-1 w-full border-2 border-[#1A1A1A] p-3 text-xs font-mono uppercase bg-white focus:outline-none focus:ring-2 focus:ring-[#00FFFF]"
+                             placeholder="Enter exact address or Plus Code (e.g. MGX8+3Q Bataan)"
+                             value={deliveryAddress}
+                             onChange={(e) => setDeliveryAddress(e.target.value)}
+                           />
+                           <button
+                             type="button"
+                             onClick={geocodeAddress}
+                             disabled={deliveryLocationLoading}
+                             className="inline-flex items-center justify-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] px-4 py-2 font-mono text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-[#00FFFF] hover:text-[#1A1A1A] disabled:opacity-50"
+                           >
+                             {deliveryLocationLoading ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />} Pin
+                           </button>
+                         </div>
                        </div>
                        <div>
-                         <p className="font-mono text-[10px] font-black uppercase tracking-widest mb-2 opacity-80 flex gap-2 items-center"><MapPin size={12} /> Pin Location</p>
+                         <p className="font-mono text-[10px] font-black uppercase tracking-widest mb-2 opacity-80 flex gap-2 items-center"><MapPin size={12} /> Pin Location (Auto-Syncs with Address)</p>
                          <LocationPicker 
                            lat={deliveryCoordinates?.lat} 
                            lng={deliveryCoordinates?.lng} 
-                           onChange={(lat, lng) => setDeliveryCoordinates({ lat, lng })}
+                           onChange={(lat, lng) => {
+                             setDeliveryCoordinates({ lat, lng });
+                             reverseGeocode(lat, lng);
+                           }}
                          />
                         {deliveryLocationLoading && (
-                          <p className="mt-2 font-mono text-[9px] font-black uppercase tracking-widest text-[#EC008C]">
-                            Detecting your current location...
+                          <p className="mt-2 font-mono text-[9px] font-black uppercase tracking-widest text-[#EC008C] flex items-center gap-1">
+                            <Loader2 size={10} className="animate-spin" /> Detecting location...
                           </p>
                         )}
                         {!deliveryLocationLoading && deliveryCoordinates && (
                           <p className="mt-2 font-mono text-[9px] font-black uppercase tracking-widest text-[#1A1A1A]/60">
-                            Defaulting to your current location. You can move it by clicking another spot on the map.
+                            Move the pin to automatically update the address above.
                           </p>
                         )}
                        </div>
@@ -859,6 +1032,11 @@ export default function BusinessDetailsPage({ params }) {
                   <div className="bg-white text-[#EC008C] border-4 border-[#EC008C] p-6 font-mono text-[11px] font-bold uppercase tracking-wider text-center flex flex-col gap-3 shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
                     <AlertTriangle size={32} className="mx-auto" />
                     Auth Required: Only registered CUSTOMERS can place orders.
+                  </div>
+                ) : isClosed ? (
+                  <div className="bg-[#1A1A1A] text-white border-4 border-[#1A1A1A] p-6 font-mono text-[11px] font-bold uppercase tracking-wider text-center flex flex-col gap-3">
+                    <Power size={32} className="mx-auto opacity-40" />
+                    Shop is currently closed. Orders are disabled.
                   </div>
                 ) : (
                   <div className="space-y-4">

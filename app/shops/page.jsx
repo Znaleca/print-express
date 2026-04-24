@@ -16,7 +16,7 @@ export default function ShopsPage() {
       const { data: bizData, error: bizError } = await supabase
         .from("businesses")
         .select(`
-          id, name, address, logo_url,
+          id, name, address, logo_url, is_open,
           services ( name, category, available ),
           business_reviews ( rating )
         `)
@@ -45,6 +45,7 @@ export default function ShopsPage() {
           name: b.name || "UNNAMED_UNIT",
           address: b.address || "LOC_UNKNOWN",
           logo_url: b.logo_url,
+          is_open: b.is_open ?? true,
           rating: parseFloat(avgRating),
           reviewCount: reviews.length,
           services: availableServices.slice(0, 5)
@@ -146,7 +147,9 @@ export default function ShopsPage() {
               <div
                 key={b.id}
                 onClick={() => router.push(`/business/${b.id}`)}
-                className="group relative bg-white border-4 border-[#1A1A1A] hover:border-[#00FFFF] transition-all duration-300 cursor-pointer flex flex-col h-full hover:-translate-y-2 shadow-[10px_10px_0px_0px_rgba(26,26,26,1)] hover:shadow-[10px_10px_0px_0px_rgba(0,255,255,1)]"
+                className={`group relative border-4 border-[#1A1A1A] hover:border-[#00FFFF] transition-all duration-300 cursor-pointer flex flex-col h-full hover:-translate-y-2 shadow-[10px_10px_0px_0px_rgba(26,26,26,1)] hover:shadow-[10px_10px_0px_0px_rgba(0,255,255,1)] ${
+                  !b.is_open ? "bg-[#F0F0F0] grayscale opacity-90" : "bg-white"
+                }`}
               >
                 {/* BANNER LOGO SECTION */}
                 <div className="relative h-48 w-full bg-[#1A1A1A] overflow-hidden border-b-4 border-[#1A1A1A] group-hover:border-[#00FFFF] transition-colors">
@@ -169,6 +172,12 @@ export default function ShopsPage() {
                   <div className="absolute top-4 left-4 bg-white border-2 border-[#1A1A1A] px-2 py-1 font-mono text-[9px] font-black uppercase">
                     ID_{b.id.split('-')[0]}
                   </div>
+                  {/* Floating Status Tag */}
+                  {!b.is_open && (
+                    <div className="absolute top-4 right-4 bg-[#1A1A1A] text-white border-2 border-[#1A1A1A] px-2 py-1 font-mono text-[9px] font-black uppercase shadow-[2px_2px_0px_0px_rgba(255,255,255,1)]">
+                      ● CLOSED
+                    </div>
+                  )}
                 </div>
 
                 <div className="p-8 flex flex-col flex-1">

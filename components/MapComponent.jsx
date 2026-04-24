@@ -7,7 +7,8 @@ import { useRouter } from "next/navigation";
 import { Star, ChevronRight } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 
-const createCmykIcon = (color = "#00FFFF") => {
+const createCmykIcon = (color = "#00FFFF", isClosed = false) => {
+  const displayColor = isClosed ? "#666666" : color;
   return new L.DivIcon({
     className: "custom-marker-container",
     html: `
@@ -15,17 +16,18 @@ const createCmykIcon = (color = "#00FFFF") => {
         width: 32px; 
         height: 32px; 
         background: #1A1A1A; 
-        border: 3px solid ${color}; 
+        border: 3px solid ${displayColor}; 
         display: flex; 
         align-items: center; 
         justify-content: center;
         transform: rotate(45deg);
         box-shadow: 4px 4px 0px rgba(0,0,0,0.2);
+        ${isClosed ? 'opacity: 0.6;' : ''}
       ">
         <div style="
           width: 8px; 
           height: 8px; 
-          background: ${color}; 
+          background: ${displayColor}; 
           transform: rotate(-45deg);
         "></div>
       </div>
@@ -71,6 +73,8 @@ function MapController({ center, selectedBusinessId, markerRefs }) {
 export default function MapComponent({ businesses, selectedBusinessId }) {
   const router = useRouter();
   const markerRefs = useRef({});
+  const mapRef = useRef(null);
+  const [mapKey] = useState(() => new Date().getTime());
   const [isMounted, setIsMounted] = useState(false); // Fix for Hydration/DOM issues
   const defaultCenter = [14.6806, 120.5375];
 
@@ -81,11 +85,22 @@ export default function MapComponent({ businesses, selectedBusinessId }) {
   const selected = businesses.find((b) => b.id === selectedBusinessId);
   const center = selected ? [selected.lat, selected.lng] : defaultCenter;
 
+  useEffect(() => {
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
+  }, []);
+
   if (!isMounted) return <div className="w-full h-full bg-[#1A1A1A]" />;
 
   return (
     <div className="w-full h-full relative bg-[#E5E5E5]">
       <MapContainer
+        key={mapKey}
+        ref={mapRef}
         center={defaultCenter}
         zoom={13}
         scrollWheelZoom={true}
@@ -106,17 +121,18 @@ export default function MapComponent({ businesses, selectedBusinessId }) {
 
         {businesses.map((b) => {
           const isSelected = selectedBusinessId === b.id;
+          const isClosed = !b.is_open;
           return (
             <Marker
               key={b.id}
               position={[b.lat, b.lng]}
-              icon={createCmykIcon(isSelected ? "#EC008C" : "#00FFFF")}
+              icon={createCmykIcon(isSelected ? "#EC008C" : "#00FFFF", isClosed)}
               ref={(el) => {
                 if (el) markerRefs.current[b.id] = el;
               }}
             >
               <Popup closeButton={false} className="industrial-popup">
-                <div className="p-4 bg-white border-4 border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(255,242,0,1)] min-w-[240px]">
+                <div className={`p-4 bg-[#F0F0F0] border-4 border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(26,26,26,1)] min-w-[240px] ${isClosed ? "grayscale opacity-90" : "bg-white shadow-[8px_8px_0px_0px_rgba(255,242,0,1)]"}`}>
                   <div className="flex h-2 mb-3">
                     <div className="flex-1 bg-[#00FFFF]" />
                     <div className="flex-1 bg-[#EC008C]" />
@@ -127,8 +143,9 @@ export default function MapComponent({ businesses, selectedBusinessId }) {
                     {b.name}
                   </p>
 
-                  <p className="font-mono text-[10px] text-gray-500 mb-4 uppercase tracking-tighter font-bold">
-                    LOC // {b.address}
+                  <p className="font-mono text-[10px] text-gray-500 mb-4 uppercase tracking-tighter font-bold flex items-center justify-between">
+                    <span>LOC // {b.address}</span>
+                    {isClosed && <span className="bg-[#1A1A1A] text-white px-1 py-0.5 ml-2">CLOSED</span>}
                   </p>
 
                   <div className="flex items-center justify-between border-t-4 border-[#1A1A1A] pt-4">

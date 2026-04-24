@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -39,8 +39,18 @@ export default function LocationPicker({ lat, lng, onChange }) {
   const [position, setPosition] = useState(lat && lng ? { lat, lng } : null);
   const defaultCenter = [14.6806, 120.5375]; // Default to Balanga, Bataan, Philippines
 
+  // HMR Fix for React Leaflet
+  const mapRef = useRef(null);
+  const [mapKey] = useState(() => new Date().getTime());
+
   useEffect(() => {
     setIsMounted(true);
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
   }, []);
 
   // Ensure map updates position properly from props, but not if user drags
@@ -63,6 +73,8 @@ export default function LocationPicker({ lat, lng, onChange }) {
         <div style={{ width: "100%", height: "100%", background: "#f9f9f7" }} />
       ) : (
       <MapContainer
+        key={mapKey}
+        ref={mapRef}
         center={position ? [position.lat, position.lng] : defaultCenter}
         zoom={13}
         style={{ width: "100%", height: "100%", zIndex: 0 }}
