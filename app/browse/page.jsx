@@ -196,7 +196,7 @@ export default function BrowsePage() {
               <input
                 type="text"
                 className="w-full bg-transparent px-4 py-4 text-white placeholder:text-white/20 focus:outline-none font-mono text-xs font-black uppercase tracking-widest"
-                placeholder="SEARCH_BY_SHOP_OR_SERVICE..."
+                placeholder="SEARCH_BY_SHOP_OR_ITEM..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -294,7 +294,7 @@ export default function BrowsePage() {
 
                       <div className={`mt-2 grid grid-cols-2 gap-2 font-mono text-[9px] uppercase ${isSelected ? "text-[#1A1A1A]/70" : "text-white/50"}`}>
                         <span>Reviews: {b.reviewCount}</span>
-                        <span>Services: {b.serviceCount}</span>
+                        <span>Items: {b.serviceCount}</span>
                         <span>
                           Distance: {b.distanceKm == null ? "--" : `${b.distanceKm.toFixed(1)} km`}
                         </span>

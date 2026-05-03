@@ -31,6 +31,9 @@ export default function TrackOrderPage() {
   const [reviewsState, setReviewsState] = useState({});
   const [submittingReviewId, setSubmittingReviewId] = useState(null);
   const [confirmingRefundId, setConfirmingRefundId] = useState(null);
+  const [cancelModal, setCancelModal] = useState(null); // { orderId }  
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     let isActive = true;
@@ -123,11 +126,26 @@ export default function TrackOrderPage() {
     }));
   };
 
-  const cancelOrder = async (orderId) => {
-    if (!confirm("Are you sure you want to cancel this order?")) return;
-    const { error } = await supabase.from("orders").update({ status: "CANCELLED" }).eq("id", orderId).eq("customer_id", user.id);
+  const openCancelModal = (orderId) => {
+    setCancelModal({ orderId });
+    setCancelReason("");
+  };
+
+  const cancelOrder = async () => {
+    if (!cancelModal) return;
+    if (!cancelReason.trim()) return;
+    setCancelling(true);
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: "CANCELLED", cancel_reason: cancelReason.trim() })
+      .eq("id", cancelModal.orderId)
+      .eq("customer_id", user.id);
+    setCancelling(false);
     if (!error) {
-      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: "CANCELLED" } : o));
+      setOrders(prev => prev.map(o =>
+        o.id === cancelModal.orderId ? { ...o, status: "CANCELLED", cancel_reason: cancelReason.trim() } : o
+      ));
+      setCancelModal(null);
     } else {
       alert("Failed to cancel: " + error.message);
     }
@@ -419,6 +437,12 @@ export default function TrackOrderPage() {
                         {order.status === 'CANCELLED' && (
                           <div className="pt-6 border-t-4 border-red-500/20">
                             <p className="font-black text-[10px] uppercase tracking-[0.2em] mb-3 text-red-500">Order_Cancelled</p>
+                            {order.cancel_reason && (
+                              <div className="bg-red-50 border-2 border-red-300 px-3 py-2 mb-3">
+                                <p className="font-mono text-[9px] uppercase font-black text-red-600 mb-1">Reason:</p>
+                                <p className="font-mono text-[9px] uppercase opacity-80 italic">{order.cancel_reason}</p>
+                              </div>
+                            )}
                             <p className="font-mono text-[9px] uppercase opacity-60">Your order has been cancelled. The seller will process your refund of ₱{Number(order.downpayment_amount || 0).toFixed(2)} and you will be notified here.</p>
                           </div>
                         )}
@@ -426,7 +450,7 @@ export default function TrackOrderPage() {
 
                       <div className="flex justify-between items-center mt-4 pt-4 border-t-2 border-[#1A1A1A]/5">
                          {(order.status === "PENDING" || order.status === "PLACED") && (
-                           <button onClick={() => cancelOrder(order.id)} className="font-mono text-[9px] uppercase font-black text-red-500 hover:text-white hover:bg-red-500 tracking-widest border-2 border-red-500 px-3 py-1 transition-all">
+                           <button onClick={() => openCancelModal(order.id)} className="font-mono text-[9px] uppercase font-black text-red-500 hover:text-white hover:bg-red-500 tracking-widest border-2 border-red-500 px-3 py-1 transition-all">
                              CANCEL_REQUEST
                            </button>
                          )}
@@ -444,6 +468,80 @@ export default function TrackOrderPage() {
         )}
       </div>
       </section>
+
+      {/* ── CANCELLATION REASON MODAL ── */}
+      {cancelModal && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(236,0,140,1)]">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
+              <div className="flex items-center gap-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-[#00FFFF]" />
+                  <div className="w-2 h-2 bg-[#EC008C]" />
+                  <div className="w-2 h-2 bg-[#FFF200]" />
+                </div>
+                <span className="font-black uppercase italic tracking-widest">Cancel_Order</span>
+              </div>
+              <button onClick={() => setCancelModal(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
+                <XCircle size={20} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6">
+              <p className="font-mono text-[10px] uppercase tracking-widest text-gray-500 font-black mb-1">Cancellation Reason</p>
+              <p className="text-sm font-bold text-gray-700 mb-4">Please tell us why you are cancelling this order. This will be shared with the shop owner.</p>
+
+              <div className="space-y-3">
+                {[
+                  "Changed my mind",
+                  "Found a better price elsewhere",
+                  "Ordered by mistake",
+                  "Taking too long",
+                  "Other",
+                ].map((preset) => (
+                  <button
+                    key={preset}
+                    onClick={() => setCancelReason(preset)}
+                    className={`w-full text-left px-4 py-3 border-2 font-mono text-[10px] uppercase font-black tracking-wider transition-all ${
+                      cancelReason === preset
+                        ? "border-[#EC008C] bg-[#EC008C] text-white"
+                        : "border-[#1A1A1A] bg-white hover:bg-[#FFF200] text-[#1A1A1A]"
+                    }`}
+                  >
+                    {cancelReason === preset ? "✓ " : ""}{preset}
+                  </button>
+                ))}
+
+                <textarea
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  placeholder="Or type your own reason..."
+                  rows={2}
+                  className="w-full border-2 border-[#1A1A1A] px-4 py-3 font-mono text-[10px] uppercase focus:outline-none focus:ring-4 ring-[#00FFFF]/30 bg-[#F9F9F7] resize-none"
+                />
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={() => setCancelModal(null)}
+                  className="flex-1 border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#1A1A1A] hover:text-white transition-all"
+                >
+                  Go Back
+                </button>
+                <button
+                  onClick={cancelOrder}
+                  disabled={!cancelReason.trim() || cancelling}
+                  className="flex-1 bg-[#EC008C] text-white border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#1A1A1A] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:shadow-none"
+                >
+                  {cancelling ? "Cancelling..." : "Confirm Cancel"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

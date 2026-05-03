@@ -31,6 +31,9 @@ export default function OwnerOrdersPage() {
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const [viewMapOrder, setViewMapOrder] = useState(null);
+  const [cancelModal, setCancelModal] = useState(null); // { orderId }
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     let subscription;
@@ -137,6 +140,19 @@ export default function OwnerOrdersPage() {
     }
   };
 
+  const openOwnerCancelModal = (orderId) => {
+    setCancelModal({ orderId });
+    setCancelReason("");
+  };
+
+  const confirmOwnerCancel = async () => {
+    if (!cancelModal || !cancelReason.trim()) return;
+    setCancelling(true);
+    await updateStatus(cancelModal.orderId, 'CANCELLED', { cancel_reason: cancelReason.trim() });
+    setCancelling(false);
+    setCancelModal(null);
+  };
+
   const getOrderTotalQuantity = (order) => {
     if (!Array.isArray(order?.items) || order.items.length === 0) return 0;
     return order.items.reduce((sum, item) => sum + (Number(item?.quantity) || 1), 0);
@@ -238,6 +254,7 @@ export default function OwnerOrdersPage() {
                 {[
                   "Date",
                   "Order_ID",
+                  "Items",
                   "Qty",
                   "Delivery_Type",
                   "Schedule",
@@ -255,7 +272,7 @@ export default function OwnerOrdersPage() {
             <tbody className="font-mono text-xs">
               {orders.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="p-12 text-center text-black/40 italic uppercase tracking-[0.2em]">
+                  <td colSpan="10" className="p-12 text-center text-black/40 italic uppercase tracking-[0.2em]">
                     No transactions found in database.
                   </td>
                 </tr>
@@ -273,6 +290,17 @@ export default function OwnerOrdersPage() {
                       <span className="bg-[#1A1A1A] text-[#FFF200] px-2 py-0.5 font-bold tracking-tighter">
                         #{order.id.split('-')[0].toUpperCase()}
                       </span>
+                    </td>
+
+                    <td className="p-4 min-w-[200px]">
+                      <div className="flex flex-col gap-3">
+                        {order.items?.map((item, idx) => (
+                          <div key={idx} className="flex flex-col border-l-2 border-[#1A1A1A]/20 pl-2">
+                            <span className="font-black uppercase text-[10px] leading-tight text-[#1A1A1A] break-words">{item.name}</span>
+                            <span className="font-mono text-[9px] uppercase tracking-widest opacity-60">Qty: {item.quantity || 1} | ₱{item.price}</span>
+                          </div>
+                        ))}
+                      </div>
                     </td>
 
                     <td className="p-4 font-black italic">
@@ -361,6 +389,12 @@ export default function OwnerOrdersPage() {
                           <span className="bg-[#EC008C] text-white px-2 py-1 text-[9px] font-black tracking-widest uppercase w-fit">
                             CANCELLED
                           </span>
+                          {order.cancel_reason && (
+                            <div className="bg-red-50 border-2 border-red-300 px-3 py-2 max-w-[200px]">
+                              <p className="font-mono text-[8px] uppercase font-black text-red-600 mb-1">Reason:</p>
+                              <p className="font-mono text-[9px] italic text-red-800">{order.cancel_reason}</p>
+                            </div>
+                          )}
                           <button
                             onClick={() => updateStatus(order.id, 'REFUNDED')}
                             className="bg-[#FFF200] text-[#1A1A1A] border-2 border-[#1A1A1A] px-3 py-2 font-black text-[9px] uppercase hover:bg-[#00FFFF] transition-all shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] active:shadow-none flex items-center gap-1 w-fit"
@@ -384,29 +418,42 @@ export default function OwnerOrdersPage() {
                         </div>
                       ) : (
                         <div className="flex flex-col gap-2">
-                          <div className="relative group/select">
-                            <select
-                              value={order.status}
-                              onChange={(e) => updateStatus(order.id, e.target.value)}
-                              className={`appearance-none w-full border-2 border-[#1A1A1A] py-2 pl-3 pr-8 font-black italic uppercase text-[10px] tracking-tight cursor-pointer focus:outline-none transition-all ${
-                                order.status === 'COMPLETED' ? 'bg-[#00FFFF] text-[#1A1A1A]' : 'bg-white'
-                              }`}
-                            >
-                              <option value="PENDING">PENDING</option>
-                              <option value="PLACED">PLACED</option>
-                              <option value="PREPARING">PREPARING</option>
-                              <option value="READY_TO_PICK_UP">READY</option>
-                              <option value="RIDER_ON_THE_WAY">TRANSIT</option>
-                              <option value="COMPLETED">COMPLETE</option>
-                              <option value="CANCELLED">CANCELLED</option>
-                            </select>
-                            <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none transition-transform" />
-                          </div>
-                          {order.status === 'COMPLETED' && (
-                            <span className="font-mono text-[8px] text-[#EC008C] font-black uppercase flex items-center gap-1">
-                              ✓ FULLY_PAID
-                            </span>
-                          )}
+                          {/* When PENDING: only PLACED and CANCELLED are clickable */}
+                          {([
+                            { value: 'PLACED',          label: 'PLACED',    color: 'bg-white border-[#1A1A1A] hover:bg-[#00FFFF]' },
+                            { value: 'PREPARING',       label: 'PREPARING', color: 'bg-[#FFF200] border-[#1A1A1A] hover:bg-[#00FFFF]' },
+                            { value: 'READY_TO_PICK_UP',label: 'READY',     color: 'bg-[#00FFFF] border-[#1A1A1A] hover:bg-[#FFF200]' },
+                            { value: 'RIDER_ON_THE_WAY',label: 'TRANSIT',   color: 'bg-[#EC008C] text-white border-[#1A1A1A] hover:bg-[#FFF200] hover:text-[#1A1A1A]' },
+                            { value: 'COMPLETED',       label: 'COMPLETE',  color: 'bg-[#1A1A1A] text-[#00FFFF] border-[#1A1A1A] hover:bg-[#00FFFF] hover:text-[#1A1A1A]' },
+                          ]).map(({ value, label, color }) => {
+                            const isActive = order.status === value;
+                            const isPending = order.status === 'PENDING';
+                            // When PENDING, only PLACED is allowed (not the rest)
+                            const isDisabled = isPending && value !== 'PLACED';
+                            return (
+                              <button
+                                key={value}
+                                disabled={isActive || isDisabled}
+                                onClick={() => updateStatus(order.id, value)}
+                                className={`border-2 px-3 py-1.5 font-black text-[9px] uppercase tracking-widest transition-all ${
+                                  isActive
+                                    ? `${color} shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] cursor-default`
+                                    : isDisabled
+                                    ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed opacity-40'
+                                    : `${color} shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] active:shadow-none cursor-pointer`
+                                }`}
+                              >
+                                {isActive ? `✓ ${label}` : label}
+                              </button>
+                            );
+                          })}
+                          {/* CANCEL button — always available unless already a terminal state */}
+                          <button
+                            onClick={() => openOwnerCancelModal(order.id)}
+                            className="border-2 border-[#EC008C] text-[#EC008C] px-3 py-1.5 font-black text-[9px] uppercase hover:bg-[#EC008C] hover:text-white transition-all shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] active:shadow-none w-fit"
+                          >
+                            CANCEL
+                          </button>
                         </div>
                       )}
                     </td>
@@ -463,6 +510,74 @@ export default function OwnerOrdersPage() {
             >
               OPEN_IN_MAPS
             </a>
+          </div>
+        </div>
+      )}
+
+      {/* ── OWNER CANCELLATION REASON MODAL ── */}
+      {cancelModal && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(236,0,140,1)]">
+            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
+              <div className="flex items-center gap-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-[#00FFFF]" />
+                  <div className="w-2 h-2 bg-[#EC008C]" />
+                  <div className="w-2 h-2 bg-[#FFF200]" />
+                </div>
+                <span className="font-black uppercase italic tracking-widest">Cancel_Order</span>
+              </div>
+              <button onClick={() => setCancelModal(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6">
+              <p className="font-mono text-[10px] uppercase tracking-widest text-gray-500 font-black mb-1">Cancellation Reason</p>
+              <p className="text-sm font-bold text-gray-700 mb-4">Provide a reason for cancelling this order. The customer will see this.</p>
+              <div className="space-y-3">
+                {[
+                  "Customer requested cancellation",
+                  "Out of stock / materials unavailable",
+                  "Unable to fulfill by deadline",
+                  "Payment not received",
+                  "Other",
+                ].map((preset) => (
+                  <button
+                    key={preset}
+                    onClick={() => setCancelReason(preset)}
+                    className={`w-full text-left px-4 py-3 border-2 font-mono text-[10px] uppercase font-black tracking-wider transition-all ${
+                      cancelReason === preset
+                        ? "border-[#EC008C] bg-[#EC008C] text-white"
+                        : "border-[#1A1A1A] bg-white hover:bg-[#FFF200] text-[#1A1A1A]"
+                    }`}
+                  >
+                    {cancelReason === preset ? "✓ " : ""}{preset}
+                  </button>
+                ))}
+                <textarea
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  placeholder="Or type your own reason..."
+                  rows={2}
+                  className="w-full border-2 border-[#1A1A1A] px-4 py-3 font-mono text-[10px] uppercase focus:outline-none focus:ring-4 ring-[#00FFFF]/30 bg-[#F9F9F7] resize-none"
+                />
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={() => setCancelModal(null)}
+                  className="flex-1 border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#1A1A1A] hover:text-white transition-all"
+                >
+                  Go Back
+                </button>
+                <button
+                  onClick={confirmOwnerCancel}
+                  disabled={!cancelReason.trim() || cancelling}
+                  className="flex-1 bg-[#EC008C] text-white border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#1A1A1A] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:shadow-none"
+                >
+                  {cancelling ? "Cancelling..." : "Confirm Cancel"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

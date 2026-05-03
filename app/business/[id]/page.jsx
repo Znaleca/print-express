@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, use } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import {
@@ -68,6 +68,13 @@ const parseManilaDateTime = (value) => {
 export default function BusinessDetailsPage({ params }) {
   const { id } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const checkoutServiceId = searchParams.get("checkout_service");
+  const quoteAmount = searchParams.get("quote");
+  const designUrl = searchParams.get("design_url");
+  const designVersion = searchParams.get("design_version");
+  const quoteId = searchParams.get("quote_id");
 
   const [business, setBusiness] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -85,6 +92,15 @@ export default function BusinessDetailsPage({ params }) {
   const [paymentMethod, setPaymentMethod] = useState("COD");
   const [receiptFile, setReceiptFile] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [inquiryModalService, setInquiryModalService] = useState(null);
+  const [isOwner, setIsOwner] = useState(false);
+  const [reviewsByItem, setReviewsByItem] = useState({});
+  const [expandedReviews, setExpandedReviews] = useState({});
+  
+  const toggleReviews = (e, svcId) => {
+    e.stopPropagation();
+    setExpandedReviews((prev) => ({ ...prev, [svcId]: !prev[svcId] }));
+  };
 
   const [deliveryType, setDeliveryType] = useState("PICKUP");
   const [deliveryAddress, setDeliveryAddress] = useState("");
@@ -111,35 +127,88 @@ export default function BusinessDetailsPage({ params }) {
           .from("businesses")
           .select(`
             id, name, address, description, min_downpayment_percent, qr_url, is_open,
-            services ( id, name, price, description, category, available, image_url, stock_qty ),
-            business_reviews ( rating, feedback, created_at, customer_name )
+            services ( id, name, price, price_max, item_type, description, category, available, image_url, stock_qty ),
+            business_reviews ( order_id, rating, feedback, feedback_hidden, created_at, customer_name, item_name )
           `)
           .eq("id", id)
           .eq("status", "APPROVED")
           .single();
 
-        if (!error && data) {
+        // Check if current user is the owner
+        if (user) {
+          const { data: biz } = await supabase
+            .from("businesses")
+            .select("id")
+            .eq("id", id)
+            .eq("owner_id", user.id)
+            .maybeSingle();
+          setIsOwner(!!biz);
+        }
+
+          if (!error && data) {
           data.services = (data.services || []).filter(s => s.available);
           
-          // Inject Reviews Logic from public view
-          const reviews = data.business_reviews || [];
-          data.reviewCount = reviews.length;
+          // All reviews (including hidden for owner view)
+          const allReviews = data.business_reviews || [];
+          const visibleReviews = allReviews.filter(r => !r.feedback_hidden);
+          data.reviewCount = visibleReviews.length;
           data.ratingAvg = data.reviewCount > 0 
-            ? (reviews.reduce((sum, r) => sum + r.rating, 0) / data.reviewCount).toFixed(1)
+            ? (visibleReviews.reduce((sum, r) => sum + r.rating, 0) / data.reviewCount).toFixed(1)
             : "5.0";
-            
-          data.reviews = reviews.filter(r => !!r.feedback).sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+          data.reviews = visibleReviews.filter(r => !!r.feedback).sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+          data.allReviews = allReviews; // keep for owner view
+
+          // Group by item_name for per-item display
+          const grouped = {};
+          allReviews.forEach(r => {
+            const key = r.item_name || "General";
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(r);
+          });
+          setReviewsByItem(grouped);
 
           const minDp = Math.min(100, Math.max(1, Number.parseInt(String(data.min_downpayment_percent ?? 30), 10) || 30));
           setDownpaymentPercent(minDp);
 
           setBusiness(data);
+
+          if (checkoutServiceId) {
+            const svc = data.services.find(s => s.id === checkoutServiceId);
+            if (svc && quoteAmount) {
+              setSelectedServices([{ ...svc, quantity: 1, price: quoteAmount, isQuotedCheckout: true }]);
+              if (designUrl) {
+                setUploadedFiles([{ name: `Approved Design Version ${designVersion || "1"}`, url: designUrl, isUrl: true, id: Date.now() }]);
+              }
+            }
+          }
         }
       }
       setLoading(false);
     }
     init();
-  }, [id]);
+  }, [id, checkoutServiceId, quoteAmount, designUrl, designVersion]);
+
+  const hideReview = async (orderId, hide) => {
+    await supabase.from("orders").update({
+      feedback_hidden: hide,
+      feedback_hidden_at: hide ? new Date().toISOString() : null,
+      feedback_hidden_by: hide ? "owner" : null,
+    }).eq("id", orderId);
+    // Update local state
+    setReviewsByItem(prev => {
+      const updated = {};
+      Object.keys(prev).forEach(key => {
+        updated[key] = prev[key].map(r =>
+          r.order_id === orderId ? { ...r, feedback_hidden: hide, feedback_hidden_by: hide ? "owner" : null } : r
+        );
+      });
+      return updated;
+    });
+    setBusiness(prev => ({
+      ...prev,
+      reviews: (prev.reviews || []).filter(r => r.order_id !== orderId || !hide),
+    }));
+  };
 
   const reverseGeocode = async (lat, lng) => {
     try {
@@ -381,7 +450,7 @@ export default function BusinessDetailsPage({ params }) {
     const selectedIds = selectedServices.map((s) => s.id);
     const { data: latestServices, error: stockErr } = await supabase
       .from("services")
-      .select("id, stock_qty, name")
+      .select("id, stock_qty, name, item_type")
       .in("id", selectedIds)
       .eq("business_id", business.id);
 
@@ -390,6 +459,7 @@ export default function BusinessDetailsPage({ params }) {
     const stockMap = Object.fromEntries((latestServices || []).map((s) => [s.id, s]));
     const outOfStockItem = selectedServices.find((item) => {
       const latest = stockMap[item.id];
+      if (latest?.item_type === 'service') return false;
       const latestQty = Math.max(0, Number(latest?.stock_qty || 0));
       return (item.quantity || 1) > latestQty;
     });
@@ -407,6 +477,11 @@ export default function BusinessDetailsPage({ params }) {
       // Upload Design Files
       const designFileUrls = [];
       for (const item of uploadedFiles) {
+        if (item.isUrl) {
+          designFileUrls.push({ name: item.name, url: item.url });
+          continue;
+        }
+
         const filePath = `${uid}/${generateFileName(item.name)}`;
         const { error: uploadError } = await supabase.storage
           .from("order-assets")
@@ -450,7 +525,7 @@ export default function BusinessDetailsPage({ params }) {
           balance_amount: balanceAmount,
           items: selectedServices.map((s) => ({
             id: s.id,
-            name: s.name,
+            name: (s.isQuotedCheckout && designVersion) ? `${s.name} (Version ${designVersion})` : s.name,
             price: Number(s.price),
             category: s.category || null,
             description: s.description || null,
@@ -468,6 +543,14 @@ export default function BusinessDetailsPage({ params }) {
         });
 
       if (orderError) throw new Error("Failed to place order: " + orderError.message);
+
+      if (quoteId) {
+        const { data: msgData } = await supabase.from('chat_messages').select('metadata').eq('id', quoteId).single();
+        if (msgData) {
+          const newMetadata = { ...msgData.metadata, is_checkout_completed: true };
+          await supabase.from('chat_messages').update({ metadata: newMetadata }).eq('id', quoteId);
+        }
+      }
 
       alert(`Order placed successfully via ${paymentMethod}! Redirecting to tracking...`);
       router.push("/track");
@@ -611,43 +694,30 @@ export default function BusinessDetailsPage({ params }) {
 
 
             {/* SERVICE SELECTION */}
-            <section>
-              <div className="flex items-center justify-between mb-8">
-                <h2 className="text-4xl font-black uppercase italic tracking-tighter flex items-center gap-4">
-                  <span className="bg-[#FFF200] px-3 py-1 text-[#1A1A1A] not-italic border-4 border-[#1A1A1A]">01</span>
-                  Service_Catalog
-                </h2>
-              </div>
+            {business.services.filter(s => s.item_type !== "product").length > 0 && (
+              <section className="mb-16">
+                <div className="flex items-center justify-between mb-8">
+                  <h2 className="text-4xl font-black uppercase italic tracking-tighter flex items-center gap-4">
+                    <span className="bg-[#FFF200] px-3 py-1 text-[#1A1A1A] not-italic border-4 border-[#1A1A1A]">01</span>
+                    Service_Catalog
+                  </h2>
+                </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {business.services.map((svc) => {
-                  const isSelected = selectedServices.some((s) => s.id === svc.id);
-                  const stockLeft = Math.max(0, Number(svc.stock_qty || 0));
-                  const outOfStock = stockLeft <= 0;
-                  return (
-                    <div
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {business.services.filter(s => s.item_type !== "product").map((svc) => {
+                    const itemReviews = (reviewsByItem[svc.name] || []).filter(r => !r.feedback_hidden || isOwner);
+                    return (
+                      <div
                       key={svc.id}
                       onClick={() => {
-                        if (outOfStock) return;
-                        openQuantityModal(svc);
+                        setInquiryModalService(svc);
                       }}
-                      className={`group relative text-left p-6 border-4 transition-all ${isSelected
-                          ? "bg-[#1A1A1A] text-white border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(0,255,255,1)] -translate-y-1"
-                          : "bg-white border-[#1A1A1A] hover:bg-[#F9F9F7]"
-                        } ${outOfStock ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+                      className={`group relative text-left p-6 border-4 transition-all cursor-pointer bg-white border-[#1A1A1A] hover:bg-[#F9F9F7]`}
                     >
                       <div className="flex justify-between items-start mb-6">
-                        <span className={`font-mono text-[10px] font-black uppercase tracking-widest px-2 py-1 border-2 ${isSelected ? 'border-[#00FFFF] bg-[#00FFFF] text-[#1A1A1A]' : 'border-[#1A1A1A] bg-[#1A1A1A] text-white'}`}>
+                        <span className={`font-mono text-[10px] font-black uppercase tracking-widest px-2 py-1 border-2 border-[#1A1A1A] bg-[#1A1A1A] text-white`}>
                           {svc.category || "GENERAL"}
                         </span>
-                        {isSelected ? (
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-[10px] font-black uppercase tracking-widest px-2 py-1 border-2 border-[#00FFFF] text-[#00FFFF]">
-                              Qty {getSelectedQty(svc.id)}
-                            </span>
-                            <CheckCircle2 className="text-[#00FFFF]" size={24} />
-                          </div>
-                        ) : null}
                       </div>
 
                       <p className="font-black uppercase italic text-2xl mb-2 leading-tight">{svc.name}</p>
@@ -669,40 +739,220 @@ export default function BusinessDetailsPage({ params }) {
                           />
                         </button>
                       )}
-                      <p className={`text-[12px] font-mono uppercase tracking-wide leading-relaxed mb-8 ${isSelected ? 'text-gray-400' : 'text-gray-500'}`}>
+                      <p className={`text-[12px] font-mono uppercase tracking-wide leading-relaxed mb-8 text-gray-500`}>
                         {svc.description || "NO_DESCRIPTION_AVAILABLE"}
                       </p>
 
-                      <div className="flex justify-between items-end border-t-2 border-dashed ${isSelected ? 'border-gray-800' : 'border-gray-300'} pt-4">
-                        <p className={`text-3xl font-black italic ${isSelected ? 'text-[#00FFFF]' : 'text-[#1A1A1A]'}`}>
-                          ₱{Number(svc.price).toFixed(2)}
+                      <div className={`flex justify-between items-end border-t-2 border-dashed border-gray-300 pt-4`}>
+                        <p className={`text-3xl font-black italic text-[#1A1A1A]`}>
+                          {svc.price_max && parseFloat(svc.price_max) > parseFloat(svc.price) ? `₱${Number(svc.price).toFixed(2)} – ₱${Number(svc.price_max).toFixed(2)}` : `₱${Number(svc.price).toFixed(2)}+`}
                         </p>
-                        <ChevronRight size={20} className={`${isSelected ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-4'} transition-all`} />
+                        <ChevronRight size={20} className={`opacity-0 group-hover:opacity-100 group-hover:translate-x-0 -translate-x-4 transition-all`} />
                       </div>
 
                       <div className="mt-4 flex items-center justify-between gap-3">
-                        {outOfStock ? (
-                          <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#EC008C] border-2 border-[#EC008C] px-2 py-1">
-                            Out_Of_Stock
-                          </span>
-                        ) : isSelected ? (
-                          <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF] border-2 border-[#00FFFF] px-2 py-1">
-                            In_Cart x {getSelectedQty(svc.id)}
-                          </span>
-                        ) : (
-                          <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#1A1A1A] border-2 border-[#1A1A1A] px-2 py-1">
-                            Not_In_Cart
-                          </span>
-                        )}
-                        <span className={`font-mono text-[9px] font-black uppercase tracking-widest ${outOfStock ? "text-[#EC008C]" : isSelected ? "text-[#00FFFF]" : "text-[#EC008C]"}`}>
-                          Stock {stockLeft}
+                        <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#1A1A1A] border-2 border-[#1A1A1A] px-2 py-1 group-hover:bg-[#1A1A1A] group-hover:text-white transition-colors">
+                          Inquire_This_Service
+                        </span>
+                        <span className="font-mono text-[9px] font-black uppercase tracking-widest text-[#1A1A1A]/50">
+                          Estimated Price
                         </span>
                       </div>
+                      
+                      {itemReviews.length > 0 && (
+                        <div className="mt-4 border-t-2 border-dashed border-gray-300 pt-4">
+                          <button
+                            onClick={(e) => toggleReviews(e, svc.id)}
+                            className="w-full flex items-center justify-between font-mono text-[10px] uppercase font-black hover:text-[#EC008C] transition-colors"
+                          >
+                            <span>View Feedback</span>
+                            <div className="flex items-center gap-1">
+                              <Star size={12} className="text-yellow-500" fill="currentColor" />
+                              <span>{(itemReviews.reduce((s,r)=>s+r.rating,0)/itemReviews.length).toFixed(1)} ({itemReviews.length})</span>
+                            </div>
+                          </button>
+                          
+                          {expandedReviews[svc.id] && (
+                            <div className="mt-4 space-y-3 cursor-default" onClick={e => e.stopPropagation()}>
+                              {itemReviews.map((r, i) => (
+                                <div key={i} className={`p-3 border-2 border-[#1A1A1A] ${r.feedback_hidden ? "bg-red-50" : "bg-white"}`}>
+                                  <div className="flex items-center justify-between mb-2">
+                                    <span className="font-black text-xs uppercase">{r.customer_name || "AUTHORIZED_CLIENT"}</span>
+                                    <span className="font-mono text-[8px] opacity-50">{new Date(r.created_at).toLocaleDateString()}</span>
+                                  </div>
+                                  <div className="flex gap-1 mb-2">
+                                    {[1,2,3,4,5].map(s => <Star key={s} size={10} fill={s<=r.rating?"#1A1A1A":"none"} className={s<=r.rating?"text-[#1A1A1A]":"text-gray-300"}/>)}
+                                  </div>
+                                  {r.feedback && <p className="font-mono text-[9px] font-bold tracking-wide leading-relaxed text-gray-700 italic">"{r.feedback}"</p>}
+                                  
+                                  {isOwner && (
+                                     <button 
+                                        onClick={(e) => { e.stopPropagation(); hideReview(r.order_id, !r.feedback_hidden); }} 
+                                        className={`mt-2 font-mono text-[8px] uppercase font-black px-2 py-1 border-2 transition-all ${
+                                          r.feedback_hidden
+                                            ? "border-[#00FFFF] text-[#00FFFF] hover:bg-[#00FFFF] hover:text-[#1A1A1A]"
+                                            : "border-[#EC008C] text-[#EC008C] hover:bg-[#EC008C] hover:text-white"
+                                        }`}
+                                     >
+                                       {r.feedback_hidden ? "Restore" : "Delete"}
+                                     </button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  );
-                })}
-              </div>
-            </section>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {/* PRODUCT SELECTION */}
+            {business.services.filter(s => s.item_type === "product").length > 0 && (
+              <section className="mb-16">
+                <div className="flex items-center justify-between mb-8">
+                  <h2 className="text-4xl font-black uppercase italic tracking-tighter flex items-center gap-4">
+                    <span className="bg-[#00FFFF] px-3 py-1 text-[#1A1A1A] not-italic border-4 border-[#1A1A1A]">01B</span>
+                    Product_Inventory
+                  </h2>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {business.services.filter(s => s.item_type === "product").map((svc) => {
+                    const isSelected = selectedServices.some((s) => s.id === svc.id);
+                    const stockLeft = Math.max(0, Number(svc.stock_qty || 0));
+                    const outOfStock = stockLeft <= 0;
+                    const itemReviews = (reviewsByItem[svc.name] || []).filter(r => !r.feedback_hidden || isOwner);
+                    return (
+                      <div
+                        key={svc.id}
+                        onClick={() => {
+                          if (outOfStock) return;
+                          if (checkoutServiceId) {
+                            return alert("You are checking out a custom quoted service. Please complete or cancel this order before adding products.");
+                          }
+                          openQuantityModal(svc);
+                        }}
+                        className={`group relative text-left p-6 border-4 transition-all ${isSelected
+                            ? "bg-[#1A1A1A] text-white border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(0,255,255,1)] -translate-y-1"
+                            : "bg-white border-[#1A1A1A] hover:bg-[#F9F9F7]"
+                          } ${outOfStock ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+                      >
+                        <div className="flex justify-between items-start mb-6">
+                          <span className={`font-mono text-[10px] font-black uppercase tracking-widest px-2 py-1 border-2 ${isSelected ? 'border-[#00FFFF] bg-[#00FFFF] text-[#1A1A1A]' : 'border-[#1A1A1A] bg-[#1A1A1A] text-white'}`}>
+                            {svc.category || "GENERAL"}
+                          </span>
+                          {isSelected ? (
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-[10px] font-black uppercase tracking-widest px-2 py-1 border-2 border-[#00FFFF] text-[#00FFFF]">
+                                Qty {getSelectedQty(svc.id)}
+                              </span>
+                              <CheckCircle2 className="text-[#00FFFF]" size={24} />
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <p className="font-black uppercase italic text-2xl mb-2 leading-tight">{svc.name}</p>
+                        {svc.image_url && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPreviewImage({ src: svc.image_url, name: svc.name });
+                            }}
+                            className="mb-4 block w-full"
+                            aria-label={`Preview ${svc.name} image`}
+                          >
+                            <img
+                              src={svc.image_url}
+                              alt={`${svc.name} sample`}
+                              className="mx-auto h-56 w-full bg-[#F9F9F7] object-contain p-2 transition-transform hover:scale-[1.01]"
+                            />
+                          </button>
+                        )}
+                        <p className={`text-[12px] font-mono uppercase tracking-wide leading-relaxed mb-8 ${isSelected ? 'text-gray-400' : 'text-gray-500'}`}>
+                          {svc.description || "NO_DESCRIPTION_AVAILABLE"}
+                        </p>
+
+                        <div className={`flex justify-between items-end border-t-2 border-dashed ${isSelected ? 'border-gray-800' : 'border-gray-300'} pt-4`}>
+                          <p className={`text-3xl font-black italic ${isSelected ? 'text-[#00FFFF]' : 'text-[#1A1A1A]'}`}>
+                            ₱{Number(svc.price).toFixed(2)}
+                          </p>
+                          <ChevronRight size={20} className={`${isSelected ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-4'} transition-all`} />
+                        </div>
+
+                        <div className="mt-4 flex items-center justify-between gap-3">
+                          {outOfStock ? (
+                            <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#EC008C] border-2 border-[#EC008C] px-2 py-1">
+                              Out_Of_Stock
+                            </span>
+                          ) : isSelected ? (
+                            <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF] border-2 border-[#00FFFF] px-2 py-1">
+                              In_Cart x {getSelectedQty(svc.id)}
+                            </span>
+                          ) : (
+                            <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#1A1A1A] border-2 border-[#1A1A1A] px-2 py-1">
+                              Not_In_Cart
+                            </span>
+                          )}
+                          <span className={`font-mono text-[9px] font-black uppercase tracking-widest ${outOfStock ? "text-[#EC008C]" : isSelected ? "text-[#00FFFF]" : "text-[#EC008C]"}`}>
+                            Stock {stockLeft}
+                          </span>
+                        </div>
+                        
+                        {itemReviews.length > 0 && (
+                          <div className="mt-4 border-t-2 border-dashed border-gray-300 pt-4">
+                            <button
+                              onClick={(e) => toggleReviews(e, svc.id)}
+                              className="w-full flex items-center justify-between font-mono text-[10px] uppercase font-black hover:text-[#00FFFF] transition-colors"
+                            >
+                              <span>View Feedback</span>
+                              <div className="flex items-center gap-1">
+                                <Star size={12} className="text-yellow-500" fill="currentColor" />
+                                <span>{(itemReviews.reduce((s,r)=>s+r.rating,0)/itemReviews.length).toFixed(1)} ({itemReviews.length})</span>
+                              </div>
+                            </button>
+                            
+                            {expandedReviews[svc.id] && (
+                              <div className="mt-4 space-y-3 cursor-default" onClick={e => e.stopPropagation()}>
+                                {itemReviews.map((r, i) => (
+                                  <div key={i} className={`p-3 border-2 border-[#1A1A1A] ${r.feedback_hidden ? "bg-red-50" : "bg-white"}`}>
+                                    <div className="flex items-center justify-between mb-2">
+                                      <span className="font-black text-xs uppercase">{r.customer_name || "AUTHORIZED_CLIENT"}</span>
+                                      <span className="font-mono text-[8px] opacity-50">{new Date(r.created_at).toLocaleDateString()}</span>
+                                    </div>
+                                    <div className="flex gap-1 mb-2">
+                                      {[1,2,3,4,5].map(s => <Star key={s} size={10} fill={s<=r.rating?"#1A1A1A":"none"} className={s<=r.rating?"text-[#1A1A1A]":"text-gray-300"}/>)}
+                                    </div>
+                                    {r.feedback && <p className="font-mono text-[9px] font-bold tracking-wide leading-relaxed text-gray-700 italic">"{r.feedback}"</p>}
+                                    
+                                    {isOwner && (
+                                       <button 
+                                          onClick={(e) => { e.stopPropagation(); hideReview(r.order_id, !r.feedback_hidden); }} 
+                                          className={`mt-2 font-mono text-[8px] uppercase font-black px-2 py-1 border-2 transition-all ${
+                                            r.feedback_hidden
+                                              ? "border-[#00FFFF] text-[#00FFFF] hover:bg-[#00FFFF] hover:text-[#1A1A1A]"
+                                              : "border-[#EC008C] text-[#EC008C] hover:bg-[#EC008C] hover:text-white"
+                                          }`}
+                                       >
+                                         {r.feedback_hidden ? "Restore" : "Delete"}
+                                       </button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
 
             {/* UPLOAD SECTION */}
             <section>
@@ -723,67 +973,35 @@ export default function BusinessDetailsPage({ params }) {
               {uploadedFiles.length > 0 && (
                 <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {uploadedFiles.map((f) => (
-                    <div key={f.id} className="flex items-center gap-4 bg-[#1A1A1A] text-white p-4 border-l-8 border-[#EC008C] overflow-hidden">
-                      <FileText size={20} className="text-[#00FFFF] shrink-0" />
-                      <span className="font-mono text-[10px] font-black uppercase tracking-wider truncate">{f.name}</span>
-                      <button onClick={(e) => { e.preventDefault(); setUploadedFiles(prev => prev.filter(x => x.id !== f.id)); }} className="ml-auto text-white opacity-50 hover:opacity-100 hover:text-[#EC008C] transition-colors">
-                        <AlertTriangle size={16} className="rotate-45" />
-                      </button>
+                    <div key={f.id} className="flex flex-col gap-4 bg-[#1A1A1A] text-white p-4 border-l-8 border-[#EC008C] overflow-hidden">
+                      <div className="flex items-center gap-4 w-full">
+                        <FileText size={20} className="text-[#00FFFF] shrink-0" />
+                        <span className="font-mono text-[10px] font-black uppercase tracking-wider truncate">{f.name}</span>
+                        <button onClick={(e) => { e.preventDefault(); setUploadedFiles(prev => prev.filter(x => x.id !== f.id)); }} className="ml-auto text-white opacity-50 hover:opacity-100 hover:text-[#EC008C] transition-colors">
+                          <AlertTriangle size={16} className="rotate-45" />
+                        </button>
+                      </div>
+                      
+                      {f.isUrl && f.url && (
+                        <div className="border-2 border-white/20 w-full bg-white/5">
+                           {/* eslint-disable-next-line @next/next/no-img-element */}
+                           <img src={f.url} alt={f.name} className="w-full h-32 object-contain" />
+                        </div>
+                      )}
+                      
+                      {!f.isUrl && f.file && f.file.type?.startsWith('image/') && (
+                        <div className="border-2 border-white/20 w-full bg-white/5">
+                           {/* eslint-disable-next-line @next/next/no-img-element */}
+                           <img src={URL.createObjectURL(f.file)} alt={f.name} className="w-full h-32 object-contain" />
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
             </section>
 
-            {/* CUSTOMER REVIEWS (THREAD STYLE) */}
-            {(business.reviews?.length > 0) && (
-              <section className="pt-8 mb-8 border-t-8 border-[#1A1A1A] border-dotted">
-                <div className="flex items-center gap-4 mb-16">
-                  <h2 className="text-5xl font-black uppercase italic tracking-tighter leading-none">
-                    Intel_Log <br/><span className="text-[#EC008C]">Feedback</span>
-                  </h2>
-                  <span className="ml-auto bg-[#1A1A1A] px-4 py-2 text-[#00FFFF] font-mono text-[10px] font-black tracking-widest border-4 border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(255,242,0,1)]">
-                    {business.reviews.length} THREADS
-                  </span>
-                </div>
-                
-                <div className="space-y-0 border-l-8 border-[#1A1A1A] ml-6 pl-12 relative">
-                  {business.reviews.map((r, idx) => (
-                    <div key={idx} className="relative pb-16 last:pb-0">
-                      {/* Thread Node / Dot */}
-                      <div className="absolute -left-[64px] top-6 w-8 h-8 bg-[#FFF200] border-4 border-[#1A1A1A] z-10 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]" />
-                      
-                      <div className="bg-white border-4 border-[#1A1A1A] p-8 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)] group hover:-translate-y-2 transition-transform duration-300">
-                         <div className="flex justify-between items-start mb-6">
-                            <div>
-                              <div className="flex items-center gap-3 mb-3">
-                                <p className="font-black uppercase italic text-2xl">{r.customer_name || "AUTHORIZED_CLIENT"}</p>
-                                <span className="font-mono text-[9px] font-black uppercase tracking-[0.2em] px-2 py-1 bg-[#1A1A1A] text-white">VERIFIED</span>
-                              </div>
-                              <div className="flex gap-1 bg-[#F9F9F7] w-fit p-2 border-2 border-[#1A1A1A]">
-                                {[1,2,3,4,5].map(star => (
-                                  <Star key={star} size={16} fill={star <= r.rating ? "#1A1A1A" : "none"} className={star <= r.rating ? "text-[#1A1A1A]" : "text-gray-300"} />
-                                ))}
-                              </div>
-                            </div>
-                            <div className="text-right">
-                              <span className="font-mono text-[9px] uppercase font-black tracking-widest text-[#EC008C] block mb-1">Packet_Time</span>
-                              <span className="font-mono text-[11px] uppercase tracking-widest font-black opacity-60">
-                                {new Date(r.created_at).toLocaleDateString()}
-                              </span>
-                            </div>
-                         </div>
-                         <div className="bg-[#FDFDFD] border-t-4 border-dashed border-[#1A1A1A]/20 pt-6 mt-4">
-                           <p className="font-mono text-sm uppercase text-[#1A1A1A] leading-loose font-bold tracking-wide">
-                             "{r.feedback}"
-                           </p>
-                         </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
+
           </div>
 
           {/* ── RIGHT COLUMN: SUMMARY ── */}
@@ -829,22 +1047,65 @@ export default function BusinessDetailsPage({ params }) {
                 ) : (
                   <div className="space-y-6 mb-10">
                     {selectedServices.map((s) => (
-                      <div key={s.id} className="flex justify-between items-start group">
-                        <div className="min-w-0">
-                          <p className="font-black uppercase italic text-sm leading-none">{s.name}</p>
-                          <p className="font-mono text-[9px] uppercase font-bold opacity-40 mt-1">Unit_Price x {s.quantity || 1}</p>
+                      <div key={s.id} className="flex flex-col gap-4 border-b-2 border-dashed border-[#1A1A1A]/10 pb-4 last:border-0 last:pb-0">
+                        <div className="flex justify-between items-start group">
+                          <div className="min-w-0">
+                            <p className="font-black uppercase italic text-sm leading-none">{s.name}</p>
+                            <p className="font-mono text-[9px] uppercase font-bold opacity-40 mt-1">Unit_Price x {s.quantity || 1}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-sm font-black text-[#1A1A1A]">₱{(Number(s.price) * (s.quantity || 1)).toFixed(2)}</span>
+                            <button
+                              type="button"
+                              onClick={() => upsertServiceQuantity(s, 0)}
+                              className="inline-flex h-7 w-7 items-center justify-center border-2 border-[#EC008C] text-[#EC008C] hover:bg-[#EC008C] hover:text-white"
+                              aria-label={`Remove ${s.name} from cart`}
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm font-black text-[#1A1A1A]">₱{(Number(s.price) * (s.quantity || 1)).toFixed(2)}</span>
-                          <button
-                            type="button"
-                            onClick={() => upsertServiceQuantity(s, 0)}
-                            className="inline-flex h-7 w-7 items-center justify-center border-2 border-[#EC008C] text-[#EC008C] hover:bg-[#EC008C] hover:text-white"
-                            aria-label={`Remove ${s.name} from cart`}
-                          >
-                            <X size={12} />
-                          </button>
-                        </div>
+                        
+                        {s.isQuotedCheckout && (
+                          <div className="flex items-center gap-3 mt-3 border-t-2 border-dashed border-[#1A1A1A]/10 pt-3">
+                            <span className="font-mono text-[9px] uppercase tracking-widest font-black opacity-50">Qty</span>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedServices(prev => prev.map(item => item.id === s.id ? { ...item, quantity: Math.max(1, (item.quantity || 1) - 1) } : item))}
+                              className="inline-flex h-7 w-7 items-center justify-center border-2 border-[#1A1A1A] bg-white hover:bg-[#FFF200] transition-colors"
+                            >
+                              <Minus size={12} />
+                            </button>
+                            <input
+                              type="number"
+                              min="1"
+                              value={s.quantity || 1}
+                              onChange={(e) => {
+                                const val = Math.max(1, parseInt(e.target.value, 10) || 1);
+                                setSelectedServices(prev => prev.map(item => item.id === s.id ? { ...item, quantity: val } : item));
+                              }}
+                              className="w-14 text-center border-2 border-[#1A1A1A] font-mono text-sm font-black py-1 focus:outline-none focus:border-[#00FFFF]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setSelectedServices(prev => prev.map(item => item.id === s.id ? { ...item, quantity: (item.quantity || 1) + 1 } : item))}
+                              className="inline-flex h-7 w-7 items-center justify-center border-2 border-[#1A1A1A] bg-white hover:bg-[#00FFFF] transition-colors"
+                            >
+                              <Plus size={12} />
+                            </button>
+                          </div>
+                        )}
+
+                        {s.isQuotedCheckout && designUrl && (
+                          <div className="border-2 border-[#1A1A1A] p-2 bg-[#1A1A1A]/5 mt-2">
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#EC008C]">Approved_Design</p>
+                              <span className="bg-[#1A1A1A] text-white font-mono text-[9px] font-black uppercase tracking-widest px-2 py-1">Version {designVersion || "1"}</span>
+                            </div>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={designUrl} alt="Approved Design" className="w-full h-auto object-contain max-h-48 border-2 border-[#1A1A1A]/20 bg-white" />
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -852,8 +1113,8 @@ export default function BusinessDetailsPage({ params }) {
 
                 <div className="border-t-4 border-[#1A1A1A] pt-8 mb-10">
                   <div className="flex justify-between items-end mb-4">
-                    <span className="font-mono text-[11px] uppercase tracking-[0.3em] font-black text-gray-500">Gross_Total</span>
-                    <span className="text-4xl font-black italic leading-none">₱{total.toFixed(2)}</span>
+                    <span className="font-mono text-[11px] uppercase tracking-[0.3em] font-black text-gray-500">Gross_Total (Est)</span>
+                    <span className="text-4xl font-black italic leading-none">₱{total.toFixed(2)}{selectedServices.some(s => s.item_type !== "product") ? "+" : ""}</span>
                   </div>
 
                   {/* DOWNPAYMENT SELECTION */}
@@ -861,17 +1122,23 @@ export default function BusinessDetailsPage({ params }) {
                     <p className="font-black uppercase italic text-sm tracking-widest mb-4">Downpayment_Required</p>
                     <p className="font-mono text-[10px] opacity-60 uppercase mb-4">A minimum of {minimumDownpaymentPercent}% upfront payment via E-Wallet is required to process all orders.</p>
                     
-                    <div className="flex flex-wrap gap-2 mb-6">
-                      {downpaymentOptions.map(pct => (
-                        <button
-                          key={pct}
-                          type="button"
-                          onClick={() => setDownpaymentPercent(pct)}
-                          className={`px-4 py-2 font-mono text-[10px] font-black uppercase transition-all border-2 ${effectiveDownpaymentPercent === pct ? 'bg-[#00FFFF] border-[#1A1A1A] text-[#1A1A1A] shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]' : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] hover:border-[#1A1A1A]'}`}
-                        >
-                          {pct}%
-                        </button>
-                      ))}
+                    <div className="mb-6">
+                      <div className="flex justify-between items-center mb-4 font-mono text-[12px] font-black text-[#1A1A1A] uppercase tracking-widest">
+                        <span className="opacity-50">Min: {minimumDownpaymentPercent}%</span>
+                        <span className="text-[#EC008C] text-xl bg-white border-2 border-[#1A1A1A] px-3 py-1 shadow-[2px_2px_0px_0px_rgba(236,0,140,1)]">
+                          {effectiveDownpaymentPercent}%
+                        </span>
+                        <span className="opacity-50">Full: 100%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={minimumDownpaymentPercent}
+                        max="100"
+                        step="5"
+                        value={effectiveDownpaymentPercent}
+                        onChange={(e) => setDownpaymentPercent(Number(e.target.value))}
+                        className="w-full h-3 bg-[#1A1A1A]/10 appearance-none cursor-pointer accent-[#EC008C] hover:accent-[#00FFFF] transition-all"
+                      />
                     </div>
 
                     <div className="flex justify-between items-end border-t-2 border-dashed border-[#1A1A1A]/20 pt-4">
@@ -1071,9 +1338,11 @@ export default function BusinessDetailsPage({ params }) {
               <p className="mt-2 font-mono text-[10px] uppercase tracking-widest opacity-60">
                 {quantityModalService.name}
               </p>
-              <p className="mt-1 font-mono text-[10px] uppercase tracking-widest text-[#EC008C]">
-                Stock Left: {Math.max(0, Number(quantityModalService.stock_qty || 0))}
-              </p>
+              {quantityModalService.item_type === "product" && (
+                <p className="mt-1 font-mono text-[10px] uppercase tracking-widest text-[#EC008C]">
+                  Stock Left: {Math.max(0, Number(quantityModalService.stock_qty || 0))}
+                </p>
+              )}
 
               <div className="mt-6 flex items-center justify-center gap-3">
                 <button
@@ -1088,7 +1357,7 @@ export default function BusinessDetailsPage({ params }) {
                 <input
                   type="number"
                   min="1"
-                  max={Math.max(1, Number(quantityModalService.stock_qty || 1))}
+                  max={quantityModalService.item_type === "product" ? Math.max(1, Number(quantityModalService.stock_qty || 1)) : 99999}
                   value={quantityInput}
                   onChange={(e) => setQuantityInput(e.target.value)}
                   className="w-24 border-2 border-[#1A1A1A] px-3 py-2 text-center font-mono text-lg font-black outline-none focus:border-[#00FFFF]"
@@ -1166,7 +1435,91 @@ export default function BusinessDetailsPage({ params }) {
             </div>
           </div>
         )}
-      </div>
+          {/* ── INQUIRY MODAL ── */}
+          {inquiryModalService && (
+            <div className="fixed inset-0 z-[999] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
+              <div className="w-full max-w-2xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)] flex flex-col max-h-[90vh] overflow-hidden relative">
+                {/* Header */}
+                <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="flex gap-1">
+                      <div className="w-2 h-2 bg-[#00FFFF]" />
+                      <div className="w-2 h-2 bg-[#EC008C]" />
+                      <div className="w-2 h-2 bg-[#FFF200]" />
+                    </div>
+                    <span className="font-black uppercase italic tracking-widest text-lg">Inquiry_Action</span>
+                  </div>
+                  <button
+                    onClick={() => setInquiryModalService(null)}
+                    className="p-1 hover:bg-[#EC008C] transition-colors"
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
+                
+                {/* Content */}
+                <div className="p-8 overflow-y-auto">
+                  <div className="mb-8">
+                    <p className="font-mono text-[10px] uppercase tracking-widest text-gray-500 font-black mb-1">
+                      Selected Service
+                    </p>
+                    <h3 className="text-3xl font-black uppercase italic tracking-tighter text-[#1A1A1A]">
+                      {inquiryModalService.name}
+                    </h3>
+                    <p className="mt-2 text-sm text-gray-600 font-bold max-w-lg">
+                      How would you like to proceed with your inquiry? Select an option below to start your conversation with the shop owner.
+                    </p>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {/* Option 1: Upload Design */}
+                    <button
+                      onClick={() => router.push(`/messages?business=${business.id}&service=${inquiryModalService.id}&action=upload_design`)}
+                      className="group flex flex-col items-center text-center border-4 border-[#1A1A1A] p-6 hover:bg-[#FFF200] hover:-translate-y-1 transition-all shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,255,255,1)] bg-white cursor-pointer"
+                    >
+                      <div className="w-16 h-16 bg-[#1A1A1A] flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <UploadCloud size={32} className="text-[#00FFFF]" />
+                      </div>
+                      <h4 className="font-black uppercase italic text-xl mb-2">Upload Design</h4>
+                      <p className="font-mono text-[10px] uppercase font-bold text-gray-600 leading-relaxed">
+                        Attach your artwork or design files directly to the chat for a faster quote.
+                      </p>
+                    </button>
+                    
+                    {/* Option 2: Video Call */}
+                    <button
+                      onClick={() => router.push(`/messages?business=${business.id}&service=${inquiryModalService.id}&action=video_call`)}
+                      className="group flex flex-col items-center text-center border-4 border-[#1A1A1A] p-6 hover:bg-[#00FFFF] hover:-translate-y-1 transition-all shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] hover:shadow-[6px_6px_0px_0px_rgba(236,0,140,1)] bg-white cursor-pointer"
+                    >
+                      <div className="w-16 h-16 bg-[#1A1A1A] flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                        <Clock size={32} className="text-[#EC008C]" />
+                      </div>
+                      <h4 className="font-black uppercase italic text-xl mb-2">Video Call</h4>
+                      <p className="font-mono text-[10px] uppercase font-bold text-gray-600 leading-relaxed">
+                        Request a scheduled video consultation with the owner to discuss details.
+                      </p>
+                    </button>
+                    
+                    {/* Option 3: Chat */}
+                    <button
+                      onClick={() => router.push(`/messages?business=${business.id}&service=${inquiryModalService.id}&action=chat`)}
+                      className="group flex flex-col items-center text-center border-4 border-[#1A1A1A] p-6 hover:bg-[#1A1A1A] hover:text-white hover:-translate-y-1 transition-all shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] bg-white cursor-pointer"
+                    >
+                      <div className="w-16 h-16 bg-[#EC008C] flex items-center justify-center mb-4 group-hover:scale-110 transition-transform border-2 border-[#1A1A1A]">
+                        <MessageSquare size={32} className="text-white" />
+                      </div>
+                      <h4 className="font-black uppercase italic text-xl mb-2 group-hover:text-[#00FFFF] transition-colors">Message</h4>
+                      <p className="font-mono text-[10px] uppercase font-bold text-gray-600 group-hover:text-gray-300 leading-relaxed transition-colors">
+                        Just open the chat to ask a question or discuss this service.
+                      </p>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
       </section>
     </main>
   );

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
   MessageSquare, Send, Loader2, User, Store,
-  ChevronRight, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar
+  ChevronRight, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, Banknote, FileText
 } from "lucide-react";
 
 export default function OwnerMessagesPage() {
@@ -12,6 +12,8 @@ export default function OwnerMessagesPage() {
   const [conversations, setConversations] = useState([]);
   const [activeConv, setActiveConv] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [msgLimit, setMsgLimit] = useState(20);
+  const [hasMoreMsgs, setHasMoreMsgs] = useState(false);
   const [input, setInput] = useState("");
   const [loadingConvs, setLoadingConvs] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
@@ -23,9 +25,83 @@ export default function OwnerMessagesPage() {
   const [menuMessageId, setMenuMessageId] = useState(null);
   const [showSchedule, setShowSchedule] = useState(false);
   const [scheduleTime, setScheduleTime] = useState("");
+  const [showQuote, setShowQuote] = useState(false);
+  const [quoteAmount, setQuoteAmount] = useState("");
+  const [showDesign, setShowDesign] = useState(false);
+  const [designVersion, setDesignVersion] = useState("1");
+  const [jitsiRoom, setJitsiRoom] = useState(null);
+  const [videoCallRequestAlert, setVideoCallRequestAlert] = useState(false);
   const bottomRef = useRef(null);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
+  const jitsiApiRef = useRef(null);
+  const jitsiScriptRef = useRef(null);
+
+  /* ── 0. Jitsi External API (no-logo) ── */
+  useEffect(() => {
+    if (!jitsiRoom) {
+      if (jitsiApiRef.current) {
+        try { jitsiApiRef.current.dispose(); } catch (_) {}
+        jitsiApiRef.current = null;
+      }
+      if (jitsiScriptRef.current && document.head.contains(jitsiScriptRef.current)) {
+        document.head.removeChild(jitsiScriptRef.current);
+        jitsiScriptRef.current = null;
+      }
+      return;
+    }
+
+    const initApi = () => {
+      const container = document.getElementById("jitsi-container-owner");
+      if (!container || !window.JitsiMeetExternalAPI) return;
+      if (jitsiApiRef.current) {
+        try { jitsiApiRef.current.dispose(); } catch (_) {}
+      }
+      jitsiApiRef.current = new window.JitsiMeetExternalAPI("meet.jit.si", {
+        roomName: jitsiRoom,
+        parentNode: container,
+        width: "100%",
+        height: "100%",
+        interfaceConfigOverwrite: {
+          SHOW_JITSI_WATERMARK: false,
+          SHOW_WATERMARK_FOR_GUESTS: false,
+          SHOW_BRAND_WATERMARK: false,
+          SHOW_POWERED_BY: false,
+          DISPLAY_WELCOME_PAGE_CONTENT: false,
+          TOOLBAR_BUTTONS: [
+            "microphone", "camera", "desktop", "fullscreen",
+            "fodeviceselection", "hangup", "chat", "settings",
+            "raisehand", "videoquality", "filmstrip", "tileview",
+          ],
+        },
+        configOverwrite: {
+          startWithAudioMuted: false,
+          startWithVideoMuted: false,
+          disableDeepLinking: true,
+          hideConferenceSubject: true,
+        },
+      });
+      jitsiApiRef.current.addEventListener("readyToClose", () => setJitsiRoom(null));
+    };
+
+    if (window.JitsiMeetExternalAPI) {
+      initApi();
+    } else {
+      const script = document.createElement("script");
+      script.src = "https://meet.jit.si/external_api.js";
+      script.async = true;
+      script.onload = initApi;
+      jitsiScriptRef.current = script;
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      if (jitsiApiRef.current) {
+        try { jitsiApiRef.current.dispose(); } catch (_) {}
+        jitsiApiRef.current = null;
+      }
+    };
+  }, [jitsiRoom]);
 
   /* ── 1. Auth ── */
   useEffect(() => {
@@ -135,6 +211,8 @@ export default function OwnerMessagesPage() {
   const openConversation = (conv) => {
     setActiveConv(conv);
     setMessages([]);
+    setMsgLimit(20);
+    setHasMoreMsgs(false);
     setUnreadByConv((prev) => ({ ...prev, [conv.id]: 0 }));
   };
 
@@ -147,7 +225,7 @@ export default function OwnerMessagesPage() {
       channelRef.current = null;
     }
 
-    fetchMessages(activeConv.id);
+    fetchMessages(activeConv.id, false, msgLimit);
 
     const channel = supabase
       .channel(`chat_owner:${activeConv.id}`)
@@ -180,18 +258,42 @@ export default function OwnerMessagesPage() {
   }, [activeConv]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (activeConv) {
+      fetchMessages(activeConv.id, false, msgLimit);
+    }
+  }, [msgLimit]);
 
-  const fetchMessages = async (convId, isBg = false) => {
+  // Detect unanswered video call requests
+  useEffect(() => {
+    if (!messages.length || !user) return;
+    const hasRequest = messages.some(m => m.content === "[VIDEO_CALL_REQUEST]" && m.sender_id !== user.id);
+    const hasInvite = messages.some(m => m.content?.startsWith("[VIDEO_CALL_INVITE:") && m.sender_id === user.id);
+    // Show alert if there's a request and no invite has been sent yet
+    setVideoCallRequestAlert(hasRequest && !hasInvite);
+  }, [messages, user]);
+
+  const fetchMessages = async (convId, isBg = false, limit = 20) => {
     if (!isBg) setLoadingMsgs(true);
-    const { data } = await supabase
+    const { data, count } = await supabase
       .from("chat_messages")
-      .select("*")
+      .select("*", { count: "exact" })
       .eq("conversation_id", convId)
-      .order("created_at", { ascending: true });
-    setMessages(data || []);
+      .order("created_at", { ascending: false })
+      .limit(limit);
+      
+    if (data) {
+      setMessages(data.reverse());
+      setHasMoreMsgs(count > limit);
+      
+      if (limit === 20 || isBg) {
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: isBg ? "smooth" : "auto" }), 50);
+      }
+    }
     if (!isBg) setLoadingMsgs(false);
+  };
+
+  const loadMoreMessages = () => {
+    setMsgLimit(prev => prev + 20);
   };
 
   const markConversationRead = async (convId) => {
@@ -276,6 +378,57 @@ export default function OwnerMessagesPage() {
     setSending(false);
     setShowSchedule(false);
     setScheduleTime("");
+  };
+
+  const sendQuoteMessage = async () => {
+    if (!quoteAmount || isNaN(quoteAmount) || !activeConv || !user) return;
+    setSending(true);
+    
+    const latestServiceInquiry = [...messages].reverse().find(m => m.message_type === 'service_inquiry');
+    const serviceId = latestServiceInquiry?.metadata?.service_id || "";
+
+    await supabase.from("chat_messages").insert({
+      conversation_id: activeConv.id,
+      sender_id: user.id,
+      sender_role: "BUSINESS_OWNER",
+      content: `I have prepared an official quote for your request.`,
+      message_type: 'quote',
+      metadata: { quote_amount: parseFloat(quoteAmount), service_id: serviceId },
+      is_read: false,
+    });
+    setSending(false);
+    setShowQuote(false);
+    setQuoteAmount("");
+  };
+
+  const sendDesignVersionMessage = async (file) => {
+    if (!file || !activeConv || !user) return;
+    setSending(true);
+
+    const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+    const filePath = `${activeConv.id}/${user.id}-design-v${designVersion}-${Date.now()}.${ext}`;
+
+    const { error: uploadErr } = await supabase.storage
+      .from("chat-images")
+      .upload(filePath, file, { upsert: false });
+
+    if (!uploadErr) {
+      const { data } = supabase.storage.from("chat-images").getPublicUrl(filePath);
+      await supabase.from("chat_messages").insert({
+        conversation_id: activeConv.id,
+        sender_id: user.id,
+        sender_role: "BUSINESS_OWNER",
+        content: "[image]",
+        message_type: 'design_version',
+        metadata: { version: designVersion },
+        image_url: data?.publicUrl || null,
+        is_read: false,
+      });
+    }
+
+    setSending(false);
+    setShowDesign(false);
+    setDesignVersion((prev) => String(Number(prev) + 1));
   };
 
   const saveEditMessage = async (msgId) => {
@@ -428,8 +581,52 @@ export default function OwnerMessagesPage() {
               </div>
 
               {/* Messages area */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#F9F9F7]">
-                {loadingMsgs ? (
+              <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#F9F9F7] relative">
+
+                {/* Video Call Request Alert Banner */}
+                {videoCallRequestAlert && (
+                  <div className="sticky top-0 z-30 mb-4 flex items-center justify-between gap-4 bg-[#EC008C] border-4 border-[#1A1A1A] px-5 py-4 shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] animate-pulse-once">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-[#1A1A1A] flex items-center justify-center shrink-0">
+                        <Video size={20} className="text-[#00FFFF]" />
+                      </div>
+                      <div>
+                        <p className="font-black uppercase italic text-white text-sm leading-none">Video Call Requested!</p>
+                        <p className="font-mono text-[10px] uppercase text-white/70 mt-1">A customer is requesting a video consultation. Schedule a time below.</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => { setShowSchedule(true); setShowQuote(false); setShowDesign(false); }}
+                        className="px-4 py-2 bg-[#FFF200] text-[#1A1A1A] font-black uppercase text-[10px] border-2 border-[#1A1A1A] hover:bg-white transition-colors"
+                      >
+                        Schedule Now
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setVideoCallRequestAlert(false)}
+                        className="p-1 text-white hover:text-[#FFF200] transition-colors"
+                        title="Dismiss"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {hasMoreMsgs && (
+                  <div className="flex justify-center pt-2 pb-4">
+                    <button
+                      onClick={loadMoreMessages}
+                      className="bg-white border-2 border-[#1A1A1A] font-mono text-[10px] uppercase font-black tracking-widest px-4 py-2 hover:bg-[#1A1A1A] hover:text-[#00FFFF] transition-all"
+                    >
+                      {loadingMsgs ? "Loading..." : "Load Previous Messages"}
+                    </button>
+                  </div>
+                )}
+
+                {loadingMsgs && messages.length === 0 ? (
                   <div className="flex items-center justify-center py-20">
                     <Loader2 size={32} className="animate-spin text-[#00FFFF]" />
                   </div>
@@ -510,14 +707,13 @@ export default function OwnerMessagesPage() {
                                       Link Expired
                                     </button>
                                   ) : joinable ? (
-                                    <a
-                                      href={`https://meet.jit.si/print-app-call-${activeConv.id}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
+                                    <button
+                                      type="button"
+                                      onClick={() => setJitsiRoom(`print-app-call-${activeConv.id}`)}
                                       className="mt-3 px-4 py-2 w-full bg-[#EC008C] hover:bg-[#FFF200] hover:text-[#1A1A1A] text-white font-black uppercase text-xs border border-transparent hover:border-[#1A1A1A] transition-all"
                                     >
                                       Join Call
-                                    </a>
+                                    </button>
                                   ) : (
                                     <button disabled className="mt-3 px-4 py-2 w-full bg-[#1A1A1A]/50 text-white/50 font-black uppercase text-xs border border-[#1A1A1A]/50 cursor-not-allowed">
                                       Not yet available
@@ -526,6 +722,30 @@ export default function OwnerMessagesPage() {
                                 </div>
                               );
                             })()
+                          ) : msg.message_type === 'quote' ? (
+                            <div className="flex flex-col p-4 border-2 border-[#FFF200] bg-[#1A1A1A] text-white min-w-[200px]">
+                              <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#FFF200] mb-2">Official Quote Sent</p>
+                              <p className="text-3xl font-black italic text-[#00FFFF] mb-4">₱{Number(msg.metadata?.quote_amount).toFixed(2)}</p>
+                              {msg.content && <p className="text-sm font-bold leading-relaxed mb-4">{msg.content}</p>}
+                              <p className="font-mono text-[9px] uppercase tracking-widest text-[#FFF200]/50">Waiting for customer to finalize...</p>
+                            </div>
+                          ) : msg.message_type === 'design_version' ? (
+                            <div className="flex flex-col">
+                              <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#FFF200] mb-2 px-2 py-1 bg-[#1A1A1A] self-start">
+                                Version {msg.metadata?.version || "1"}
+                              </span>
+                              {msg.content && msg.content !== "[image]" && (
+                                <p className="text-sm font-bold leading-relaxed mb-3">{msg.content}</p>
+                              )}
+                            </div>
+                          ) : msg.message_type === 'service_inquiry' ? (
+                            <div className="flex flex-col p-3 border-l-4 border-[#00FFFF] bg-white/5">
+                              <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF] mb-1">Service Inquiry</p>
+                              {msg.metadata?.service_name && (
+                                <p className="font-black uppercase text-sm mb-1">{msg.metadata.service_name}</p>
+                              )}
+                              <p className="text-sm font-bold italic opacity-80">{msg.content}</p>
+                            </div>
                           ) : (
                             msg.content !== "[image]" && <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap word-break break-words">{msg.content}</p>
                           )}
@@ -590,27 +810,118 @@ export default function OwnerMessagesPage() {
                   placeholder="Type a message..."
                   className="flex-1 px-5 py-4 border-2 border-[#1A1A1A] font-mono text-sm bg-[#F9F9F7] focus:outline-none focus:bg-white focus:ring-4 ring-[#00FFFF]/40 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
                 />
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) sendImageMessage(file);
-                    e.target.value = "";
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={sendingImage}
-                  className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#FFF200] transition-all disabled:opacity-40 shrink-0"
-                  title="Attach Image"
-                >
-                  {sendingImage ? <Loader2 size={20} className="animate-spin" /> : <ImagePlus size={20} />}
-                </button>
-                <div className="relative flex shrink-0">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        if (showDesign) {
+                          sendDesignVersionMessage(file);
+                        } else {
+                          sendImageMessage(file);
+                        }
+                      }
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => { setShowDesign(false); fileInputRef.current?.click(); }}
+                    disabled={sendingImage || sending}
+                    className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#FFF200] transition-all disabled:opacity-40 shrink-0"
+                    title="Attach Image"
+                  >
+                    {sendingImage && !showDesign ? <Loader2 size={20} className="animate-spin" /> : <ImagePlus size={20} />}
+                  </button>
+                  <div className="relative flex shrink-0">
+                    {showDesign && (
+                      <div className="absolute bottom-16 right-0 bg-white border-2 border-[#1A1A1A] p-4 shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] flex flex-col gap-3 z-50 w-64">
+                        <p className="font-black uppercase italic text-sm border-b-2 border-[#1A1A1A] pb-2">Upload Design Version</p>
+                        <label className="flex flex-col gap-1">
+                          <span className="font-mono text-[9px] uppercase font-black opacity-60">Version #</span>
+                          <input
+                            type="text"
+                            value={designVersion}
+                            onChange={(e) => setDesignVersion(e.target.value)}
+                            className="border-2 border-[#1A1A1A] px-2 py-2 text-sm font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
+                          />
+                        </label>
+                        <div className="flex gap-2 mt-1">
+                          <button
+                            type="button"
+                            onClick={() => setShowDesign(false)}
+                            className="flex-1 bg-white border-2 border-[#1A1A1A] font-black uppercase text-[10px] py-2 hover:bg-[#1A1A1A] hover:text-white transition-all text-center"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={!designVersion || sending}
+                            className="flex-1 bg-[#FFF200] border-2 border-[#1A1A1A] font-black uppercase text-[10px] py-2 hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all text-center disabled:opacity-40"
+                          >
+                            {sending ? "..." : "Select File"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => { setShowDesign(!showDesign); setShowSchedule(false); setShowQuote(false); }}
+                      disabled={sending}
+                      className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#FFF200] transition-all disabled:opacity-40"
+                      title="Upload Design Version"
+                    >
+                      <FileText size={20} />
+                    </button>
+                  </div>
+                  <div className="relative flex shrink-0">
+                    {showQuote && (
+                      <div className="absolute bottom-16 right-0 bg-white border-2 border-[#1A1A1A] p-4 shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] flex flex-col gap-3 z-50 w-64">
+                        <p className="font-black uppercase italic text-sm border-b-2 border-[#1A1A1A] pb-2">Send Official Quote</p>
+                        <label className="flex flex-col gap-1">
+                          <span className="font-mono text-[9px] uppercase font-black opacity-60">Amount (₱)</span>
+                          <input
+                            type="number"
+                            value={quoteAmount}
+                            onChange={(e) => setQuoteAmount(e.target.value)}
+                            placeholder="e.g. 1500"
+                            className="border-2 border-[#1A1A1A] px-2 py-2 text-sm font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
+                          />
+                        </label>
+                        <div className="flex gap-2 mt-1">
+                          <button
+                            type="button"
+                            onClick={() => setShowQuote(false)}
+                            className="flex-1 bg-white border-2 border-[#1A1A1A] font-black uppercase text-[10px] py-2 hover:bg-[#1A1A1A] hover:text-white transition-all text-center"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={sendQuoteMessage}
+                            disabled={!quoteAmount || sending}
+                            className="flex-1 bg-[#00FFFF] border-2 border-[#1A1A1A] font-black uppercase text-[10px] py-2 hover:bg-[#EC008C] hover:text-white transition-all text-center disabled:opacity-40"
+                          >
+                            {sending ? "..." : "Send"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => { setShowQuote(!showQuote); setShowSchedule(false); setShowDesign(false); }}
+                      disabled={sending}
+                      className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#00FFFF] transition-all disabled:opacity-40"
+                      title="Send Quote"
+                    >
+                      <Banknote size={20} />
+                    </button>
+                  </div>
+                  <div className="relative flex shrink-0">
                   {showSchedule && (
                     <div className="absolute bottom-16 right-0 bg-white border-2 border-[#1A1A1A] p-4 shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] flex flex-col gap-3 z-50 w-72">
                       <p className="font-black uppercase italic text-sm border-b-2 border-[#1A1A1A] pb-2">Schedule Video Call</p>
@@ -664,6 +975,37 @@ export default function OwnerMessagesPage() {
           )}
         </div>
       </div>
+      {/* ── Jitsi In-App Modal ── */}
+      {jitsiRoom && (
+        <div className="fixed inset-0 z-[999] flex flex-col bg-[#1A1A1A]">
+          <div className="flex items-center justify-between px-6 py-3 border-b-4 border-[#00FFFF] bg-[#1A1A1A] shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="font-black text-lg uppercase italic tracking-tighter leading-none text-white">
+                  Press <span className="text-[#00FFFF]">&amp;</span> Present
+                </span>
+                <div className="flex gap-1 ml-1">
+                  <div className="w-2 h-2 bg-[#00FFFF]" />
+                  <div className="w-2 h-2 bg-[#EC008C]" />
+                  <div className="w-2 h-2 bg-[#FFF200]" />
+                </div>
+              </div>
+              <div className="w-px h-5 bg-white/20" />
+              <Video size={16} className="text-[#00FFFF]" />
+              <p className="font-mono text-[10px] uppercase tracking-widest text-[#00FFFF] font-black">Live_Call</p>
+              <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+            </div>
+            <button
+              type="button"
+              onClick={() => setJitsiRoom(null)}
+              className="flex items-center gap-2 px-4 py-2 bg-[#EC008C] text-white font-black uppercase text-[10px] border-2 border-[#EC008C] hover:bg-[#FFF200] hover:text-[#1A1A1A] hover:border-[#1A1A1A] transition-all"
+            >
+              <X size={14} /> End &amp; Close
+            </button>
+          </div>
+          <div id="jitsi-container-owner" className="flex-1 w-full" />
+        </div>
+      )}
     </div>
   );
 }

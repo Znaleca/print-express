@@ -3,47 +3,85 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
-  MessageSquare, Star, Loader2, User, Store,
-  Calendar, Hash, AlertTriangle, Eye, EyeOff, RefreshCcw, CheckCircle
+  MessageSquare, Star, Loader2, User,
+  Calendar, Hash, AlertTriangle, Eye, EyeOff, RefreshCcw, CheckCircle, Store
 } from "lucide-react";
+import Link from "next/link";
 
-export default function AdminReviews() {
+export default function OwnerReviews() {
   const [reviews, setReviews] = useState([]);
   const [hiddenReviews, setHiddenReviews] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterRating, setFilterRating] = useState(0);
   const [tab, setTab] = useState("active"); // "active" | "hidden"
   const [toast, setToast] = useState(null);
+  const [business, setBusiness] = useState(null);
 
   useEffect(() => {
     async function loadReviews() {
-      const { data, error } = await supabase
-        .from("business_reviews")
-        .select(`
-          order_id,
-          business_id,
-          rating,
-          feedback,
-          feedback_hidden,
-          feedback_hidden_at,
-          feedback_hidden_by,
-          created_at,
-          customer_name,
-          item_name,
-          businesses ( name )
-        `)
-        .order("created_at", { ascending: false });
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-      if (!error && data) {
-        setReviews(data.filter(r => !r.feedback_hidden));
-        setHiddenReviews(data.filter(r => r.feedback_hidden));
-      } else {
-        console.error(error);
+      const { data: biz } = await supabase
+        .from("businesses")
+        .select("id, name")
+        .eq("owner_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (biz) {
+        setBusiness(biz);
+        const { data, error } = await supabase
+          .from("business_reviews")
+          .select(`
+            order_id,
+            rating,
+            feedback,
+            feedback_hidden,
+            feedback_hidden_at,
+            feedback_hidden_by,
+            created_at,
+            customer_name,
+            item_name
+          `)
+          .eq("business_id", biz.id)
+          .order("created_at", { ascending: false });
+
+        if (!error && data) {
+          setReviews(data.filter(r => !r.feedback_hidden));
+          setHiddenReviews(data.filter(r => r.feedback_hidden));
+        } else {
+          console.error(error);
+        }
       }
       setLoading(false);
     }
     loadReviews();
   }, []);
+
+  const hideReview = async (orderId) => {
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        feedback_hidden: true,
+        feedback_hidden_at: new Date().toISOString(),
+        feedback_hidden_by: "owner",
+      })
+      .eq("id", orderId);
+
+    if (!error) {
+      const hidden = reviews.find(r => r.order_id === orderId);
+      setReviews(prev => prev.filter(r => r.order_id !== orderId));
+      if (hidden) {
+        setHiddenReviews(prev => [
+          { ...hidden, feedback_hidden: true, feedback_hidden_by: "owner", feedback_hidden_at: new Date().toISOString() },
+          ...prev
+        ]);
+      }
+      showToast("Review hidden from public view.");
+    }
+  };
 
   const restoreReview = async (orderId) => {
     const { error } = await supabase
@@ -54,20 +92,10 @@ export default function AdminReviews() {
     if (!error) {
       const restored = hiddenReviews.find(r => r.order_id === orderId);
       setHiddenReviews(prev => prev.filter(r => r.order_id !== orderId));
-      if (restored) setReviews(prev => [{ ...restored, feedback_hidden: false }, ...prev]);
+      if (restored) {
+        setReviews(prev => [{ ...restored, feedback_hidden: false }, ...prev]);
+      }
       showToast("Review restored and visible to public.");
-    }
-  };
-
-  const permanentlyHide = async (orderId) => {
-    const { error } = await supabase
-      .from("orders")
-      .update({ feedback_hidden: true, feedback_hidden_by: "admin" })
-      .eq("id", orderId);
-
-    if (!error) {
-      setHiddenReviews(prev => prev.map(r => r.order_id === orderId ? { ...r, feedback_hidden_by: "admin" } : r));
-      showToast("Review confirmed as hidden by admin.");
     }
   };
 
@@ -93,8 +121,20 @@ export default function AdminReviews() {
 
   const starColor = ["#EC008C", "#00FFFF", "#FFF200", "#FFF200", "#00FFFF"];
 
+  if (!loading && !business) {
+    return (
+      <div className="flex flex-col items-center justify-center py-32 bg-[#FDFDFD] min-h-[50vh]">
+        <Store size={48} className="mb-4 text-gray-300" />
+        <p className="font-mono text-sm uppercase font-black opacity-30">No_Business_Node_Found</p>
+        <Link href="/owner/onboarding" className="mt-4 px-4 py-2 bg-[#1A1A1A] text-[#00FFFF] font-black uppercase text-[10px] tracking-widest border-2 border-[#1A1A1A]">
+          Initialize Business Node
+        </Link>
+      </div>
+    );
+  }
+
   return (
-    <main className="bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden font-sans">
+    <main className="bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden font-sans min-h-screen">
       <section className="relative border-b-8 border-[#1A1A1A] px-6 py-12 md:px-10 md:py-14">
         <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
         <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
@@ -107,23 +147,23 @@ export default function AdminReviews() {
               <span className="h-2 w-2 bg-[#EC008C]" />
               <span className="h-2 w-2 bg-[#FFF200]" />
             </span>
-            Review_Intel // Moderation_Console
+            Owner_Portal // Review_Management
           </div>
 
           <div className="mt-8 grid gap-8 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
             <div>
               <h1 className="text-5xl font-black uppercase italic tracking-tighter leading-[0.95] md:text-7xl">
-                Global_<span className="bg-[#1A1A1A] px-4 py-1 text-white not-italic">Review Log</span>
+                Unit_<span className="bg-[#1A1A1A] px-4 py-1 text-[#00FFFF] not-italic">Feedback</span>
               </h1>
               <p className="mt-4 max-w-3xl font-mono text-[11px] uppercase tracking-[0.2em] leading-relaxed text-gray-600 md:text-sm">
-                Monitor feedback signals, manage hidden reviews, and restore or approve moderation decisions from all shops.
+                Monitor client signals, moderate reviews, and maintain your unit's performance metrics.
               </p>
             </div>
 
             <div className="border-4 border-[#1A1A1A] bg-white p-5 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <p className="font-mono text-[9px] uppercase tracking-[0.35em] text-gray-500">Signal Snapshot</p>
+                  <p className="font-mono text-[9px] uppercase tracking-[0.35em] text-gray-500">Unit Snapshot</p>
                   <p className="mt-1 text-lg font-black uppercase tracking-tighter">Avg // {avgRating}</p>
                 </div>
                 <div className="flex h-12 w-12 items-center justify-center bg-[#1A1A1A] text-white">
@@ -168,7 +208,7 @@ export default function AdminReviews() {
               {reviews.filter((r) => r.rating === 5).length}
             </p>
           </div>
-          <div className="bg-[#EC008C] border-4 border-[#1A1A1A] p-5 shadow-[6px_6px_0px_0px_rgba(0,0,0,0.3)]">
+          <div className="bg-[#1A1A1A] border-4 border-[#1A1A1A] p-5 shadow-[6px_6px_0px_0px_rgba(0,0,0,0.3)]">
             <p className="font-mono text-[9px] uppercase font-black text-white/70 mb-1">Hidden Feedback</p>
             <p className="text-3xl font-black italic text-white">
               {hiddenReviews.length}
@@ -189,7 +229,7 @@ export default function AdminReviews() {
             {/* Tab switcher */}
             <div className="bg-white border-4 border-[#1A1A1A] overflow-hidden shadow-[8px_8px_0px_0px_rgba(236,0,140,1)]">
               <div className="bg-[#1A1A1A] text-white px-5 py-4 flex items-center gap-3 border-b-4 border-[#1A1A1A]">
-                <EyeOff size={16} className="text-[#EC008C]" />
+                <EyeOff size={16} className="text-[#00FFFF]" />
                 <h2 className="font-black uppercase italic tracking-widest text-sm">View_Mode</h2>
               </div>
               <div className="p-4 space-y-2">
@@ -256,7 +296,7 @@ export default function AdminReviews() {
             {tab === "hidden" && hiddenReviews.length > 0 && (
               <div className="mb-6 bg-[#EC008C]/10 border-2 border-[#EC008C] px-4 py-3 font-mono text-[10px] uppercase font-black text-[#EC008C] flex items-center gap-2">
                 <AlertTriangle size={14} />
-                These reviews were hidden by shop owners. You can restore them to make them public again, or confirm the removal.
+                These reviews are hidden from your public business page. You can restore them if desired.
               </div>
             )}
 
@@ -317,23 +357,24 @@ export default function AdminReviews() {
                           }
                         </p>
 
-                        {/* Admin controls for hidden reviews */}
-                        {review.feedback_hidden && (
-                          <div className="flex gap-3 mt-4 pt-4 border-t-2 border-dashed border-[#1A1A1A]/20">
-                            <button
-                              onClick={() => restoreReview(review.order_id)}
-                              className="flex items-center gap-2 px-4 py-2 bg-[#00FFFF] text-[#1A1A1A] border-2 border-[#1A1A1A] font-black text-[9px] uppercase hover:bg-[#FFF200] transition-all shadow-[3px_3px_0px_0px_rgba(26,26,26,1)] active:shadow-none"
-                            >
-                              <RefreshCcw size={12} /> Restore (Make Public)
-                            </button>
-                            <button
-                              onClick={() => permanentlyHide(review.order_id)}
-                              className="flex items-center gap-2 px-4 py-2 bg-white text-[#1A1A1A] border-2 border-[#1A1A1A] font-black text-[9px] uppercase hover:bg-[#1A1A1A] hover:text-white transition-all"
-                            >
-                              <CheckCircle size={12} /> Confirm Hidden
-                            </button>
-                          </div>
-                        )}
+                        {/* Owner controls */}
+                        <div className="flex gap-3 mt-4 pt-4 border-t-2 border-dashed border-[#1A1A1A]/20">
+                          {review.feedback_hidden ? (
+                             <button
+                               onClick={() => restoreReview(review.order_id)}
+                               className="flex items-center gap-2 px-4 py-2 bg-[#00FFFF] text-[#1A1A1A] border-2 border-[#1A1A1A] font-black text-[9px] uppercase hover:bg-[#FFF200] transition-all shadow-[3px_3px_0px_0px_rgba(26,26,26,1)] active:shadow-none"
+                             >
+                               <RefreshCcw size={12} /> Restore Review
+                             </button>
+                          ) : (
+                             <button
+                               onClick={() => hideReview(review.order_id)}
+                               className="flex items-center gap-2 px-4 py-2 bg-[#EC008C] text-white border-2 border-[#1A1A1A] font-black text-[9px] uppercase hover:bg-[#1A1A1A] transition-all shadow-[3px_3px_0px_0px_rgba(26,26,26,1)] active:shadow-none"
+                             >
+                               <EyeOff size={12} /> Hide Review
+                             </button>
+                          )}
+                        </div>
                       </div>
 
                       {/* Meta info */}
@@ -343,13 +384,6 @@ export default function AdminReviews() {
                           <div className="flex items-center gap-2">
                             <User size={12} className="text-[#EC008C]" />
                             <p className="font-black uppercase italic text-sm">{review.customer_name || "ANON_USER"}</p>
-                          </div>
-                        </div>
-                        <div>
-                          <p className="font-mono text-[8px] uppercase tracking-widest font-black opacity-40 mb-1">Business Node</p>
-                          <div className="flex items-center gap-2">
-                            <Store size={12} className="text-[#00FFFF]" />
-                            <p className="font-black uppercase italic text-sm truncate">{review.businesses?.name || "UNKNOWN_UNIT"}</p>
                           </div>
                         </div>
                         <div>

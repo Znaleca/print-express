@@ -10,7 +10,8 @@ import {
   ChevronRight,
   ShoppingBag,
   MessageSquare,
-  Printer
+  Printer,
+  Star
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -19,6 +20,7 @@ const NAV_ITEMS = [
   { href: "/owner/services", label: "Services",   icon: Layers,        color: "hover:bg-[#FFF200]" }, // Yellow
   { href: "/owner/orders",   label: "Orders",     icon: ShoppingBag,   color: "hover:bg-[#00FFFF]" }, // Cyan
   { href: "/owner/messages", label: "Messages",   icon: MessageSquare, color: "hover:bg-[#EC008C]" }, // Magenta
+  { href: "/owner/reviews",  label: "Reviews",    icon: Star,          color: "hover:bg-[#FFF200]" }, // Yellow
 ];
 
 export default function OwnerSidebar({ businessName, isOpen, onToggle }) {

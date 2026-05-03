@@ -108,7 +108,7 @@ export default function ShopsPage() {
                   <input
                     type="text"
                     className="w-full bg-transparent px-4 py-5 text-[#1A1A1A] placeholder:text-[#1A1A1A]/30 focus:outline-none font-mono text-xs font-black uppercase tracking-widest"
-                    placeholder="Search by name, service or location..."
+                    placeholder="Search by name, item or location..."
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                   />

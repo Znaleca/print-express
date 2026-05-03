@@ -31,7 +31,7 @@ export default function SignUpPage() {
   const [role, setRole] = useState("CUSTOMER");
 
   // Step 1
-  const [formData, setFormData] = useState({ fullName: "", email: "", password: "", confirmPassword: "", businessName: "" });
+  const [formData, setFormData] = useState({ firstName: "", lastName: "", email: "", password: "", confirmPassword: "", businessName: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
@@ -75,7 +75,7 @@ export default function SignUpPage() {
         password: formData.password,
         options: {
           emailRedirectTo: `${process.env.NEXT_PUBLIC_URL || window.location.origin}/auth/confirm`,
-          data: { full_name: formData.fullName, role },
+          data: { full_name: `${formData.firstName.trim()} ${formData.lastName.trim()}`.trim(), role },
         },
       };
       if (role === "BUSINESS_OWNER") signUpData.options.data.business_name = formData.businessName;
@@ -242,18 +242,22 @@ export default function SignUpPage() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">
-                      {role === "BUSINESS_OWNER" ? "Owner Nickname" : "Nickname"}
-                    </label>
-                    <input name="fullName" type="text" required value={formData.fullName} onChange={handleChange}
-                      className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm font-bold outline-none focus:border-[#EC008C]" placeholder="Name" />
+                    <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">First Name</label>
+                    <input name="firstName" type="text" required value={formData.firstName} onChange={handleChange}
+                      className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm font-bold outline-none focus:border-[#EC008C]" placeholder="First" />
                   </div>
                   <div>
-                    <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">Email</label>
-                    <input name="email" type="email" required value={formData.email} onChange={handleChange}
-                      className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm font-bold outline-none focus:border-[#EC008C] lowercase" placeholder="EMAIL" />
+                    <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">Last Name</label>
+                    <input name="lastName" type="text" required value={formData.lastName} onChange={handleChange}
+                      className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm font-bold outline-none focus:border-[#EC008C]" placeholder="Last" />
                   </div>
                 </div>
+                <div>
+                  <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">Email</label>
+                  <input name="email" type="email" required value={formData.email} onChange={handleChange}
+                    className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm font-bold outline-none focus:border-[#EC008C] lowercase" placeholder="your@email.com" />
+                </div>
+
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
