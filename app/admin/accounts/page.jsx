@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
-  Fingerprint, Mail, Shield, Loader2,
+  Fingerprint, Mail, Shield, Loader2, X,
   CheckCircle, XCircle, Clock, ChevronDown, ChevronUp,
   FileText, Hash, Eye, MessageSquare, RefreshCcw,
   ShieldCheck, AlertCircle, Users, Building2
@@ -29,6 +29,7 @@ export default function AdminAccounts() {
   const [actionLoading, setActionLoading] = useState({}); // { docId: true/false }
   const [toast, setToast]                 = useState(null);
   const [rejectPrompt, setRejectPrompt]   = useState({ open: false, message: "" });
+  const [previewDocUrl, setPreviewDocUrl] = useState(null);
   // Accounts tab
   const [users, setUsers]                 = useState([]);
   const [loadingUsers, setLoadingUsers]   = useState(false);
@@ -209,6 +210,25 @@ export default function AdminAccounts() {
 
   return (
     <main className="bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden font-sans">
+      {previewDocUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6">
+          <div className="relative w-full max-w-4xl h-[85vh] border-4 border-black bg-white p-3 shadow-[10px_10px_0px_0px_rgba(0,255,255,1)] flex flex-col">
+            <div className="flex justify-between items-center mb-3 px-1">
+              <h3 className="font-black uppercase tracking-tighter text-xl">Document Preview</h3>
+              <button 
+                onClick={() => setPreviewDocUrl(null)}
+                className="bg-[#EC008C] text-white p-1 border-2 border-black hover:bg-black transition-all"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            <div className="flex-1 border-4 border-black overflow-hidden bg-gray-100">
+              <iframe src={previewDocUrl} className="w-full h-full border-none" />
+            </div>
+          </div>
+        </div>
+      )}
+
       {rejectPrompt.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
           <div className="w-full max-w-md border-4 border-black bg-white p-6 shadow-[10px_10px_0px_0px_rgba(236,0,140,1)]">
@@ -397,10 +417,10 @@ export default function AdminAccounts() {
                               <div className="p-4 space-y-4">
                                 {/* File link */}
                                 {doc.file_url && (
-                                  <a href={doc.file_url} target="_blank" rel="noopener noreferrer"
+                                  <button onClick={() => setPreviewDocUrl(doc.file_url)}
                                     className="inline-flex items-center gap-2 bg-[#1A1A1A] text-white px-3 py-2 font-mono text-[10px] font-black uppercase hover:bg-[#00FFFF] hover:text-black transition-all">
                                     <Eye size={12} /> VIEW DOCUMENT
-                                  </a>
+                                  </button>
                                 )}
 
                                 {/* Owner comment */}

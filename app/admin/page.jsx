@@ -5,6 +5,7 @@ import {
   ShieldCheck, Check, X, AlertTriangle, Users,
   Database, ArrowRight, Printer, Sparkles
 } from "lucide-react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
 /**
@@ -78,18 +79,6 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => { fetchDashboardData(); }, []);
-
-  const validate = async (businessId, ownerId, action) => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      await fetch("/api/admin/dashboard", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ businessId, ownerId, action }),
-      });
-      fetchDashboardData();
-    } catch (err) { console.error(err); }
-  };
 
   const statCards = [
     { label: "Pending", value: approvalQueue.length, color: "text-[#FF3E00]" },
@@ -209,18 +198,12 @@ export default function AdminDashboard() {
                       </td>
                       <td className="p-5">
                         <div className="flex justify-center gap-3">
-                          <button 
-                            onClick={() => validate(item.businessId, item.ownerId, "APPROVE")}
-                            className="flex-1 bg-black text-white font-black py-2 px-4 hover:bg-[#00FFFF] transition-all flex items-center justify-center gap-2 shadow-[3px_3px_0px_0px_rgba(0,0,0,0.2)] active:shadow-none"
+                          <Link 
+                            href="/admin/accounts"
+                            className="flex-1 bg-black text-white font-black py-2 px-4 hover:bg-[#00FFFF] hover:text-black transition-all flex items-center justify-center gap-2 shadow-[3px_3px_0px_0px_rgba(0,0,0,0.2)] active:shadow-none"
                           >
-                            <Check size={16} /> VERIFY
-                          </button>
-                          <button 
-                            onClick={() => validate(item.businessId, item.ownerId, "REJECT")}
-                            className="bg-[#FF3E00] text-white p-2 border-2 border-black hover:bg-black transition-all"
-                          >
-                            <X size={20} />
-                          </button>
+                            <ShieldCheck size={16} /> REVIEW FILES
+                          </Link>
                         </div>
                       </td>
                     </tr>

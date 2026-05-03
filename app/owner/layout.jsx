@@ -446,7 +446,6 @@ export default function OwnerLayout({ children }) {
                           </div>
                         </div>
 
-                        {status !== "NOT_SUBMITTED" && (
                           <div className="border-4 border-[#1A1A1A] bg-[#FDFDFD] p-4 shadow-[6px_6px_0px_0px_rgba(0,255,255,1)]">
                             {!isEditing && doc ? (
                               <div>
@@ -550,7 +549,6 @@ export default function OwnerLayout({ children }) {
                               </>
                             )}
                           </div>
-                        )}
                       </div>
                     </div>
                   </div>
