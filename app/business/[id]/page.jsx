@@ -131,7 +131,7 @@ export default function BusinessDetailsPage({ params }) {
           .select(`
             id, name, address, description, min_downpayment_percent, qr_url, is_open,
             services ( id, name, price, price_max, item_type, description, category, available, image_url, stock_qty, is_customizable ),
-            business_reviews ( order_id, rating, feedback, feedback_hidden, created_at, customer_name, item_name )
+            business_reviews ( order_id, rating, feedback, created_at, customer_name )
           `)
           .eq("id", id)
           .eq("status", "APPROVED")
@@ -151,20 +151,20 @@ export default function BusinessDetailsPage({ params }) {
           if (!error && data) {
           data.services = (data.services || []).filter(s => s.available);
           
-          // All reviews (including hidden for owner view)
+            // Public review feed synced from /track submissions
           const allReviews = data.business_reviews || [];
-          const visibleReviews = allReviews.filter(r => !r.feedback_hidden);
-          data.reviewCount = visibleReviews.length;
-          data.ratingAvg = data.reviewCount > 0 
-            ? (visibleReviews.reduce((sum, r) => sum + r.rating, 0) / data.reviewCount).toFixed(1)
+            const visibleReviews = allReviews.filter(r => !!r.feedback);
+            data.reviewCount = visibleReviews.length;
+            data.ratingAvg = data.reviewCount > 0 
+              ? (visibleReviews.reduce((sum, r) => sum + r.rating, 0) / data.reviewCount).toFixed(1)
             : "5.0";
-          data.reviews = visibleReviews.filter(r => !!r.feedback).sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
-          data.allReviews = allReviews; // keep for owner view
+            data.reviews = visibleReviews.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+            data.allReviews = allReviews;
 
-          // Group by item_name for per-item display
+            // Group by customer for a simple preview card layout
           const grouped = {};
           allReviews.forEach(r => {
-            const key = r.item_name || "General";
+              const key = r.customer_name || "Anonymous";
             if (!grouped[key]) grouped[key] = [];
             grouped[key].push(r);
           });
@@ -424,7 +424,7 @@ export default function BusinessDetailsPage({ params }) {
           {/* Message Button */}
           {isCustomer && (
             <Link
-              href={`/messages?business=${business.id}`}
+              href={`/messages?business=${business.id}&greet=1`}
               className="flex items-center gap-3 bg-[#1A1A1A] text-[#00FFFF] px-8 py-5 font-black uppercase italic text-lg border-4 border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(236,0,140,1)] hover:bg-[#EC008C] hover:text-white hover:shadow-[8px_8px_0px_0px_rgba(26,26,26,1)] transition-all group shrink-0"
             >
               <MessageSquare size={22} />
@@ -812,6 +812,71 @@ export default function BusinessDetailsPage({ params }) {
         </div>
 
         
+
+        {/* REVIEWS & FEEDBACK */}
+        <section className="mt-16 bg-white border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)] overflow-hidden">
+          <div className="border-b-4 border-[#1A1A1A] bg-[#F9F9F7] px-6 py-6 md:px-8 md:py-8 text-[#1A1A1A]">
+            <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div>
+                <p className="font-mono text-[10px] font-black uppercase tracking-[0.45em] text-[#EC008C] mb-3">YOUR OPINIONS MATTER</p>
+                <h3 className="text-4xl md:text-6xl font-black uppercase italic tracking-tighter leading-none">
+                  Reviews & Feedback
+                </h3>
+              </div>
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-2 border-4 border-[#1A1A1A] bg-[#FFF200] px-4 py-3 text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,0.12)]">
+                  <Star size={16} fill="#FFF200" className="text-[#FFF200]" />
+                  <span className="font-black italic text-lg leading-none">{business.ratingAvg || "5.0"}</span>
+                </div>
+                <div className="border-4 border-[#1A1A1A] bg-white px-4 py-3 text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,0.08)]">
+                  <p className="font-mono text-[9px] uppercase tracking-widest text-black/40">Total Reviews</p>
+                  <p className="text-2xl font-black italic leading-none">{business.reviewCount || 0}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {(business.reviews || []).length > 0 ? (
+            <div className="space-y-5 p-6 md:p-8 bg-[#F9F9F7]">
+              {business.reviews.slice(0, 6).map((review) => (
+                <article key={review.order_id} className="border-4 border-[#1A1A1A] bg-white p-5 md:p-6 shadow-[8px_8px_0px_0px_rgba(26,26,26,0.12)] border-l-[12px] border-l-[#00FFFF]">
+                  <div className="flex items-start justify-between gap-4 mb-5">
+                    <div>
+                      <p className="font-black uppercase italic text-2xl leading-none text-[#1A1A1A]">{review.customer_name || "Anonymous"}</p>
+                      <p className="font-mono text-[9px] uppercase tracking-[0.24em] text-black/35 mt-2">
+                        {new Date(review.created_at).toLocaleDateString("en-PH", {
+                          year: "numeric",
+                          month: "short",
+                          day: "2-digit",
+                        })}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {Array.from({ length: 5 }).map((_, index) => (
+                        <Star
+                          key={index}
+                          size={14}
+                          fill={index < review.rating ? "#FFF200" : "none"}
+                          className={index < review.rating ? "text-[#1A1A1A]" : "text-black/15"}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <p className="text-base leading-relaxed text-[#1A1A1A]/80 italic">
+                    {review.feedback}
+                  </p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="px-6 py-12 md:px-8 bg-[#F9F9F7]">
+              <div className="border-4 border-dashed border-[#1A1A1A]/10 py-14 text-center bg-white">
+                <p className="font-mono text-[11px] uppercase tracking-[0.3em] font-black opacity-40">Waiting_for_feedback...</p>
+                <p className="mt-2 text-sm text-black/40">Reviews submitted in /track will appear here.</p>
+              </div>
+            </div>
+          )}
+        </section>
 
         {previewImage && (
           <div

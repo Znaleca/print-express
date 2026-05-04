@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import {
   ChevronDown, CheckCircle, Eye,
   ExternalLink, Activity, Package, Clock,
-  CreditCard, AlertCircle, MapPin, Truck, X, ShoppingBag, Printer
+  CreditCard, AlertCircle, MapPin, Truck, X, ShoppingBag, Printer, Upload
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import ReceiptModal from "@/components/ReceiptModal";
@@ -36,6 +36,10 @@ export default function OwnerOrdersPage() {
   const [viewReceipt, setViewReceipt] = useState(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [refundModal, setRefundModal] = useState(null); // { orderId }
+  const [refundFile, setRefundFile] = useState(null);
+  const [uploadingRefund, setUploadingRefund] = useState(false);
+  const [viewRefundProof, setViewRefundProof] = useState(null); // URL string
 
   useEffect(() => {
     let subscription;
@@ -158,6 +162,38 @@ export default function OwnerOrdersPage() {
     await updateStatus(cancelModal.orderId, 'CANCELLED', { cancel_reason: cancelReason.trim() });
     setCancelling(false);
     setCancelModal(null);
+  };
+
+  const openRefundModal = (orderId) => {
+    setRefundModal({ orderId });
+    setRefundFile(null);
+  };
+
+  const confirmRefund = async () => {
+    if (!refundModal || !refundFile) return;
+    setUploadingRefund(true);
+
+    const fileExt = refundFile.name.split('.').pop();
+    const fileName = `${refundModal.orderId}-${Date.now()}.${fileExt}`;
+
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('refund-receipts')
+      .upload(`proofs/${fileName}`, refundFile);
+
+    if (uploadError) {
+      alert("Failed to upload proof: " + uploadError.message);
+      setUploadingRefund(false);
+      return;
+    }
+
+    const { data: publicUrlData } = supabase.storage
+      .from('refund-receipts')
+      .getPublicUrl(`proofs/${fileName}`);
+
+    await updateStatus(refundModal.orderId, 'REFUNDED', { refund_receipt_url: publicUrlData.publicUrl });
+
+    setUploadingRefund(false);
+    setRefundModal(null);
   };
 
   const getOrderTotalQuantity = (order) => {
@@ -409,7 +445,7 @@ export default function OwnerOrdersPage() {
                             </div>
                           )}
                           <button
-                            onClick={() => updateStatus(order.id, 'REFUNDED')}
+                            onClick={() => openRefundModal(order.id)}
                             className="bg-[#FFF200] text-[#1A1A1A] border-2 border-[#1A1A1A] px-3 py-2 font-black text-[9px] uppercase hover:bg-[#00FFFF] transition-all shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] active:shadow-none flex items-center gap-1 w-fit"
                           >
                             ✓ MARK AS REFUNDED
@@ -421,6 +457,11 @@ export default function OwnerOrdersPage() {
                             ✓ REFUNDED
                           </span>
                           <span className="font-mono text-[8px] uppercase opacity-50">Awaiting customer confirmation</span>
+                          {order.refund_receipt_url && (
+                            <button onClick={() => setViewRefundProof(order.refund_receipt_url)} className="mt-1 inline-flex items-center gap-1 text-[9px] font-black text-[#EC008C] hover:underline uppercase w-fit text-left">
+                              <Eye size={10} /> View Proof
+                            </button>
+                          )}
                         </div>
                       ) : order.status === 'REFUND_CONFIRMED' ? (
                         <div className="flex flex-col gap-2">
@@ -428,6 +469,11 @@ export default function OwnerOrdersPage() {
                             ✓ REFUND CONFIRMED
                           </span>
                           <span className="font-mono text-[8px] uppercase opacity-50">Customer acknowledged</span>
+                          {order.refund_receipt_url && (
+                            <button onClick={() => setViewRefundProof(order.refund_receipt_url)} className="mt-1 inline-flex items-center gap-1 text-[9px] font-black text-[#EC008C] hover:underline uppercase w-fit text-left">
+                              <Eye size={10} /> View Proof
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <div className="flex flex-col gap-2">
@@ -602,6 +648,96 @@ export default function OwnerOrdersPage() {
           onClose={() => setViewReceipt(null)} 
           isOwner={true} 
         />
+      )}
+
+      {/* ── REFUND PROOF MODAL ── */}
+      {refundModal && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(236,0,140,1)]">
+            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
+              <div className="flex items-center gap-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-[#00FFFF]" />
+                  <div className="w-2 h-2 bg-[#EC008C]" />
+                  <div className="w-2 h-2 bg-[#FFF200]" />
+                </div>
+                <span className="font-black uppercase italic tracking-widest">Process_Refund</span>
+              </div>
+              <button onClick={() => setRefundModal(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6">
+              <p className="font-mono text-[10px] uppercase tracking-widest text-gray-500 font-black mb-1">Proof of Refund</p>
+              <p className="text-sm font-bold text-gray-700 mb-4">Please upload an image (e.g., GCash/Bank receipt) showing the refund transfer.</p>
+              <div className="space-y-3">
+                <label className="block w-full border-2 border-dashed border-[#1A1A1A] px-4 py-8 text-center cursor-pointer hover:bg-[#00FFFF]/10 transition-colors">
+                  <Upload size={24} className="mx-auto mb-2 text-[#1A1A1A]" />
+                  <span className="font-mono text-[10px] uppercase font-black text-[#1A1A1A]">
+                    {refundFile ? refundFile.name : "CLICK TO UPLOAD IMAGE"}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => setRefundFile(e.target.files[0])}
+                  />
+                </label>
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={() => setRefundModal(null)}
+                  className="flex-1 border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#1A1A1A] hover:text-white transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmRefund}
+                  disabled={!refundFile || uploadingRefund}
+                  className="flex-1 bg-[#00FFFF] text-[#1A1A1A] border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#FFF200] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:shadow-none"
+                >
+                  {uploadingRefund ? "UPLOADING..." : "SUBMIT PROOF"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── VIEW REFUND PROOF MODAL ── */}
+      {viewRefundProof && (
+        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)]">
+            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
+              <div className="flex items-center gap-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-[#00FFFF]" />
+                  <div className="w-2 h-2 bg-[#EC008C]" />
+                  <div className="w-2 h-2 bg-[#FFF200]" />
+                </div>
+                <span className="font-black uppercase italic tracking-widest">Refund_Proof</span>
+              </div>
+              <button onClick={() => setViewRefundProof(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 bg-gray-100 flex items-center justify-center min-h-[300px]">
+              <img 
+                src={viewRefundProof} 
+                alt="Refund Proof" 
+                className="max-w-full max-h-[70vh] object-contain border-4 border-[#1A1A1A]"
+              />
+            </div>
+            <div className="p-6 border-t-4 border-[#1A1A1A] flex justify-end">
+              <button
+                onClick={() => setViewRefundProof(null)}
+                className="bg-[#1A1A1A] text-white px-6 py-3 font-black uppercase text-[10px] hover:bg-[#EC008C] transition-all shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] active:shadow-none"
+              >
+                CLOSE_VIEWER
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   );

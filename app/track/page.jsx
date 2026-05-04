@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { 
   Truck, Printer, Clock, 
   MapPin, CheckCircle2, Hash, 
   Loader2, AlertTriangle, FileText, ShoppingBag,
-  Star, Activity, Terminal, Package, XCircle, RefreshCcw, Upload, Eye
+  Star, Activity, Terminal, Package, XCircle, RefreshCcw, Upload, Eye, AlertOctagon, MessageSquare
 } from "lucide-react";
 import ReceiptModal from "@/components/ReceiptModal";
 
@@ -25,7 +26,9 @@ const STATUS_MAP = {
 };
 
 export default function TrackOrderPage() {
+  const router = useRouter();
   const [user, setUser] = useState(null);
+  const [reportingRefundId, setReportingRefundId] = useState(null);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isCustomer, setIsCustomer] = useState(false);
@@ -36,6 +39,7 @@ export default function TrackOrderPage() {
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [viewReceipt, setViewReceipt] = useState(null);
+  const [viewRefundProof, setViewRefundProof] = useState(null);
 
   useEffect(() => {
     let isActive = true;
@@ -187,6 +191,55 @@ export default function TrackOrderPage() {
     } else {
       setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'REFUND_CONFIRMED' } : o));
     }
+  };
+
+  const reportRefundNotReceived = async (order) => {
+    setReportingRefundId(order.id);
+    try {
+      // 1. Upsert conversation with business owner
+      const { data: conv, error: convErr } = await supabase
+        .from('chat_conversations')
+        .upsert(
+          { business_id: order.business_id, customer_id: user.id },
+          { onConflict: 'business_id,customer_id' }
+        )
+        .select('id')
+        .single();
+
+      if (convErr || !conv) {
+        alert('Could not open chat: ' + (convErr?.message || 'unknown error'));
+        setReportingRefundId(null);
+        return;
+      }
+
+      const orderId = order.id.split('-')[0].toUpperCase();
+      const amount = Number(order.downpayment_amount || 0).toFixed(2);
+      const itemNames = (order.items || []).map(i => i.name).join(', ') || 'N/A';
+
+      // 2. Auto-send dispute message
+      const messageContent = `Hi, I have NOT received my refund yet for Order #${orderId}.\n\nRefund Amount: ₱${amount}\nItems: ${itemNames}\n\nPlease check and process my refund. Thank you.`;
+
+      await supabase.from('chat_messages').insert({
+        conversation_id: conv.id,
+        sender_id: user.id,
+        sender_role: 'CUSTOMER',
+        content: messageContent,
+        message_type: 'refund_dispute',
+        metadata: {
+          order_id: order.id,
+          refund_amount: amount,
+          receipt_url: order.receipt_url || null,
+          refund_receipt_url: order.refund_receipt_url || null,
+        },
+        is_read: false,
+      });
+
+      // 3. Redirect to messages with this business
+      router.push(`/messages?business=${order.business_id}`);
+    } catch (e) {
+      alert('Something went wrong.');
+    }
+    setReportingRefundId(null);
   };
 
   if (loading) {
@@ -421,25 +474,50 @@ export default function TrackOrderPage() {
                           <div className="pt-6 border-t-4 border-green-500/20">
                             <p className="font-black text-[10px] uppercase tracking-[0.2em] mb-3 text-green-600">Refund_Sent_By_Seller</p>
                             <p className="font-mono text-[9px] uppercase opacity-60 mb-4">The seller has marked your ₱{Number(order.downpayment_amount || 0).toFixed(2)} refund as sent. Click below once you have received it.</p>
-                            <button
-                              onClick={() => confirmRefundReceived(order.id)}
-                              disabled={confirmingRefundId === order.id}
-                              className="w-full bg-green-500 text-white border-4 border-[#1A1A1A] py-4 font-black font-mono text-[10px] uppercase tracking-[0.3em] hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:shadow-none flex items-center justify-center gap-2"
-                            >
-                              <CheckCircle2 size={16} />
-                              {confirmingRefundId === order.id ? 'CONFIRMING...' : 'I RECEIVED MY REFUND'}
-                            </button>
+                            {order.refund_receipt_url && (
+                              <button onClick={() => setViewRefundProof(order.refund_receipt_url)} className="mb-4 font-mono text-[9px] uppercase font-black text-green-700 flex items-center gap-1 hover:underline text-left">
+                                <Eye size={12} /> View Refund Proof
+                              </button>
+                            )}
+                            <div className="flex flex-col gap-3">
+                              <button
+                                onClick={() => confirmRefundReceived(order.id)}
+                                disabled={confirmingRefundId === order.id}
+                                className="w-full bg-green-500 text-white border-4 border-[#1A1A1A] py-4 font-black font-mono text-[10px] uppercase tracking-[0.3em] hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:shadow-none flex items-center justify-center gap-2"
+                              >
+                                <CheckCircle2 size={16} />
+                                {confirmingRefundId === order.id ? 'CONFIRMING...' : 'I RECEIVED MY REFUND'}
+                              </button>
+                              <button
+                                onClick={() => reportRefundNotReceived(order)}
+                                disabled={reportingRefundId === order.id}
+                                className="w-full bg-white text-[#EC008C] border-4 border-[#EC008C] py-4 font-black font-mono text-[10px] uppercase tracking-[0.3em] hover:bg-[#EC008C] hover:text-white transition-all shadow-[4px_4px_0px_0px_rgba(236,0,140,0.4)] active:shadow-none flex items-center justify-center gap-2"
+                              >
+                                <AlertOctagon size={16} />
+                                {reportingRefundId === order.id ? 'OPENING CHAT...' : 'I HAVE NOT RECEIVED MY REFUND'}
+                              </button>
+                              <p className="font-mono text-[8px] uppercase opacity-40 text-center">This will send an automatic message to the seller.</p>
+                            </div>
                           </div>
                         )}
 
                         {order.status === 'REFUND_CONFIRMED' && (
                           <div className="pt-6 border-t-4 border-green-700/20">
-                            <div className="bg-green-50 border-4 border-green-700 p-4 flex items-center gap-3">
-                              <CheckCircle2 size={20} className="text-green-700 flex-shrink-0" />
-                              <div>
-                                <p className="font-black text-[10px] uppercase tracking-[0.2em] text-green-700">Refund_Confirmed</p>
-                                <p className="font-mono text-[9px] uppercase opacity-60">You confirmed receiving your refund.</p>
+                            <div className="bg-green-50 border-4 border-green-700 p-4 flex flex-col gap-3">
+                              <div className="flex items-center gap-3">
+                                <CheckCircle2 size={20} className="text-green-700 flex-shrink-0" />
+                                <div>
+                                  <p className="font-black text-[10px] uppercase tracking-[0.2em] text-green-700">Refund_Confirmed</p>
+                                  <p className="font-mono text-[9px] uppercase opacity-60">You confirmed receiving your refund.</p>
+                                </div>
                               </div>
+                              {order.refund_receipt_url && (
+                                <div className="mt-2 pt-3 border-t-2 border-green-700/20">
+                                  <button onClick={() => setViewRefundProof(order.refund_receipt_url)} className="font-mono text-[9px] uppercase font-black text-green-700 flex items-center gap-1 hover:underline text-left">
+                                    <Eye size={12} /> View Refund Receipt
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
                         )}
@@ -560,6 +638,42 @@ export default function TrackOrderPage() {
           onClose={() => setViewReceipt(null)} 
           isOwner={false} 
         />
+      )}
+
+      {/* ── VIEW REFUND PROOF MODAL ── */}
+      {viewRefundProof && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)]">
+            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
+              <div className="flex items-center gap-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-[#00FFFF]" />
+                  <div className="w-2 h-2 bg-[#EC008C]" />
+                  <div className="w-2 h-2 bg-[#FFF200]" />
+                </div>
+                <span className="font-black uppercase italic tracking-widest">Refund_Proof</span>
+              </div>
+              <button onClick={() => setViewRefundProof(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
+                <XCircle size={20} />
+              </button>
+            </div>
+            <div className="p-6 bg-gray-100 flex items-center justify-center min-h-[300px]">
+              <img 
+                src={viewRefundProof} 
+                alt="Refund Proof" 
+                className="max-w-full max-h-[70vh] object-contain border-4 border-[#1A1A1A]"
+              />
+            </div>
+            <div className="p-6 border-t-4 border-[#1A1A1A] flex justify-end">
+              <button
+                onClick={() => setViewRefundProof(null)}
+                className="bg-[#1A1A1A] text-white px-6 py-3 font-black uppercase text-[10px] hover:bg-[#EC008C] transition-all shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] active:shadow-none"
+              >
+                CLOSE_VIEWER
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   );

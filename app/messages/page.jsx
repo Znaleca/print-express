@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
   MessageSquare, Send, Loader2, User, Store,
-  ChevronRight, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar
+  ChevronRight, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, MapPin
 } from "lucide-react";
 
 function MessagesInner() {
@@ -32,6 +32,7 @@ function MessagesInner() {
   const [quoteCheckoutPending, setQuoteCheckoutPending] = useState(null);
   const [jitsiRoom, setJitsiRoom] = useState(null);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
+  const [viewImagePopup, setViewImagePopup] = useState(null); // { url, label }
   const bottomRef = useRef(null);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -284,6 +285,19 @@ function MessagesInner() {
     markConversationRead(activeConv.id);
   }, [activeConv, user]);
 
+  // Handle greet=1
+  useEffect(() => {
+    if (activeConv && initBizId && activeConv.business_id === initBizId) {
+      if (searchParams.get("greet") === "1") {
+        setShowQuickReplies(true);
+        // Clear param without reloading
+        const params = new URLSearchParams(searchParams.toString());
+        params.delete("greet");
+        router.replace(`/messages?${params.toString()}`);
+      }
+    }
+  }, [activeConv, initBizId, searchParams, router]);
+
   // Auto-send service inquiry
   useEffect(() => {
     if (!activeConv || !initServiceId || !user) return;
@@ -342,18 +356,79 @@ function MessagesInner() {
     sendInquiry();
   }, [activeConv, initServiceId, user, router, searchParams]);
 
-  const sendQuickReply = async (text) => {
+  const sendQuickReply = async (action) => {
     if (!activeConv || !user) return;
     setSending(true);
     setShowQuickReplies(false);
 
+    let customerText = "";
+    if (action === "hi") customerText = "Hi";
+    else if (action === "offer") customerText = "What do you offer?";
+    else if (action === "location") customerText = "Where are you located?";
+
+    // 1. Send customer message
     await supabase.from("chat_messages").insert({
       conversation_id: activeConv.id,
       sender_id: user.id,
       sender_role: "CUSTOMER",
-      content: text,
+      content: customerText,
       is_read: false,
     });
+
+    // 2. Bot reply logic
+    let botReplyText = "";
+    let messageType = 'text';
+    let meta = {};
+
+    const { data: biz } = await supabase.from('businesses').select('owner_id, name, address, lat, lng').eq('id', activeConv.business_id).single();
+
+    if (action === "hi") {
+      botReplyText = `Welcome to ${biz?.name || 'our shop'} and we are pleased to serve you!`;
+    } else if (action === "offer") {
+      const { data: items } = await supabase.from('services').select('name, price, price_max, item_type').eq('business_id', activeConv.business_id).eq('available', true);
+      let listText = "";
+      
+      if (items && items.length > 0) {
+        const products = items.filter(i => i.item_type === 'product');
+        const services = items.filter(i => i.item_type !== 'product');
+        
+        if (products.length > 0) {
+          listText += "📦 PRODUCTS\n";
+          listText += products.map(p => `• ${p.name} - ₱${Number(p.price).toFixed(2)}`).join('\n') + "\n\n";
+        }
+        if (services.length > 0) {
+          listText += "🛠️ SERVICES\n";
+          listText += services.map(s => {
+            const p1 = Number(s.price).toFixed(2);
+            if (s.price_max && Number(s.price_max) > Number(s.price)) {
+              return `• ${s.name} - ₱${p1} to ₱${Number(s.price_max).toFixed(2)}`;
+            }
+            return `• ${s.name} - ₱${p1}`;
+          }).join('\n');
+        }
+      } else {
+        listText = "We currently have no available services or products.";
+      }
+      botReplyText = `Here is a preview of our offerings:\n\n${listText.trim()}`;
+    } else if (action === "location") {
+      botReplyText = `We are located at:\n${biz?.address || 'our address'}`;
+      if (biz?.lat && biz?.lng) {
+        messageType = 'location_pin';
+        meta = { lat: biz.lat, lng: biz.lng, address: biz.address };
+      }
+    }
+
+    if (biz?.owner_id && botReplyText) {
+      await supabase.from("chat_messages").insert({
+        conversation_id: activeConv.id,
+        sender_id: biz.owner_id,
+        sender_role: "BUSINESS_OWNER",
+        content: botReplyText,
+        message_type: messageType,
+        metadata: meta,
+        is_read: false,
+      });
+    }
 
     setSending(false);
   };
@@ -711,12 +786,51 @@ function MessagesInner() {
                     const isMine = msg.sender_id === user.id;
                     const isEditing = editingId === msg.id;
                     return (
-                      <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
+                      <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"} relative`}>
                         {!isMine && (
                           <div className="w-8 h-8 bg-[#1A1A1A] flex items-center justify-center shrink-0 mr-3 mt-auto">
                             <Store size={13} className="text-[#00FFFF]" />
                           </div>
                         )}
+
+                        {/* moved More (three-dot) button outside the bubble on the left */}
+                        {isMine && (
+                          <div className="relative flex flex-col items-center mr-3">
+                            <button
+                              type="button"
+                              onClick={() => setMenuMessageId((prev) => (prev === msg.id ? null : msg.id))}
+                              className="w-8 h-8 bg-[#00FFFF] flex items-center justify-center border-2 border-[#1A1A1A] text-[#1A1A1A]"
+                              aria-label="More actions"
+                            >
+                              <MoreVertical size={14} />
+                            </button>
+
+                            {menuMessageId === msg.id && (
+                              <div className="absolute left-0 bottom-full mb-2 z-30 w-40 rounded-lg bg-[#2a2a2a] text-white shadow-lg">
+                                <div className="absolute -bottom-2 left-5 w-3 h-3 bg-[#2a2a2a] rotate-45 shadow-sm" />
+                                <div className="flex flex-col py-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => startEditMessage(msg)}
+                                    className="flex w-full items-center gap-3 px-4 py-3 text-left font-mono text-sm font-black uppercase hover:bg-white/10"
+                                  >
+                                    <Pencil size={14} className="text-white" />
+                                    <span>Edit</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteMessage(msg)}
+                                    className="flex w-full items-center gap-3 px-4 py-3 text-left font-mono text-sm font-black uppercase hover:bg-white/10"
+                                  >
+                                    <Trash2 size={14} className="text-white" />
+                                    <span>Delete</span>
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         <div className={`relative max-w-[65%] px-5 py-4 border-2 ${
                           isMine
                             ? "bg-[#1A1A1A] text-white border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(0,255,255,1)]"
@@ -833,43 +947,49 @@ function MessagesInner() {
                               )}
                               <p className="text-sm font-bold italic opacity-80">{msg.content}</p>
                             </div>
+                          ) : msg.message_type === 'refund_dispute' ? (
+                            <div className="flex flex-col p-4 border-2 border-[#EC008C] bg-[#EC008C]/10 min-w-[220px]">
+                              <div className="flex items-center gap-2 mb-2">
+                                <div className="w-2 h-2 bg-[#EC008C] rounded-full animate-pulse" />
+                                <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#EC008C]">Refund Dispute Sent</p>
+                              </div>
+                              <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap mb-3">{msg.content}</p>
+                              <div className="flex flex-col gap-1 border-t border-[#EC008C]/30 pt-2">
+                                {msg.metadata?.receipt_url && (
+                                  <button onClick={() => setViewImagePopup({ url: msg.metadata.receipt_url, label: 'Payment Receipt' })} className="font-mono text-[9px] uppercase font-black text-[#EC008C] flex items-center gap-1 hover:underline text-left">
+                                    📄 View Payment Receipt
+                                  </button>
+                                )}
+                                {msg.metadata?.refund_receipt_url && (
+                                  <button onClick={() => setViewImagePopup({ url: msg.metadata.refund_receipt_url, label: "Seller's Refund Proof" })} className="font-mono text-[9px] uppercase font-black text-[#EC008C] flex items-center gap-1 hover:underline text-left">
+                                    🧾 View Seller's Refund Proof
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ) : msg.message_type === 'location_pin' ? (
+                            <div className="flex flex-col p-3 border-2 border-[#00FFFF] bg-[#00FFFF]/5 min-w-[220px]">
+                              <div className="flex items-center gap-2 mb-2">
+                                <MapPin size={14} className="text-[#00FFFF]" />
+                                <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF]">Shop Location</p>
+                              </div>
+                              <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap mb-3">{msg.content}</p>
+                              {msg.metadata?.lat && msg.metadata?.lng && (
+                                <a 
+                                  href={`https://maps.google.com/?q=${msg.metadata.lat},${msg.metadata.lng}`} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer" 
+                                  className="font-mono text-[9px] uppercase font-black text-[#1A1A1A] bg-[#00FFFF] px-3 py-2 text-center hover:bg-white transition-colors"
+                                >
+                                  Open in Google Maps
+                                </a>
+                              )}
+                            </div>
                           ) : (
                             msg.content !== "[image]" && <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap word-break break-words">{msg.content}</p>
                           )}
 
-                          {isMine && !isEditing && (
-                            <>
-                              <div className="mt-2 flex justify-end">
-                                <button
-                                  type="button"
-                                  onClick={() => setMenuMessageId((prev) => (prev === msg.id ? null : msg.id))}
-                                  className={`p-1 border ${isMine ? "border-white/40" : "border-black/40"}`}
-                                  aria-label="More actions"
-                                >
-                                  <MoreVertical size={12} />
-                                </button>
-                              </div>
-
-                              {menuMessageId === msg.id && (
-                                <div className="absolute right-3 top-12 z-20 w-28 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
-                                  <button
-                                    type="button"
-                                    onClick={() => startEditMessage(msg)}
-                                    className="flex w-full items-center gap-2 px-3 py-2 text-left font-mono text-[10px] font-black uppercase hover:bg-[#00FFFF]"
-                                  >
-                                    <Pencil size={11} /> Edit
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => deleteMessage(msg)}
-                                    className="flex w-full items-center gap-2 px-3 py-2 text-left font-mono text-[10px] font-black uppercase hover:bg-[#EC008C] hover:text-white"
-                                  >
-                                    <Trash2 size={11} /> Delete
-                                  </button>
-                                </div>
-                              )}
-                            </>
-                          )}
+                          
 
                           <p className={`font-mono text-[8px] uppercase mt-2 font-black tracking-wider ${isMine ? "opacity-40 text-right" : "opacity-40"}`}>
                             {new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -894,22 +1014,22 @@ function MessagesInner() {
                   <p className="font-mono text-[9px] uppercase tracking-widest font-black opacity-50">Quick Replies — what do you want to ask?</p>
                   <div className="flex gap-2 overflow-x-auto no-scrollbar">
                   <button
-                    onClick={() => sendQuickReply("How much does this cost?")}
+                    onClick={() => sendQuickReply("hi")}
                     className="whitespace-nowrap px-4 py-2 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A] font-mono text-[10px] font-black uppercase hover:bg-[#00FFFF] transition-colors"
                   >
-                    How much?
+                    Hi
                   </button>
                   <button
-                    onClick={() => sendQuickReply("How long will I receive the order?")}
+                    onClick={() => sendQuickReply("offer")}
                     className="whitespace-nowrap px-4 py-2 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A] font-mono text-[10px] font-black uppercase hover:bg-[#FFF200] transition-colors"
                   >
-                    How long?
+                    What do you offer?
                   </button>
                   <button
-                    onClick={() => sendQuickReply("Is there a discount?")}
+                    onClick={() => sendQuickReply("location")}
                     className="whitespace-nowrap px-4 py-2 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A] font-mono text-[10px] font-black uppercase hover:bg-[#EC008C] hover:text-white transition-colors"
                   >
-                    Discount?
+                    Where are you located?
                   </button>
                   <button
                     onClick={() => setShowQuickReplies(false)}
@@ -972,6 +1092,36 @@ function MessagesInner() {
           )}
         </div>
       </div>
+      {/* ── Image Popup Modal ── */}
+      {viewImagePopup && (
+        <div className="fixed inset-0 z-[998] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)]">
+            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
+              <div className="flex items-center gap-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-[#00FFFF]" />
+                  <div className="w-2 h-2 bg-[#EC008C]" />
+                  <div className="w-2 h-2 bg-[#FFF200]" />
+                </div>
+                <span className="font-black uppercase italic tracking-widest">{viewImagePopup.label}</span>
+              </div>
+              <button onClick={() => setViewImagePopup(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 bg-gray-100 flex items-center justify-center min-h-[300px]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={viewImagePopup.url} alt={viewImagePopup.label} className="max-w-full max-h-[70vh] object-contain border-4 border-[#1A1A1A]" />
+            </div>
+            <div className="p-4 border-t-4 border-[#1A1A1A] flex justify-end">
+              <button onClick={() => setViewImagePopup(null)} className="bg-[#1A1A1A] text-white px-6 py-3 font-black uppercase text-[10px] hover:bg-[#EC008C] transition-all shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] active:shadow-none">
+                CLOSE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Jitsi In-App Modal ── */}
       {jitsiRoom && (
         <div className="fixed inset-0 z-[999] flex flex-col bg-[#1A1A1A]">

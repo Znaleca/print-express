@@ -262,6 +262,7 @@ export default function CheckoutPage({ params }) {
     if (deliveryType === "DELIVERY" && !deliveryAddress) return alert("Please provide a delivery address.");
     if (fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt) return alert("Please specify an expected date and time for your advance order.");
     if (selectedServices.length === 0) return alert("Cart is empty.");
+    if (!receiptFile) return alert("Please upload your downpayment proof before executing the order.");
 
     setIsProcessing(true);
 
@@ -421,8 +422,11 @@ export default function CheckoutPage({ params }) {
   const balanceAmount = total - downpaymentAmount;
   const isReadyToExecute =
     selectedServices.length > 0 &&
+    isCustomer &&
+    !isClosed &&
     !(deliveryType === "DELIVERY" && !deliveryAddress) &&
-    !(fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt);
+    !(fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt) &&
+    !!receiptFile;
 
   const setDownpaymentPercent = (val) => {
     setUserSelectedDownpaymentPercent(val);
@@ -630,24 +634,56 @@ export default function CheckoutPage({ params }) {
               </div>
 
               {/* STEP 4: UPLOAD RECEIPT */}
-              <div className="bg-white border-4 border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
-                <div className="bg-[#EC008C] px-6 py-4 flex items-center gap-3">
-                  <span className="font-mono text-[9px] font-black bg-white text-[#EC008C] px-2 py-1">04</span>
-                  <p className="font-black uppercase italic text-sm tracking-widest text-white">Downpayment_Proof</p>
+              <div className="overflow-hidden border-4 border-[#1A1A1A] bg-white shadow-[10px_10px_0px_0px_rgba(236,0,140,1)]">
+                <div className="bg-[#1A1A1A] px-6 py-5 text-white">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex items-center justify-center border-2 border-white bg-[#FFF200] px-2 py-1 font-mono text-[9px] font-black uppercase tracking-widest text-[#1A1A1A]">04</span>
+                      <div>
+                        <p className="font-mono text-[9px] font-black uppercase tracking-[0.35em] text-[#FFF200]">Payment_Proof</p>
+                        <p className="font-black uppercase italic text-lg tracking-[0.08em] leading-none">Downpayment or Pay Full</p>
+                      </div>
+                    </div>
+                    <div className="hidden sm:flex items-center gap-2 border-2 border-white/20 px-3 py-2 font-mono text-[9px] font-black uppercase tracking-[0.25em] text-white/70">
+                      <span className="h-2 w-2 bg-[#00FFFF]" /> Secure Upload
+                    </div>
+                  </div>
                 </div>
-                <div className="p-6">
-                  <p className="font-mono text-[10px] font-black uppercase tracking-widest mb-1 opacity-60">Upload your E-Wallet receipt for ₱{downpaymentAmount.toFixed(2)}</p>
+                <div className="p-6 bg-[#F9F9F7] space-y-4">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="border-4 border-[#1A1A1A] bg-white p-4 shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]">
+                      <p className="font-mono text-[9px] font-black uppercase tracking-[0.25em] text-black/40">Downpayment</p>
+                      <p className="mt-1 text-2xl font-black italic leading-none text-[#EC008C]">₱{downpaymentAmount.toFixed(2)}</p>
+                    </div>
+                    <div className="border-4 border-[#1A1A1A] bg-white p-4 shadow-[4px_4px_0px_0px_rgba(255,242,0,1)]">
+                      <p className="font-mono text-[9px] font-black uppercase tracking-[0.25em] text-black/40">Pay Full</p>
+                      <p className="mt-1 text-2xl font-black italic leading-none text-[#1A1A1A]">₱{total.toFixed(2)}</p>
+                    </div>
+                  </div>
+
+                  <p className="font-mono text-[10px] font-black uppercase tracking-widest opacity-60">
+                    Upload your payment proof below to continue.
+                  </p>
+                  {business.qr_url && (
+                    <button
+                      type="button"
+                      onClick={() => setShowQrModal(true)}
+                      className="inline-flex items-center justify-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] px-4 py-3 font-mono text-[10px] font-black uppercase text-white hover:bg-[#FFF200] hover:text-[#1A1A1A] transition-colors shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
+                    >
+                      <Banknote size={14} /> View QR Code to Pay
+                    </button>
+                  )}
                   <input type="file" accept="image/*" onChange={handleReceiptUpload}
-                    className="mt-3 text-xs font-mono w-full file:mr-4 file:py-2 file:px-4 file:border-2 file:border-[#1A1A1A] file:text-xs file:font-black file:uppercase file:bg-white hover:file:bg-[#FFF200] cursor-pointer"
+                    className="text-xs font-mono w-full file:mr-4 file:py-2 file:px-4 file:border-2 file:border-[#1A1A1A] file:text-xs file:font-black file:uppercase file:bg-white hover:file:bg-[#FFF200] cursor-pointer"
                   />
                   {receiptPreview && (
-                    <div className="mt-4 border-4 border-[#1A1A1A] p-2 bg-white max-w-[200px]">
+                    <div className="border-4 border-[#1A1A1A] p-2 bg-white max-w-[220px] shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={receiptPreview} alt="Receipt Preview" className="w-full h-auto object-contain" />
                     </div>
                   )}
                   {receiptFile && (
-                    <div className="mt-4 flex items-center gap-2 text-[10px] text-[#EC008C] font-black uppercase">
+                    <div className="flex items-center gap-2 text-[10px] text-[#EC008C] font-black uppercase">
                       <CheckCircle2 size={14} /> {receiptFile.name}
                     </div>
                   )}
@@ -721,13 +757,6 @@ export default function CheckoutPage({ params }) {
                     <span className="font-mono text-[10px] uppercase tracking-[0.2em] font-black text-[#EC008C]">Pay Now</span>
                     <span className="text-3xl font-black italic leading-none text-[#EC008C]">₱{downpaymentAmount.toFixed(2)}</span>
                   </div>
-                  {balanceAmount > 0 && (
-                    <div className="flex justify-between items-center mt-2">
-                      <span className="font-mono text-[9px] uppercase tracking-[0.2em] font-black opacity-40">Balance Later</span>
-                      <span className="font-mono text-sm font-black opacity-40">₱{balanceAmount.toFixed(2)}</span>
-                    </div>
-                  )}
-
                   {business.qr_url && (
                     <div className="pt-4 mt-2 border-t-2 border-dashed border-[#1A1A1A]/20">
                       <button
@@ -737,6 +766,12 @@ export default function CheckoutPage({ params }) {
                       >
                         <Banknote size={16} /> View QR Code to Pay
                       </button>
+                    </div>
+                  )}
+                  {balanceAmount > 0 && (
+                    <div className="flex justify-between items-center mt-2">
+                      <span className="font-mono text-[9px] uppercase tracking-[0.2em] font-black opacity-40">Balance Later</span>
+                      <span className="font-mono text-sm font-black opacity-40">₱{balanceAmount.toFixed(2)}</span>
                     </div>
                   )}
                 </div>
@@ -762,17 +797,22 @@ export default function CheckoutPage({ params }) {
                     Shop is currently closed. Orders are disabled.
                   </div>
                 ) : (
-                  <button
-                    onClick={handleExecuteOrder}
-                    disabled={isProcessing || !isReadyToExecute}
-                    className="w-full bg-[#1A1A1A] text-white py-6 px-6 font-black uppercase italic text-xl flex items-center justify-center gap-3 hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all shadow-[8px_8px_0px_0px_rgba(236,0,140,1)] disabled:opacity-50 disabled:shadow-none translate-y-0 active:translate-y-2 active:shadow-none group"
-                  >
-                    {isProcessing ? (
-                      <><Loader2 size={24} className="animate-spin" /> EXECUTING...</>
-                    ) : (
-                      <>EXECUTE_ORDER <ArrowRight size={24} className="group-hover:translate-x-2 transition-transform" /></>
-                    )}
-                  </button>
+                  <div className="space-y-3">
+                    <p className="font-mono text-[9px] font-black uppercase tracking-[0.25em] text-black/40 text-center px-2">
+                      Complete all required details to unlock execute order.
+                    </p>
+                    <button
+                      onClick={handleExecuteOrder}
+                      disabled={isProcessing || !isReadyToExecute}
+                      className="w-full bg-[#1A1A1A] text-white py-6 px-6 font-black uppercase italic text-xl flex items-center justify-center gap-3 hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all shadow-[8px_8px_0px_0px_rgba(236,0,140,1)] disabled:opacity-50 disabled:shadow-none translate-y-0 active:translate-y-2 active:shadow-none group"
+                    >
+                      {isProcessing ? (
+                        <><Loader2 size={24} className="animate-spin" /> EXECUTING...</>
+                      ) : (
+                        <>EXECUTE_ORDER <ArrowRight size={24} className="group-hover:translate-x-2 transition-transform" /></>
+                      )}
+                    </button>
+                  </div>
                 )}
               </div>
 

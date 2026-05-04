@@ -31,6 +31,7 @@ export default function OwnerMessagesPage() {
   const [designVersion, setDesignVersion] = useState("1");
   const [jitsiRoom, setJitsiRoom] = useState(null);
   const [videoCallRequestAlert, setVideoCallRequestAlert] = useState(false);
+  const [viewImagePopup, setViewImagePopup] = useState(null); // { url, label }
   const bottomRef = useRef(null);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -802,6 +803,26 @@ export default function OwnerMessagesPage() {
                               )}
                               <p className="text-sm font-bold italic opacity-80">{msg.content}</p>
                             </div>
+                          ) : msg.message_type === 'refund_dispute' ? (
+                            <div className="flex flex-col p-4 border-2 border-[#EC008C] bg-[#EC008C]/10 min-w-[220px]">
+                              <div className="flex items-center gap-2 mb-2">
+                                <div className="w-2 h-2 bg-[#EC008C] rounded-full animate-pulse" />
+                                <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#EC008C]">Refund Dispute</p>
+                              </div>
+                              <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap mb-3">{msg.content}</p>
+                              <div className="flex flex-col gap-1 border-t border-[#EC008C]/30 pt-2">
+                                {msg.metadata?.receipt_url && (
+                                  <button onClick={() => setViewImagePopup({ url: msg.metadata.receipt_url, label: 'Payment Receipt' })} className="font-mono text-[9px] uppercase font-black text-[#EC008C] flex items-center gap-1 hover:underline text-left">
+                                    📄 View Payment Receipt
+                                  </button>
+                                )}
+                                {msg.metadata?.refund_receipt_url && (
+                                  <button onClick={() => setViewImagePopup({ url: msg.metadata.refund_receipt_url, label: 'Refund Proof You Uploaded' })} className="font-mono text-[9px] uppercase font-black text-[#EC008C] flex items-center gap-1 hover:underline text-left">
+                                    🧾 View Refund Proof You Uploaded
+                                  </button>
+                                )}
+                              </div>
+                            </div>
                           ) : (
                             msg.content !== "[image]" && <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap word-break break-words">{msg.content}</p>
                           )}
@@ -1031,6 +1052,36 @@ export default function OwnerMessagesPage() {
           )}
         </div>
       </div>
+      {/* ── Image Popup Modal ── */}
+      {viewImagePopup && (
+        <div className="fixed inset-0 z-[998] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)]">
+            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
+              <div className="flex items-center gap-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-[#00FFFF]" />
+                  <div className="w-2 h-2 bg-[#EC008C]" />
+                  <div className="w-2 h-2 bg-[#FFF200]" />
+                </div>
+                <span className="font-black uppercase italic tracking-widest">{viewImagePopup.label}</span>
+              </div>
+              <button onClick={() => setViewImagePopup(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 bg-gray-100 flex items-center justify-center min-h-[300px]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={viewImagePopup.url} alt={viewImagePopup.label} className="max-w-full max-h-[70vh] object-contain border-4 border-[#1A1A1A]" />
+            </div>
+            <div className="p-4 border-t-4 border-[#1A1A1A] flex justify-end">
+              <button onClick={() => setViewImagePopup(null)} className="bg-[#1A1A1A] text-white px-6 py-3 font-black uppercase text-[10px] hover:bg-[#EC008C] transition-all shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] active:shadow-none">
+                CLOSE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Jitsi In-App Modal ── */}
       {jitsiRoom && (
         <div className="fixed inset-0 z-[999] flex flex-col bg-[#1A1A1A]">
