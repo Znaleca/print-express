@@ -1,18 +1,12 @@
-import { Resend } from "resend";
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import crypto from "crypto";
-
-const resend = new Resend(process.env.RESEND_API_KEY);
-
-// Use Service Role Key to bypass RLS for inserting OTPs securely
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+import { getSupabaseAdminClient } from "@/lib/supabaseAdmin";
+import { sendResendEmail } from "@/lib/resendEmail";
 
 export async function POST(request) {
   try {
+    const supabase = getSupabaseAdminClient();
+
     const { email, type, fullName } = await request.json();
 
     if (!email || !type) {
@@ -63,7 +57,7 @@ export async function POST(request) {
       ? "Use the code below to verify your email address and complete your registration." 
       : "Use the code below to securely reset your password.";
 
-    const { error: emailError } = await resend.emails.send({
+    const { error: emailError } = await sendResendEmail({
       from: process.env.EMAIL_FROM || "Press & Present <noreply@pressandpresent.me>",
       to: [email],
       subject: `[Press & Present] ${subject}: ${otpCode}`,

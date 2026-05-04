@@ -1,7 +1,5 @@
-import { Resend } from "resend";
 import { NextResponse } from "next/server";
-
-const resend = new Resend(process.env.RESEND_API_KEY);
+import { sendResendEmail } from "@/lib/resendEmail";
 
 export async function POST(request) {
   try {
@@ -11,7 +9,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    const { data, error } = await resend.emails.send({
+    const { data, error } = await sendResendEmail({
       from: process.env.EMAIL_FROM || "Press & Present <noreply@pressandpresent.me>",
       to: [ownerEmail],
       subject: `🎉 Your business "${businessName}" has been approved!`,
