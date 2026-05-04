@@ -8,6 +8,7 @@ import {
   CreditCard, AlertCircle, MapPin, Truck, X, ShoppingBag, Printer
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import ReceiptModal from "@/components/ReceiptModal";
 
 const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker"), { ssr: false });
 
@@ -32,6 +33,7 @@ export default function OwnerOrdersPage() {
   const [toast, setToast] = useState(null);
   const [viewMapOrder, setViewMapOrder] = useState(null);
   const [cancelModal, setCancelModal] = useState(null); // { orderId }
+  const [viewReceipt, setViewReceipt] = useState(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
 
@@ -44,7 +46,7 @@ export default function OwnerOrdersPage() {
 
       const { data: biz } = await supabase
         .from("businesses")
-        .select("id")
+        .select("id, name, address, phone")
         .eq("owner_id", user.id)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -57,7 +59,10 @@ export default function OwnerOrdersPage() {
           .eq("business_id", biz.id)
           .order("created_at", { ascending: false });
 
-        if (ordersData) setOrders(ordersData);
+        if (ordersData) {
+           const ordersWithBiz = ordersData.map(o => ({ ...o, businesses: biz }));
+           setOrders(ordersWithBiz);
+        }
 
         // Realtime Subscription
         subscription = supabase
@@ -72,10 +77,12 @@ export default function OwnerOrdersPage() {
             },
             (payload) => {
               if (payload.eventType === "INSERT") {
-                setOrders((prev) => [payload.new, ...prev]);
+                const newOrder = { ...payload.new, businesses: biz };
+                setOrders((prev) => [newOrder, ...prev]);
               } else if (payload.eventType === "UPDATE") {
+                const updatedOrder = { ...payload.new, businesses: biz };
                 setOrders((prev) =>
-                  prev.map((o) => (o.id === payload.new.id ? payload.new : o))
+                  prev.map((o) => (o.id === payload.new.id ? updatedOrder : o))
                 );
               }
             }
@@ -290,6 +297,12 @@ export default function OwnerOrdersPage() {
                       <span className="bg-[#1A1A1A] text-[#FFF200] px-2 py-0.5 font-bold tracking-tighter">
                         #{order.id.split('-')[0].toUpperCase()}
                       </span>
+                      <button 
+                        onClick={() => setViewReceipt(order)}
+                        className="mt-2 text-[9px] bg-white border border-black px-2 py-1 flex items-center gap-1 hover:bg-gray-200 transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:shadow-none"
+                      >
+                        <Printer size={10} /> View Receipt
+                      </button>
                     </td>
 
                     <td className="p-4 min-w-[200px]">
@@ -580,6 +593,15 @@ export default function OwnerOrdersPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── RECEIPT MODAL ── */}
+      {viewReceipt && (
+        <ReceiptModal 
+          order={viewReceipt} 
+          onClose={() => setViewReceipt(null)} 
+          isOwner={true} 
+        />
       )}
     </main>
   );

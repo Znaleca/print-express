@@ -1,27 +1,27 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import OwnerSidebar from "@/components/owner/OwnerSidebar";
 import {
   ShieldAlert, ShieldCheck, Loader2, Construction, Activity,
   CheckCircle, XCircle, Clock, Upload, AlertCircle,
-  RefreshCcw, FileText, Hash, Trash2, Pencil, X
+  RefreshCcw, FileText, Hash, Trash2, Pencil, X, Lock
 } from "lucide-react";
 
-const REQUIRED_DOCS = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID", "TIN_NUMBER"];
+const REQUIRED_DOCS = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID"];
 
 const DOC_META = {
   DTI:           { label: "DTI Certificate",  color: "#00FFFF", textColor: "#1A1A1A" },
   MAYORS_PERMIT: { label: "Mayor's Permit",    color: "#EC008C", textColor: "#ffffff" },
   BIR:           { label: "BIR Certificate",   color: "#FFF200", textColor: "#1A1A1A" },
-  VALID_ID:      { label: "Valid ID (Owner)",  color: "#1A1A1A", textColor: "#ffffff" },
-  TIN_NUMBER:    { label: "TIN Number",        color: "#EC008C", textColor: "#ffffff" },
+  VALID_ID:      { label: "Valid ID",          color: "#1A1A1A", textColor: "#ffffff" },
 };
 
 export default function OwnerLayout({ children }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [state, setState]           = useState("checking");
   const [businessName, setBusinessName] = useState("");
   const [businessId, setBusinessId]   = useState(null);
@@ -29,6 +29,8 @@ export default function OwnerLayout({ children }) {
   const [docStatuses, setDocStatuses] = useState([]);
   const [mounted, setMounted]         = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [pendingOrders, setPendingOrders] = useState(0);
+  const [unreadMessages, setUnreadMessages] = useState(0);
 
   // Re-upload state per doc
   const [reuploadFiles, setReuploadFiles]       = useState({});
@@ -78,7 +80,7 @@ export default function OwnerLayout({ children }) {
           .select("id, name").single();
         setBusinessName(created?.name || "");
         setBusinessId(created?.id);
-        setState("pending");
+        setState("unverified");
         return;
       }
 
@@ -91,25 +93,69 @@ export default function OwnerLayout({ children }) {
         return;
       }
 
-      // Fetch document statuses
-      const docs = await loadDocs(business.id);
-      setDocStatuses(docs);
-
-      if (docs.length === 0) {
-        setState("docs_action_required");
-        return;
-      }
-
-      const hasRejected = docs.some((d) => d.status === "REJECTED");
-      if (hasRejected || docs.length < 5) {
-        setState("docs_action_required");
-      } else {
-        setState("docs_pending");
-      }
+      // Not yet approved — show portal but restrict navigation
+      setState("unverified");
     };
 
     run();
   }, [router, loadDocs]);
+
+  // Fetch badge counts when businessId is available
+  useEffect(() => {
+    if (!businessId || !userId) return;
+
+    const fetchCounts = async () => {
+      // Pending orders count
+      const { count: oCount } = await supabase
+        .from("orders")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId)
+        .eq("status", "PENDING");
+      setPendingOrders(oCount || 0);
+
+      // Unread messages — match exactly how /owner/messages counts them:
+      // 1. get all conversations for this business
+      const { data: convRows } = await supabase
+        .from("chat_conversations")
+        .select("id")
+        .eq("business_id", businessId);
+      const convIds = (convRows || []).map(c => c.id);
+
+      if (convIds.length > 0) {
+        // 2. count unread messages NOT sent by the owner (same logic as messages page)
+        const { count: mCount } = await supabase
+          .from("chat_messages")
+          .select("id", { count: "exact", head: true })
+          .in("conversation_id", convIds)
+          .eq("is_read", false)
+          .neq("sender_id", userId);
+        setUnreadMessages(mCount || 0);
+      } else {
+        setUnreadMessages(0);
+      }
+    };
+
+    fetchCounts();
+
+    // Subscribe to realtime changes for live badge updates
+    const channel = supabase.channel(`owner_layout_badges:${businessId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `business_id=eq.${businessId}` }, () => {
+        fetchCounts();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_messages' }, () => {
+        // We refetch counts when any chat message changes, as we can't easily filter by business_id in the channel config for this table
+        fetchCounts();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [businessId, userId]);
+
+  // URL protection: instead of redirecting, we will show a watermark overlay
+  const ALLOWED_UNVERIFIED = ["/owner", "/owner/documents"];
+  const isLockedPage = state === "unverified" && !ALLOWED_UNVERIFIED.includes(pathname);
 
   useEffect(() => {
     return () => {
@@ -586,25 +632,44 @@ export default function OwnerLayout({ children }) {
       action={{ label: "Return_to_Nexus", onClick: () => router.push("/browse") }} />
   );
 
-  if (state === "pending") return (
-    <GateUI icon={Construction} title="Awaiting Validation"
-      message={`[${businessName}] is in the verification queue. Submit your business documents and an admin will review them.`}
-      badge="LOCKED" type="pending" />
-  );
+  const isVerified = state === "approved";
 
-  if (state === "docs_pending" || state === "docs_action_required") return <DocReviewGate />;
-
-  /* ── APPROVED PORTAL ── */
+  /* ── PORTAL (all verified and unverified owners) ── */
   return (
     <div className="flex min-h-[calc(100vh-80px)] bg-[radial-gradient(circle_at_top_left,rgba(0,255,255,0.14),transparent_28%),radial-gradient(circle_at_top_right,rgba(236,0,140,0.12),transparent_24%),linear-gradient(180deg,#fdfdfd_0%,#f7f7f4_100%)]">
       <OwnerSidebar
         businessName={businessName}
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen((current) => !current)}
+        isVerified={isVerified}
+        pendingOrders={pendingOrders}
+        unreadMessages={unreadMessages}
       />
-      <main className="min-w-0 flex-1 overflow-y-auto">
-        <div className="min-h-full w-full">
-          {children}
+      <main className="min-w-0 flex-1 overflow-y-auto relative">
+        <div className="min-h-full w-full relative">
+          {isLockedPage ? (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#FDFDFD]/90 backdrop-blur-sm">
+               <div className="text-center p-12 border-8 border-[#1A1A1A] bg-white shadow-[20px_20px_0px_0px_rgba(236,0,140,1)] max-w-2xl relative overflow-hidden">
+                 <div className="absolute top-0 right-0 w-32 h-32 bg-[#EC008C] opacity-10 rotate-45 transform translate-x-16 -translate-y-16" />
+                 
+                 <Lock className="w-24 h-24 mx-auto text-[#EC008C] mb-8" />
+                 <h2 className="text-5xl md:text-6xl font-black uppercase tracking-tighter mb-6 italic leading-none">
+                   SHOP<br/><span className="text-[#EC008C]">LOCKED</span>
+                 </h2>
+                 <p className="font-mono text-sm uppercase tracking-[0.2em] text-gray-600 mb-10 leading-relaxed border-l-4 border-[#EC008C] pl-4 text-left">
+                   This module is restricted. You must complete your business document verification to unlock shop management tools, inventory, and messaging.
+                 </p>
+                 <button 
+                   onClick={() => router.push('/owner/documents')} 
+                   className="w-full bg-[#1A1A1A] text-white px-8 py-6 font-black uppercase tracking-widest text-lg hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all shadow-[6px_6px_0px_0px_rgba(0,255,255,1)] active:shadow-none active:translate-x-1 active:translate-y-1"
+                 >
+                   VERIFY DOCUMENTS NOW
+                 </button>
+               </div>
+            </div>
+          ) : (
+            children
+          )}
         </div>
       </main>
     </div>

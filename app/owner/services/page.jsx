@@ -124,19 +124,20 @@ export default function ServicesPage() {
     const isProduct = values.item_type === "product";
 
     const payload = {
-      business_id: businessId,
-      item_type:   values.item_type || "service",
-      name:        values.name,
-      description: values.description || null,
-      price:       parseFloat(values.price) || 0,
-      price_max:   (!isProduct && values.price_max !== "" && values.price_max != null)
-                     ? parseFloat(values.price_max)
-                     : null,
-      category:    values.category || null,
-      available:   values.available !== false,
-      image_url:   imageUrl,
-      stock_qty:   isProduct ? (parseInt(values.stock_qty, 10) || 0) : 0,
-      updated_at:  new Date().toISOString(),
+      business_id:     businessId,
+      item_type:       values.item_type || "service",
+      name:            values.name,
+      description:     values.description || null,
+      price:           parseFloat(values.price) || 0,
+      price_max:       (!isProduct && values.price_max !== "" && values.price_max != null)
+                         ? parseFloat(values.price_max)
+                         : null,
+      category:        values.category || null,
+      available:       values.available !== false,
+      image_url:       imageUrl,
+      stock_qty:       isProduct ? (parseInt(values.stock_qty, 10) || 0) : 0,
+      is_customizable: isProduct ? (values.is_customizable === true) : false,
+      updated_at:      new Date().toISOString(),
     };
 
     if (modal?.mode === "edit" && modal.item?.id) {
@@ -399,6 +400,12 @@ export default function ServicesPage() {
                       {isProduct && (
                         <span className="inline-flex items-center border-2 border-[#1A1A1A] px-2 py-1 font-mono text-[9px] font-black uppercase tracking-[0.12em] bg-[#FFF200] text-[#1A1A1A]">
                           Stock {Math.max(0, Number(item.stock_qty || 0))}
+                        </span>
+                      )}
+                      {/* Customizable badge */}
+                      {isProduct && item.is_customizable && (
+                        <span className="inline-flex items-center gap-1 border-2 border-[#EC008C] px-2 py-1 font-mono text-[9px] font-black uppercase tracking-[0.12em] bg-[#EC008C] text-white">
+                          ✦ Customizable
                         </span>
                       )}
                     </div>

@@ -14,6 +14,8 @@ export default function LoginPage() {
   
   const [isResetMode, setIsResetMode] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  const [resetOtp, setResetOtp] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
   const getReadableError = (err) => {
@@ -24,19 +26,54 @@ export default function LoginPage() {
     return err.message || "SYSTEM_ERROR: UNEXPECTED_PROTOCOL_FAILURE";
   };
 
-  const handleResetPassword = async (e) => {
+  const handleSendResetOtp = async (e) => {
     e.preventDefault();
     if (!formData.email) return;
     setLoading(true);
     setError(null);
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(formData.email, {
-        redirectTo: `${process.env.NEXT_PUBLIC_URL || window.location.origin}/reset-password`,
+      const res = await fetch("/api/auth/send-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: formData.email.trim().toLowerCase(), type: "reset" })
       });
-      if (error) throw error;
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to dispatch recovery code.");
       setResetSent(true);
     } catch (err) {
       setError(err.message || "Failed to dispatch recovery link.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyReset = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/auth/verify-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          email: formData.email.trim().toLowerCase(), 
+          code: resetOtp, 
+          type: "reset", 
+          password: newPassword 
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Reset failed.");
+      
+      // Success! Reset states and tell user to log in.
+      setIsResetMode(false);
+      setResetSent(false);
+      setResetOtp("");
+      setNewPassword("");
+      setFormData({ ...formData, password: "" });
+      alert("Password updated successfully. Please log in with your new password.");
+    } catch (err) {
+      setError(err.message || "Failed to reset password.");
     } finally {
       setLoading(false);
     }
@@ -164,19 +201,35 @@ export default function LoginPage() {
           {resetSent ? (
             <div className="p-8 border-4 border-[#1A1A1A] bg-white text-center shadow-[12px_12px_0px_0px_rgba(26,26,26,1)]">
               <ShieldCheck className="w-16 h-16 text-[#00FFFF] mx-auto mb-6" />
-              <h2 className="text-3xl font-black uppercase tracking-tighter mb-4">Transmission_Sent</h2>
-              <p className="font-mono text-[10px] uppercase opacity-60 mb-8 leading-relaxed">
-                If the identity <span className="font-bold text-black border-b-2 border-[#00FFFF]">{formData.email}</span> exists in the registry, a secure reset link has been dispatched.
+              <h2 className="text-3xl font-black uppercase tracking-tighter mb-4">ENTER_CODE</h2>
+              <p className="font-mono text-[10px] uppercase opacity-60 mb-6 leading-relaxed">
+                A 6-digit recovery code has been dispatched to <span className="font-bold text-black border-b-2 border-[#00FFFF]">{formData.email}</span>.
               </p>
-              <button
-                onClick={() => { setResetSent(false); setIsResetMode(false); }}
-                className="w-full bg-[#1A1A1A] text-white py-4 font-black text-xs uppercase tracking-widest hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-colors"
-              >
-                RETURN TO SYSTEM ACCESS
+              <form onSubmit={handleVerifyReset} className="space-y-6 text-left">
+                <div>
+                  <label className="block font-mono text-[10px] uppercase tracking-[0.2em] mb-1 font-bold">6-Digit Code</label>
+                  <input type="text" required maxLength={6} value={resetOtp} onChange={(e) => setResetOtp(e.target.value.replace(/\D/g, ''))}
+                    className="w-full bg-transparent border-b-4 border-[#1A1A1A]/10 py-3 text-center text-3xl font-black tracking-[0.5em] outline-none focus:border-[#00FFFF] transition-colors" 
+                    placeholder="000000" />
+                </div>
+                <div>
+                  <label className="block font-mono text-[10px] uppercase tracking-[0.2em] mb-1 font-bold">New Password</label>
+                  <input type="password" required value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full bg-transparent border-b-4 border-[#1A1A1A]/10 py-3 text-xl font-black outline-none focus:border-[#00FFFF] transition-all"
+                    placeholder="••••••••" />
+                </div>
+                <button type="submit" disabled={loading || resetOtp.length !== 6 || newPassword.length < 8}
+                  className="w-full bg-[#1A1A1A] text-white py-4 font-black text-xs uppercase tracking-widest hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-colors disabled:opacity-50">
+                  {loading ? <Loader2 className="w-5 h-5 mx-auto animate-spin" /> : "VERIFY AND RESET"}
+                </button>
+              </form>
+              <button onClick={() => { setResetSent(false); setResetOtp(""); setNewPassword(""); }}
+                className="mt-6 text-[9px] font-mono uppercase underline opacity-50 hover:opacity-100">
+                Cancel
               </button>
             </div>
           ) : (
-            <form onSubmit={isResetMode ? handleResetPassword : handleSubmit} className="space-y-8">
+            <form onSubmit={isResetMode ? handleSendResetOtp : handleSubmit} className="space-y-8">
               <div className="group">
                 <label className="block font-mono text-[10px] uppercase tracking-[0.2em] mb-1 text-gray-400 font-bold flex justify-between">
                   <span>Email</span>

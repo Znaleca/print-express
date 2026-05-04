@@ -25,6 +25,44 @@ export default function LiveChatWidget() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Fetch unread count for customers and keep it live
+  useEffect(() => {
+    if (!user || role === "BUSINESS_OWNER" || role === "SUPER_ADMIN") return;
+
+    const fetchUnread = async () => {
+      const { data: convs } = await supabase
+        .from("chat_conversations")
+        .select("id")
+        .eq("customer_id", user.id);
+      
+      const convIds = (convs || []).map(c => c.id);
+      if (convIds.length > 0) {
+        const { count } = await supabase
+          .from("chat_messages")
+          .select("id", { count: "exact", head: true })
+          .in("conversation_id", convIds)
+          .eq("is_read", false)
+          .neq("sender_id", user.id);
+        setUnread(count || 0);
+      } else {
+        setUnread(0);
+      }
+    };
+
+    fetchUnread();
+
+    // Subscribe to any message changes to recount
+    const channel = supabase.channel(`customer_badge:${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_messages' }, () => {
+        fetchUnread();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, role]);
+
   // Hide on the messages page itself (no need for shortcut)
   if (pathname === "/messages") return null;
 

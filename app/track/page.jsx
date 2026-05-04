@@ -8,6 +8,7 @@ import {
   Loader2, AlertTriangle, FileText, ShoppingBag,
   Star, Activity, Terminal, Package, XCircle, RefreshCcw, Upload, Eye
 } from "lucide-react";
+import ReceiptModal from "@/components/ReceiptModal";
 
 // Updated Status Map with exact requested labels
 const STATUS_MAP = {
@@ -34,6 +35,7 @@ export default function TrackOrderPage() {
   const [cancelModal, setCancelModal] = useState(null); // { orderId }  
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [viewReceipt, setViewReceipt] = useState(null);
 
   useEffect(() => {
     let isActive = true;
@@ -320,7 +322,15 @@ export default function TrackOrderPage() {
                         <div className="grid grid-cols-2 gap-4">
                           <div className="space-y-1">
                             <p className="font-mono text-[8px] uppercase tracking-widest opacity-40 font-black">Request_ID</p>
-                            <p className="font-mono text-[10px] font-black truncate bg-[#1A1A1A] text-white px-2 py-1">#{order.id.split('-')[0]}</p>
+                            <div className="flex gap-2">
+                               <p className="font-mono text-[10px] font-black truncate bg-[#1A1A1A] text-white px-2 py-1">#{order.id.split('-')[0]}</p>
+                               <button 
+                                 onClick={() => setViewReceipt(order)}
+                                 className="font-mono text-[10px] font-black bg-white text-black border-2 border-black px-2 py-1 hover:bg-[#00FFFF] transition-colors flex items-center gap-1 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:shadow-none"
+                               >
+                                 <Printer size={12} /> Receipt
+                               </button>
+                            </div>
                           </div>
                           <div className="space-y-1">
                             <p className="font-mono text-[8px] uppercase tracking-widest opacity-40 font-black">Assets_Attached</p>
@@ -541,6 +551,15 @@ export default function TrackOrderPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── RECEIPT MODAL ── */}
+      {viewReceipt && (
+        <ReceiptModal 
+          order={viewReceipt} 
+          onClose={() => setViewReceipt(null)} 
+          isOwner={false} 
+        />
       )}
     </main>
   );

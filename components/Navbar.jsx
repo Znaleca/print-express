@@ -27,6 +27,15 @@ export default function Navbar() {
 
   useEffect(() => {
     let mounted = true;
+
+    // Redirect to auth/confirm if Supabase defaulted to the home page after signup
+    if (typeof window !== "undefined" && window.location.hash.includes("type=signup")) {
+      if (!window.location.pathname.includes("/auth/confirm")) {
+        router.push("/auth/confirm" + window.location.hash);
+        return;
+      }
+    }
+
     const loadUser = async () => {
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       if (!mounted) return;

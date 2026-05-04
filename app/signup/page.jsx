@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -22,7 +22,6 @@ const DOC_TYPES = [
   { key: "MAYORS_PERMIT", label: "Mayor's Permit",     desc: "Local government business permit",        color: "#EC008C",  textColor: "#ffffff", type: "file" },
   { key: "BIR",           label: "BIR Certificate",    desc: "Bureau of Internal Revenue registration", color: "#FFF200",  textColor: "#1A1A1A", type: "file" },
   { key: "VALID_ID",      label: "Valid ID (Owner)",   desc: "Government-issued ID of business owner",  color: "#1A1A1A",  textColor: "#ffffff", type: "file" },
-  { key: "TIN_NUMBER",    label: "TIN Number",         desc: "Tax Identification Number",               color: "#EC008C",  textColor: "#ffffff", type: "text" },
 ];
 
 export default function SignUpPage() {
@@ -38,14 +37,42 @@ export default function SignUpPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  // Step 2
-  const [createdBusinessId, setCreatedBusinessId] = useState(null);
-  const [createdUserId, setCreatedUserId] = useState(null);
-  const [docFiles, setDocFiles] = useState({});
-  const [tinNumber, setTinNumber] = useState("");
-  const [uploadingDocs, setUploadingDocs] = useState(false);
-  const [docError, setDocError] = useState(null);
-  const [uploadProgress, setUploadProgress] = useState({});
+  // OTP State
+  const [showOtp, setShowOtp] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpError, setOtpError] = useState(null);
+  const [otpLoading, setOtpLoading] = useState(false);
+
+  // Live Email Validation State
+  const [emailStatus, setEmailStatus] = useState(null); // 'checking', 'taken', 'available', null
+  const [emailCheckLoading, setEmailCheckLoading] = useState(false);
+
+  useEffect(() => {
+    const email = formData.email.trim();
+    if (!email || !email.includes("@") || !email.includes(".")) {
+      setEmailStatus(null);
+      return;
+    }
+
+    setEmailCheckLoading(true);
+    const timeoutId = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/auth/check-email?email=${encodeURIComponent(email)}`);
+        const data = await res.json();
+        if (data.exists) {
+          setEmailStatus("taken");
+        } else {
+          setEmailStatus("available");
+        }
+      } catch (err) {
+        setEmailStatus(null);
+      } finally {
+        setEmailCheckLoading(false);
+      }
+    }, 600); // 600ms debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [formData.email]);
 
   const passwordRequirements = {
     length:  formData.password.length >= 8,
@@ -57,9 +84,11 @@ export default function SignUpPage() {
 
   const handleChange = (e) => setFormData((p) => ({ ...p, [e.target.name]: e.target.value }));
 
-  /* ── STEP 1 SUBMIT ── */
+  /* ── STEP 1 SUBMIT (SEND OTP) ── */
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (emailStatus === "taken") return; // Prevent submission if email is taken
+    
     setLoading(true);
     setError(null);
 
@@ -70,48 +99,20 @@ export default function SignUpPage() {
     }
 
     try {
-      const signUpData = {
-        email: formData.email.trim().toLowerCase(),
-        password: formData.password,
-        options: {
-          emailRedirectTo: `${process.env.NEXT_PUBLIC_URL || window.location.origin}/auth/confirm`,
-          data: { full_name: `${formData.firstName.trim()} ${formData.lastName.trim()}`.trim(), role },
-        },
-      };
-      if (role === "BUSINESS_OWNER") signUpData.options.data.business_name = formData.businessName;
+      const res = await fetch("/api/auth/send-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: formData.email.trim().toLowerCase(),
+          type: "signup",
+          fullName: `${formData.firstName.trim()} ${formData.lastName.trim()}`.trim()
+        })
+      });
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to send code.");
 
-      const { data, error: signUpError } = await supabase.auth.signUp(signUpData);
-      if (signUpError) throw signUpError;
-
-      if (role === "BUSINESS_OWNER" && data?.user?.id) {
-        // If no session exists (e.g. Email confirmation is required), skip to success screen
-        if (!data.session) {
-           setSuccess(true);
-           return;
-        }
-
-        // Business row is auto-created via backend trigger. Wait briefly and select it.
-        let biz = null;
-        for (let i = 0; i < 4; i++) {
-          const { data: bData } = await supabase
-            .from("businesses")
-            .select("id")
-            .eq("owner_id", data.user.id)
-            .single();
-          if (bData) { biz = bData; break; }
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-
-        if (!biz) {
-          throw new Error("Could not retrieve created business profile. Proceed to login to complete verification.");
-        }
-
-        setCreatedBusinessId(biz.id);
-        setCreatedUserId(data.user.id);
-        setStep(2);
-      } else {
-        setSuccess(true);
-      }
+      setShowOtp(true);
     } catch (err) {
       setError(err.message || "Protocol Error.");
     } finally {
@@ -119,28 +120,98 @@ export default function SignUpPage() {
     }
   };
 
-  /* ── SUCCESS SCREEN ── */
-  if (success) {
+  /* ── VERIFY OTP & REGISTER ── */
+  const handleVerifyOtp = async (e) => {
+    e.preventDefault();
+    setOtpLoading(true);
+    setOtpError(null);
+
+    try {
+      const userData = { full_name: `${formData.firstName.trim()} ${formData.lastName.trim()}`.trim(), role };
+      if (role === "BUSINESS_OWNER") userData.business_name = formData.businessName;
+
+      const res = await fetch("/api/auth/verify-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: formData.email.trim().toLowerCase(),
+          code: otpCode,
+          type: "signup",
+          password: formData.password,
+          userData
+        })
+      });
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Verification failed.");
+
+      // Automatically sign them in now that they exist
+      const { data: authData, error: signInError } = await supabase.auth.signInWithPassword({
+        email: formData.email.trim().toLowerCase(),
+        password: formData.password,
+      });
+
+      if (signInError) throw signInError;
+
+      // Redirect based on role
+      if (role === "BUSINESS_OWNER") {
+        router.push("/owner/documents");
+      } else {
+        router.push("/browse");
+      }
+
+    } catch (err) {
+      setOtpError(err.message || "Invalid code.");
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  /* ── OTP SCREEN ── */
+  if (showOtp) {
     return (
       <main className="min-h-screen bg-[#FDFDFD] text-[#1A1A1A] font-sans flex items-center justify-center p-8">
         <div className="w-full max-w-lg p-10 border-8 border-[#1A1A1A] bg-white shadow-[20px_20px_0px_0px_rgba(0,255,255,1)]">
           <div className="w-16 h-16 bg-[#1A1A1A] mb-8 flex items-center justify-center">
-            {role === "BUSINESS_OWNER" ? <CheckCircle className="text-[#00FFFF] w-8 h-8" /> : <Mail className="text-[#FFF200] w-8 h-8" />}
+            <Mail className="text-[#00FFFF] w-8 h-8" />
           </div>
           <div className="w-12 h-1 mb-6 flex gap-1">
             <div className="flex-1 bg-[#00FFFF]" /><div className="flex-1 bg-[#EC008C]" /><div className="flex-1 bg-[#FFF200]" />
           </div>
           <h2 className="text-5xl font-black uppercase tracking-tighter mb-4 leading-none">
-            VERIFY_EMAIL
+            ENTER_CODE
           </h2>
           <p className="font-mono text-[11px] uppercase mb-10 leading-relaxed text-gray-500">
-            {role === "BUSINESS_OWNER"
-              ? `Your account has been created for [${formData.businessName}]! Please verify your email via the link sent to your inbox. Once verified, log in to complete your business document verification.`
-              : <>A secure link has been dispatched to:{" "}<span className="text-[#1A1A1A] font-bold border-b-2 border-[#EC008C]">{formData.email}</span></>}
+            A 6-digit verification code has been dispatched to:{" "}
+            <span className="text-[#1A1A1A] font-bold border-b-2 border-[#EC008C]">{formData.email}</span>
           </p>
-          <Link href="/login" className="flex items-center justify-center w-full py-5 bg-[#1A1A1A] text-white font-black uppercase tracking-widest hover:bg-[#EC008C] transition-all shadow-[6px_6px_0px_0px_rgba(236,0,140,1)] active:shadow-none">
-            Go to Login <ArrowRight size={18} className="ml-3" />
-          </Link>
+
+          <form onSubmit={handleVerifyOtp} className="space-y-6">
+            <div>
+              <input type="text" required maxLength={6} value={otpCode} onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                className="w-full bg-transparent border-b-4 border-[#1A1A1A] py-4 text-center text-4xl font-black tracking-[0.5em] outline-none focus:border-[#EC008C] transition-colors" 
+                placeholder="000000" />
+            </div>
+
+            {otpError && (
+              <div className="p-4 border-2 border-[#EC008C] font-mono text-[10px] text-[#EC008C] uppercase font-bold flex items-center gap-2">
+                <AlertCircle size={14} /> {otpError}
+              </div>
+            )}
+
+            <button type="submit" disabled={otpLoading || otpCode.length !== 6}
+              className="w-full bg-[#1A1A1A] text-white py-5 font-black text-lg flex items-center justify-center gap-4 hover:bg-[#00FFFF] hover:text-black transition-all disabled:opacity-50 shadow-[8px_8px_0px_0px_rgba(26,26,26,1)] active:translate-x-1 active:translate-y-1 active:shadow-none">
+              {otpLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : (
+                <>VERIFY CODE <ArrowRight className="w-6 h-6" /></>
+              )}
+            </button>
+            
+            <div className="text-center mt-6">
+              <button type="button" onClick={() => setShowOtp(false)} className="font-mono text-[10px] uppercase underline opacity-50 hover:opacity-100">
+                Wrong email? Go back
+              </button>
+            </div>
+          </form>
         </div>
       </main>
     );
@@ -252,10 +323,22 @@ export default function SignUpPage() {
                       className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm font-bold outline-none focus:border-[#EC008C]" placeholder="Last" />
                   </div>
                 </div>
-                <div>
+                <div className="relative">
                   <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">Email</label>
                   <input name="email" type="email" required value={formData.email} onChange={handleChange}
-                    className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm font-bold outline-none focus:border-[#EC008C] lowercase" placeholder="your@email.com" />
+                    className={`w-full bg-transparent border-b-2 py-2 text-sm font-bold outline-none lowercase transition-colors ${
+                      emailStatus === "taken" ? "border-red-500 focus:border-red-500 text-red-600" 
+                      : emailStatus === "available" ? "border-green-500 focus:border-green-500" 
+                      : "border-gray-200 focus:border-[#EC008C]"
+                    }`} 
+                    placeholder="your@email.com" />
+                  
+                  {/* Live validation feedback */}
+                  <div className="absolute -bottom-5 left-0 font-mono text-[9px] uppercase font-bold tracking-widest">
+                    {emailCheckLoading && <span className="text-gray-400 flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> Checking...</span>}
+                    {emailStatus === "taken" && !emailCheckLoading && <span className="text-red-500">⚠ EMAIL ALREADY IN USE</span>}
+                    {emailStatus === "available" && !emailCheckLoading && <span className="text-green-500">✓ EMAIL AVAILABLE</span>}
+                  </div>
                 </div>
 
 
@@ -295,7 +378,7 @@ export default function SignUpPage() {
                   </div>
                 )}
 
-                <button type="submit" disabled={loading}
+                <button type="submit" disabled={loading || emailStatus === "taken"}
                   className="w-full bg-[#1A1A1A] text-white py-5 font-black text-lg flex items-center justify-center gap-4 hover:bg-[#EC008C] transition-all disabled:opacity-50 shadow-[8px_8px_0px_0px_rgba(236,0,140,1)] active:translate-x-1 active:translate-y-1 active:shadow-none">
                   {loading ? <Loader2 className="w-6 h-6 animate-spin" /> : (
                     <>REGISTER <ArrowRight className="w-6 h-6" /></>

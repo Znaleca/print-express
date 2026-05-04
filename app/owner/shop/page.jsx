@@ -14,7 +14,6 @@ const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker")
 const FIELDS = [
   { key: "name", label: "Business Name", type: "text", placeholder: "e.g. Quick Print Co." },
   { key: "description", label: "Description", type: "area", placeholder: "Describe your shop and what makes you great…" },
-  { key: "address", label: "Address", type: "text", placeholder: "123 Print Street, City, Province" },
   { key: "phone", label: "Phone Number", type: "text", placeholder: "+63 912 345 6789" },
   { key: "email", label: "Business Email", type: "email", placeholder: "hello@yourshop.com" },
   { key: "website", label: "Website URL", type: "url", placeholder: "https://yourshop.com" },
@@ -304,6 +303,26 @@ export default function ShopProfilePage() {
   const handleSave = async (e) => {
     e.preventDefault();
     if (!businessId) return;
+
+    // VALIDATION
+    const missingFields = [];
+    for (const field of FIELDS) {
+      if (!form[field.key] || form[field.key].toString().trim() === "") {
+        missingFields.push(field.label);
+      }
+    }
+
+    if (!form.address || form.address.trim() === "") missingFields.push("Address");
+    if (!form.logo_url && !logoFile) missingFields.push("Shop Banner (Logo)");
+    if (!form.qr_url && !qrFile) missingFields.push("QR Code for Payment");
+    if (!form.lat || !form.lng) missingFields.push("Store Location (Pin Map)");
+
+    if (missingFields.length > 0) {
+      setToast({ type: "error", msg: `Please provide: ${missingFields.join(', ')}` });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     setSaving(true);
     setToast(null);
 
@@ -639,24 +658,6 @@ export default function ShopProfilePage() {
                       rows={4}
                       className={`${inputClass} resize-y`}
                     />
-                  ) : key === "address" ? (
-                    <div className="flex gap-2">
-                      <input
-                        id={`field-${key}`}
-                        type={type}
-                        value={form[key]}
-                        onChange={(e) => handleChange(key, e.target.value)}
-                        placeholder={placeholder}
-                        className={`${inputClass} flex-1`}
-                      />
-                      <button
-                        type="button"
-                        onClick={geocodeAddress}
-                        className="inline-flex items-center justify-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] px-4 py-2 font-mono text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-[#00FFFF] hover:text-[#1A1A1A] whitespace-nowrap"
-                      >
-                        <MapPin size={14} /> Pin Map
-                      </button>
-                    </div>
                   ) : (
                     <input
                       id={`field-${key}`}
@@ -792,8 +793,27 @@ export default function ShopProfilePage() {
 
         {/* ── Location Picker (Bottom) ── */}
         <div className="pt-6 border-t-2 border-[#1A1A1A]/10">
-          <label className={fieldLabelClass}>Store Location (Map)</label>
-          <p className="text-xs text-gray-500 mb-4">Click on the map to accurately place your store. This keeps your address field above perfectly synced.</p>
+          <label className={fieldLabelClass} htmlFor="field-address">Store Location & Map</label>
+          <p className="text-xs text-gray-500 mb-4">Enter your address and click "Pin Map", or click directly on the map to accurately place your store. This keeps your address perfectly synced.</p>
+          
+          <div className="flex gap-2 mb-4">
+            <input
+              id="field-address"
+              type="text"
+              value={form.address}
+              onChange={(e) => handleChange("address", e.target.value)}
+              placeholder="123 Print Street, City, Province"
+              className={`${inputClass} flex-1`}
+            />
+            <button
+              type="button"
+              onClick={geocodeAddress}
+              className="inline-flex items-center justify-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] px-4 py-2 font-mono text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-[#00FFFF] hover:text-[#1A1A1A] whitespace-nowrap"
+            >
+              <MapPin size={14} /> Pin Map
+            </button>
+          </div>
+
           <LocationPicker
             lat={form.lat}
             lng={form.lng}

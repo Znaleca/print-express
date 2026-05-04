@@ -40,17 +40,10 @@ export default function LocationPicker({ lat, lng, onChange }) {
   const defaultCenter = [14.6806, 120.5375]; // Default to Balanga, Bataan, Philippines
 
   // HMR Fix for React Leaflet
-  const mapRef = useRef(null);
   const [mapKey] = useState(() => new Date().getTime());
 
   useEffect(() => {
     setIsMounted(true);
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
   }, []);
 
   // Ensure map updates position properly from props, but not if user drags
@@ -74,7 +67,6 @@ export default function LocationPicker({ lat, lng, onChange }) {
       ) : (
       <MapContainer
         key={mapKey}
-        ref={mapRef}
         center={position ? [position.lat, position.lng] : defaultCenter}
         zoom={13}
         style={{ width: "100%", height: "100%", zIndex: 0 }}

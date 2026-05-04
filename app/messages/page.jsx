@@ -74,7 +74,7 @@ function MessagesInner() {
           TOOLBAR_BUTTONS: [
             "microphone", "camera", "desktop", "fullscreen",
             "fodeviceselection", "hangup", "chat", "settings",
-            "raisehand", "videoquality", "filmstrip", "tileview",
+            "raisehand", "videoquality", "filmstrip", "tileview", "whiteboard",
           ],
         },
         configOverwrite: {
@@ -392,12 +392,25 @@ function MessagesInner() {
     if (!uploadErr) {
       const { data } = supabase.storage.from("chat-images").getPublicUrl(filePath);
       if (isDesignUpload) {
-        // Count existing design versions for this conversation to get next version number
+        // Scope the version number to the current service inquiry session
+        const { data: inquiries } = await supabase
+          .from("chat_messages")
+          .select("created_at")
+          .eq("conversation_id", activeConv.id)
+          .eq("message_type", "service_inquiry")
+          .order("created_at", { ascending: false })
+          .limit(1);
+        
+        const sessionStart = inquiries?.[0]?.created_at || '1970-01-01T00:00:00Z';
+
+        // Count existing design versions for this session to get next version number
         const { data: existingDesigns } = await supabase
           .from("chat_messages")
           .select("id")
           .eq("conversation_id", activeConv.id)
-          .eq("message_type", "design_version");
+          .eq("message_type", "design_version")
+          .gte("created_at", sessionStart);
+          
         const nextVersion = ((existingDesigns?.length) || 0) + 1;
         await supabase.from("chat_messages").insert({
           conversation_id: activeConv.id,

@@ -85,14 +85,25 @@ export default function BusinessDetailsPage({ params }) {
 
   // Form state
   const [selectedServices, setSelectedServices] = useState([]);
+  const [cartInitialized, setCartInitialized] = useState(false);
+
+  useEffect(() => {
+    if (cartInitialized && typeof window !== "undefined") {
+      localStorage.setItem(`cart_${id}`, JSON.stringify(selectedServices));
+    }
+  }, [selectedServices, cartInitialized, id]);
   const [quantityModalService, setQuantityModalService] = useState(null);
   const [previewImage, setPreviewImage] = useState(null);
   const [quantityInput, setQuantityInput] = useState("1");
   const [uploadedFiles, setUploadedFiles] = useState([]);
-  const [paymentMethod, setPaymentMethod] = useState("COD");
-  const [receiptFile, setReceiptFile] = useState(null);
-  const [isProcessing, setIsProcessing] = useState(false);
   const [inquiryModalService, setInquiryModalService] = useState(null);
+  const [itemDetailsModal, setItemDetailsModal] = useState(null);
+  const openItemDetails = (svc) => {
+    setItemDetailsModal(svc);
+    const currentQty = selectedServices.find((s) => s.id === svc.id)?.quantity || 0;
+    setQuantityInput(String(currentQty > 0 ? currentQty : 1));
+  };
+
   const [isOwner, setIsOwner] = useState(false);
   const [reviewsByItem, setReviewsByItem] = useState({});
   const [expandedReviews, setExpandedReviews] = useState({});
@@ -102,15 +113,7 @@ export default function BusinessDetailsPage({ params }) {
     setExpandedReviews((prev) => ({ ...prev, [svcId]: !prev[svcId] }));
   };
 
-  const [deliveryType, setDeliveryType] = useState("PICKUP");
-  const [deliveryAddress, setDeliveryAddress] = useState("");
-  const [deliveryCoordinates, setDeliveryCoordinates] = useState(null);
-  const [deliveryLocationLoading, setDeliveryLocationLoading] = useState(true);
-  const [fulfillmentMode, setFulfillmentMode] = useState("NEED_NOW");
-  const [expectedFulfillmentAt, setExpectedFulfillmentAt] = useState("");
 
-  // Downpayment state
-  const [downpaymentPercent, setDownpaymentPercent] = useState(30);
 
   useEffect(() => {
     async function init() {
@@ -127,7 +130,7 @@ export default function BusinessDetailsPage({ params }) {
           .from("businesses")
           .select(`
             id, name, address, description, min_downpayment_percent, qr_url, is_open,
-            services ( id, name, price, price_max, item_type, description, category, available, image_url, stock_qty ),
+            services ( id, name, price, price_max, item_type, description, category, available, image_url, stock_qty, is_customizable ),
             business_reviews ( order_id, rating, feedback, feedback_hidden, created_at, customer_name, item_name )
           `)
           .eq("id", id)
@@ -167,20 +170,67 @@ export default function BusinessDetailsPage({ params }) {
           });
           setReviewsByItem(grouped);
 
+          // Compute best seller ranking: top 3 services by review/order count
+          const orderCountByName = {};
+          allReviews.forEach(r => {
+            if (r.item_name) {
+              orderCountByName[r.item_name] = (orderCountByName[r.item_name] || 0) + 1;
+            }
+          });
+          const sortedByOrders = Object.entries(orderCountByName)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([name]) => name);
+          data.bestSellerNames = new Set(sortedByOrders);
+
           const minDp = Math.min(100, Math.max(1, Number.parseInt(String(data.min_downpayment_percent ?? 30), 10) || 30));
-          setDownpaymentPercent(minDp);
 
           setBusiness(data);
+
+          let existingCart = [];
+          if (typeof window !== "undefined") {
+            const savedCart = localStorage.getItem(`cart_${id}`);
+            if (savedCart) {
+              try { existingCart = JSON.parse(savedCart); } catch(e) {}
+            }
+          }
 
           if (checkoutServiceId) {
             const svc = data.services.find(s => s.id === checkoutServiceId);
             if (svc && quoteAmount) {
-              setSelectedServices([{ ...svc, quantity: 1, price: quoteAmount, isQuotedCheckout: true }]);
+              const exists = existingCart.some(item => item.id === svc.id && item.isQuotedCheckout && item.price === quoteAmount);
+              if (!exists) {
+                existingCart.push({ 
+                  ...svc, 
+                  quantity: 1, 
+                  price: quoteAmount, 
+                  isQuotedCheckout: true,
+                  designUrl: designUrl,
+                  designVersion: designVersion
+                });
+              }
               if (designUrl) {
-                setUploadedFiles([{ name: `Approved Design Version ${designVersion || "1"}`, url: designUrl, isUrl: true, id: Date.now() }]);
+                setUploadedFiles(prev => {
+                  const fExists = prev.some(f => f.url === designUrl);
+                  if (fExists) return prev;
+                  return [...prev, { name: `Approved Design Version ${designVersion || "1"}`, url: designUrl, isUrl: true, id: Date.now() }];
+                });
               }
             }
+
+            // Clear URL params so a refresh won't automatically re-add the quoted service if the user removed it
+            if (typeof window !== "undefined") {
+              const currentUrl = new URL(window.location.href);
+              currentUrl.searchParams.delete("checkout_service");
+              currentUrl.searchParams.delete("quote");
+              currentUrl.searchParams.delete("design_url");
+              currentUrl.searchParams.delete("design_version");
+              currentUrl.searchParams.delete("quote_id");
+              window.history.replaceState(null, '', currentUrl.pathname + currentUrl.search);
+            }
           }
+          setSelectedServices(existingCart);
+          setCartInitialized(true);
         }
       }
       setLoading(false);
@@ -209,122 +259,6 @@ export default function BusinessDetailsPage({ params }) {
       reviews: (prev.reviews || []).filter(r => r.order_id !== orderId || !hide),
     }));
   };
-
-  const reverseGeocode = async (lat, lng) => {
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`, { headers: { 'User-Agent': 'print-app-v1' }});
-      const data = await res.json();
-      if (data && data.display_name) {
-        setDeliveryAddress(data.display_name);
-      }
-    } catch (err) {
-      console.error("Reverse geocoding error:", err);
-    }
-  };
-
-  const geocodeAddress = async () => {
-    if (!deliveryAddress) return;
-    setDeliveryLocationLoading(true);
-    
-    try {
-      let lat, lng;
-      const addressToSearch = deliveryAddress.trim();
-
-      const parts = addressToSearch.split(/[\s,]+/);
-      const potentialCode = parts[0];
-
-      if (potentialCode.includes("+")) {
-        const { OpenLocationCode } = await import("open-location-code");
-        const olc = new OpenLocationCode();
-
-        if (olc.isFull(potentialCode)) {
-          const decoded = olc.decode(potentialCode);
-          lat = decoded.latitudeCenter;
-          lng = decoded.longitudeCenter;
-        } else if (olc.isShort(potentialCode) && parts.length > 1) {
-          const referenceLoc = addressToSearch.replace(potentialCode, "").trim();
-          const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(referenceLoc)}`, { headers: { 'User-Agent': 'print-app-v1' }});
-          const data = await res.json();
-
-          if (data && data.length > 0) {
-            const refLat = Number.parseFloat(data[0].lat);
-            const refLng = Number.parseFloat(data[0].lon);
-            const fullCode = olc.recoverNearest(potentialCode, refLat, refLng);
-            const decoded = olc.decode(fullCode);
-            lat = decoded.latitudeCenter;
-            lng = decoded.longitudeCenter;
-          }
-        }
-      }
-
-      if (!lat || !lng) {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressToSearch)}`, { headers: { 'User-Agent': 'print-app-v1' }});
-        const data = await res.json();
-        if (data && data.length > 0) {
-          lat = Number.parseFloat(data[0].lat);
-          lng = Number.parseFloat(data[0].lon);
-        }
-      }
-
-      if (lat && lng) {
-        setDeliveryCoordinates({ lat, lng });
-      } else {
-        alert("Location not found. Try adding more details like city or postal code.");
-      }
-    } catch (err) {
-      console.error("Geocoding error:", err);
-      alert("Failed to search location.");
-    } finally {
-      setDeliveryLocationLoading(false);
-    }
-  };
-
-  const getCurrentLocation = () => {
-    if (typeof navigator === "undefined" || !navigator.geolocation) {
-      alert("Geolocation is not supported by your browser");
-      return;
-    }
-    setDeliveryLocationLoading(true);
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude } = position.coords;
-        setDeliveryCoordinates({ lat: latitude, lng: longitude });
-        reverseGeocode(latitude, longitude);
-        setDeliveryLocationLoading(false);
-      },
-      (error) => {
-        alert("Unable to retrieve your location. Please check browser permissions.");
-        setDeliveryLocationLoading(false);
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
-    );
-  };
-
-  useEffect(() => {
-    if (typeof navigator === "undefined" || !navigator.geolocation) {
-      setDeliveryCoordinates({ lat: 14.6806, lng: 120.5375 });
-      setDeliveryLocationLoading(false);
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude } = position.coords;
-        setDeliveryCoordinates({ lat: latitude, lng: longitude });
-        reverseGeocode(latitude, longitude);
-        setDeliveryLocationLoading(false);
-      },
-      () => {
-        setDeliveryCoordinates({ lat: 14.6806, lng: 120.5375 });
-        setDeliveryLocationLoading(false);
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 60000,
-      }
-    );
-  }, []);
 
   const getSelectedQty = (serviceId) =>
     selectedServices.find((s) => s.id === serviceId)?.quantity || 0;
@@ -392,174 +326,7 @@ export default function BusinessDetailsPage({ params }) {
     });
   };
 
-  const handleFileUpload = (e) => {
-    const files = Array.from(e.target.files);
-    setUploadedFiles((prev) => [
-      ...prev,
-      ...files.map((f) => ({ file: f, name: f.name, id: Date.now() + Math.random() })),
-    ]);
-  };
 
-  const handleReceiptUpload = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      setReceiptFile(e.target.files[0]);
-    }
-  };
-
-  const minimumDownpaymentPercent = Math.min(
-    100,
-    Math.max(1, Number.parseInt(String(business?.min_downpayment_percent ?? 30), 10) || 30)
-  );
-  const effectiveDownpaymentPercent = Math.max(minimumDownpaymentPercent, Math.min(100, downpaymentPercent));
-  const downpaymentOptions = Array.from(
-    new Set([10, 20, 30, 50, 100, minimumDownpaymentPercent].filter((pct) => pct >= minimumDownpaymentPercent))
-  ).sort((a, b) => a - b);
-
-  const total = selectedServices.reduce((s, x) => s + Number(x.price) * (x.quantity || 1), 0);
-  const downpaymentAmount = total * (effectiveDownpaymentPercent / 100);
-  const balanceAmount = total - downpaymentAmount;
-  const todayInManila = manilaDateString();
-  const minAdvanceDateTime = manilaStartOfTomorrow();
-
-  const generateFileName = (fileName) => {
-    const ext = fileName.split('.').pop();
-    const random = Math.random().toString(36).substring(2, 10);
-    return `${Date.now()}_${random}.${ext}`;
-  };
-
-  const checkout = async () => {
-    if (!user) return alert("You must be logged in to place an order.");
-    if (!isCustomer) return alert("Only registered customers can place orders.");
-    if (!selectedServices.length) return alert("Please select at least one service.");
-    if (!receiptFile) return alert("Please upload your E-Wallet proof of downpayment.");
-    if (!uploadedFiles.length) return alert("Please upload design files for proofing.");
-    
-    if (deliveryType === "DELIVERY") {
-      if (!deliveryAddress.trim()) return alert("Please enter your exact delivery address.");
-      if (!deliveryCoordinates?.lat || !deliveryCoordinates?.lng) return alert("Please pin your exact location on the map.");
-    }
-
-    if (fulfillmentMode === "ADVANCE") {
-      if (!expectedFulfillmentAt) return alert("Please set your expected pickup/delivery date and time.");
-      const expected = parseManilaDateTime(expectedFulfillmentAt);
-      if (Number.isNaN(expected.getTime())) return alert("Expected date/time is invalid.");
-      const expectedManilaDay = manilaDateString(expected);
-      if (expectedManilaDay <= todayInManila) return alert("Advance orders must be scheduled for a later day in Philippines time.");
-    }
-
-    const selectedIds = selectedServices.map((s) => s.id);
-    const { data: latestServices, error: stockErr } = await supabase
-      .from("services")
-      .select("id, stock_qty, name, item_type")
-      .in("id", selectedIds)
-      .eq("business_id", business.id);
-
-    if (stockErr) return alert("Unable to validate stock right now. Please try again.");
-
-    const stockMap = Object.fromEntries((latestServices || []).map((s) => [s.id, s]));
-    const outOfStockItem = selectedServices.find((item) => {
-      const latest = stockMap[item.id];
-      if (latest?.item_type === 'service') return false;
-      const latestQty = Math.max(0, Number(latest?.stock_qty || 0));
-      return (item.quantity || 1) > latestQty;
-    });
-
-    if (outOfStockItem) {
-      const latest = stockMap[outOfStockItem.id];
-      return alert(`${latest?.name || outOfStockItem.name} has only ${Math.max(0, Number(latest?.stock_qty || 0))} stock left.`);
-    }
-
-    setIsProcessing(true);
-
-    try {
-      const uid = user.id;
-      
-      // Upload Design Files
-      const designFileUrls = [];
-      for (const item of uploadedFiles) {
-        if (item.isUrl) {
-          designFileUrls.push({ name: item.name, url: item.url });
-          continue;
-        }
-
-        const filePath = `${uid}/${generateFileName(item.name)}`;
-        const { error: uploadError } = await supabase.storage
-          .from("order-assets")
-          .upload(filePath, item.file);
-
-        if (uploadError) throw new Error("Failed to upload design files: " + uploadError.message);
-
-        const { data: urlData } = supabase.storage
-          .from("order-assets")
-          .getPublicUrl(filePath);
-          
-        designFileUrls.push({ name: item.name, url: urlData.publicUrl });
-      }
-
-      // Upload Receipt
-      let receiptUrl = null;
-      if (receiptFile) {
-        const filePath = `${uid}/receipt_${generateFileName(receiptFile.name)}`;
-        const { error: receiptError } = await supabase.storage
-          .from("order-assets")
-          .upload(filePath, receiptFile);
-
-        if (receiptError) throw new Error("Failed to upload receipt: " + receiptError.message);
-
-        const { data: urlData } = supabase.storage
-          .from("order-assets")
-          .getPublicUrl(filePath);
-        receiptUrl = urlData.publicUrl;
-      }
-
-      // Insert Order
-      const { error: orderError } = await supabase
-        .from("orders")
-        .insert({
-          customer_id: uid,
-          business_id: business.id,
-          status: "PENDING",
-          payment_method: paymentMethod,
-          total: total,
-          downpayment_amount: downpaymentAmount,
-          balance_amount: balanceAmount,
-          items: selectedServices.map((s) => ({
-            id: s.id,
-            name: (s.isQuotedCheckout && designVersion) ? `${s.name} (Version ${designVersion})` : s.name,
-            price: Number(s.price),
-            category: s.category || null,
-            description: s.description || null,
-            quantity: s.quantity || 1,
-          })),
-          receipt_url: receiptUrl,
-          design_files: designFileUrls,
-          delivery_type: deliveryType,
-          delivery_address: deliveryType === "DELIVERY" ? deliveryAddress : null,
-          delivery_coordinates: deliveryType === "DELIVERY" ? deliveryCoordinates : null,
-          fulfillment_mode: fulfillmentMode,
-          expected_fulfillment_at: fulfillmentMode === "ADVANCE"
-            ? parseManilaDateTime(expectedFulfillmentAt).toISOString()
-            : null,
-        });
-
-      if (orderError) throw new Error("Failed to place order: " + orderError.message);
-
-      if (quoteId) {
-        const { data: msgData } = await supabase.from('chat_messages').select('metadata').eq('id', quoteId).single();
-        if (msgData) {
-          const newMetadata = { ...msgData.metadata, is_checkout_completed: true };
-          await supabase.from('chat_messages').update({ metadata: newMetadata }).eq('id', quoteId);
-        }
-      }
-
-      alert(`Order placed successfully via ${paymentMethod}! Redirecting to tracking...`);
-      router.push("/track");
-    } catch (err) {
-      console.error(err);
-      alert(err.message);
-      setIsProcessing(false);
-    }
-  };
 
   if (loading) {
     return (
@@ -676,6 +443,78 @@ export default function BusinessDetailsPage({ params }) {
           </div>
         </div>
 
+        {/* ── BEST SELLERS SECTION ── */}
+        {(() => {
+          const allItems = business.services || [];
+          const allReviews = business.allReviews || [];
+          const orderCountByName = {};
+          allReviews.forEach(r => {
+            if (r.item_name) orderCountByName[r.item_name] = (orderCountByName[r.item_name] || 0) + 1;
+          });
+          const top3 = Object.entries(orderCountByName)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([name, count]) => ({ item: allItems.find(s => s.name === name), name, count }))
+            .filter(x => x.item);
+
+          if (top3.length === 0) return null;
+
+          const rankColors = ["#FFF200", "#00FFFF", "#EC008C"];
+          const rankNums = ["01", "02", "03"];
+
+          return (
+            <section className="bg-[#1A1A1A] border-4 border-[#1A1A1A]">
+              {/* Label */}
+              <div className="px-8 pt-8 pb-4 flex items-center gap-3">
+                <Star size={14} fill="#FFF200" className="text-[#FFF200]" />
+                <span className="font-mono text-[11px] font-black uppercase tracking-[0.4em] text-white/50">
+                  Best Sellers
+                </span>
+              </div>
+
+              {/* Cards row */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 px-6 pb-6">
+                {top3.map(({ item, name, count }, i) => (
+                  <div
+                    key={item.id}
+                    onClick={() => openItemDetails(item)}
+                    className="group flex items-center gap-4 bg-[#242424] border-2 border-[#2e2e2e] hover:border-[#3e3e3e] hover:-translate-y-0.5 transition-all cursor-pointer p-4"
+                  >
+                    {/* Rank number */}
+                    <span
+                      className="font-black text-4xl leading-none tabular-nums flex-shrink-0 w-12 text-center"
+                      style={{ color: rankColors[i] }}
+                    >
+                      {rankNums[i]}
+                    </span>
+
+                    {/* Thumbnail */}
+                    <div className="w-14 h-14 flex-shrink-0 overflow-hidden border-2 bg-[#1a1a1a]" style={{ borderColor: rankColors[i] }}>
+                      {item.image_url ? (
+                        <img src={item.image_url} alt={name} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <Package size={18} className="text-white/20" />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Text */}
+                    <div className="min-w-0">
+                      <p className="font-black uppercase italic text-white text-sm leading-tight truncate group-hover:text-[#FFF200] transition-colors">
+                        {name}
+                      </p>
+                      <p className="font-mono text-[10px] text-white/30 mt-1 uppercase tracking-widest">
+                        {count} {count === 1 ? "order" : "orders"}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        })()}
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
 
           {/* ── LEFT COLUMN ── */}
@@ -705,105 +544,53 @@ export default function BusinessDetailsPage({ params }) {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {business.services.filter(s => s.item_type !== "product").map((svc) => {
-                    const itemReviews = (reviewsByItem[svc.name] || []).filter(r => !r.feedback_hidden || isOwner);
+                    const isSelected = selectedServices.some((s) => s.id === svc.id);
+                    const isBestSeller = business.bestSellerNames?.has(svc.name);
                     return (
                       <div
-                      key={svc.id}
-                      onClick={() => {
-                        setInquiryModalService(svc);
-                      }}
-                      className={`group relative text-left p-6 border-4 transition-all cursor-pointer bg-white border-[#1A1A1A] hover:bg-[#F9F9F7]`}
-                    >
-                      <div className="flex justify-between items-start mb-6">
-                        <span className={`font-mono text-[10px] font-black uppercase tracking-widest px-2 py-1 border-2 border-[#1A1A1A] bg-[#1A1A1A] text-white`}>
-                          {svc.category || "GENERAL"}
-                        </span>
-                      </div>
-
-                      <p className="font-black uppercase italic text-2xl mb-2 leading-tight">{svc.name}</p>
-                      {svc.image_url && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setPreviewImage({ src: svc.image_url, name: svc.name });
-                          }}
-                          className="mb-4 block w-full"
-                          aria-label={`Preview ${svc.name} image`}
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={svc.image_url}
-                            alt={`${svc.name} sample`}
-                            className="mx-auto h-56 w-full bg-[#F9F9F7] object-contain p-2 transition-transform hover:scale-[1.01]"
-                          />
-                        </button>
-                      )}
-                      <p className={`text-[12px] font-mono uppercase tracking-wide leading-relaxed mb-8 text-gray-500`}>
-                        {svc.description || "NO_DESCRIPTION_AVAILABLE"}
-                      </p>
-
-                      <div className={`flex justify-between items-end border-t-2 border-dashed border-gray-300 pt-4`}>
-                        <p className={`text-3xl font-black italic text-[#1A1A1A]`}>
-                          {svc.price_max && parseFloat(svc.price_max) > parseFloat(svc.price) ? `₱${Number(svc.price).toFixed(2)} – ₱${Number(svc.price_max).toFixed(2)}` : `₱${Number(svc.price).toFixed(2)}+`}
-                        </p>
-                        <ChevronRight size={20} className={`opacity-0 group-hover:opacity-100 group-hover:translate-x-0 -translate-x-4 transition-all`} />
-                      </div>
-
-                      <div className="mt-4 flex items-center justify-between gap-3">
-                        <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#1A1A1A] border-2 border-[#1A1A1A] px-2 py-1 group-hover:bg-[#1A1A1A] group-hover:text-white transition-colors">
-                          Inquire_This_Service
-                        </span>
-                        <span className="font-mono text-[9px] font-black uppercase tracking-widest text-[#1A1A1A]/50">
-                          Estimated Price
-                        </span>
-                      </div>
-                      
-                      {itemReviews.length > 0 && (
-                        <div className="mt-4 border-t-2 border-dashed border-gray-300 pt-4">
-                          <button
-                            onClick={(e) => toggleReviews(e, svc.id)}
-                            className="w-full flex items-center justify-between font-mono text-[10px] uppercase font-black hover:text-[#EC008C] transition-colors"
-                          >
-                            <span>View Feedback</span>
-                            <div className="flex items-center gap-1">
-                              <Star size={12} className="text-yellow-500" fill="currentColor" />
-                              <span>{(itemReviews.reduce((s,r)=>s+r.rating,0)/itemReviews.length).toFixed(1)} ({itemReviews.length})</span>
-                            </div>
-                          </button>
-                          
-                          {expandedReviews[svc.id] && (
-                            <div className="mt-4 space-y-3 cursor-default" onClick={e => e.stopPropagation()}>
-                              {itemReviews.map((r, i) => (
-                                <div key={i} className={`p-3 border-2 border-[#1A1A1A] ${r.feedback_hidden ? "bg-red-50" : "bg-white"}`}>
-                                  <div className="flex items-center justify-between mb-2">
-                                    <span className="font-black text-xs uppercase">{r.customer_name || "AUTHORIZED_CLIENT"}</span>
-                                    <span className="font-mono text-[8px] opacity-50">{new Date(r.created_at).toLocaleDateString()}</span>
-                                  </div>
-                                  <div className="flex gap-1 mb-2">
-                                    {[1,2,3,4,5].map(s => <Star key={s} size={10} fill={s<=r.rating?"#1A1A1A":"none"} className={s<=r.rating?"text-[#1A1A1A]":"text-gray-300"}/>)}
-                                  </div>
-                                  {r.feedback && <p className="font-mono text-[9px] font-bold tracking-wide leading-relaxed text-gray-700 italic">"{r.feedback}"</p>}
-                                  
-                                  {isOwner && (
-                                     <button 
-                                        onClick={(e) => { e.stopPropagation(); hideReview(r.order_id, !r.feedback_hidden); }} 
-                                        className={`mt-2 font-mono text-[8px] uppercase font-black px-2 py-1 border-2 transition-all ${
-                                          r.feedback_hidden
-                                            ? "border-[#00FFFF] text-[#00FFFF] hover:bg-[#00FFFF] hover:text-[#1A1A1A]"
-                                            : "border-[#EC008C] text-[#EC008C] hover:bg-[#EC008C] hover:text-white"
-                                        }`}
-                                     >
-                                       {r.feedback_hidden ? "Restore" : "Delete"}
-                                     </button>
-                                  )}
-                                </div>
-                              ))}
+                        key={svc.id}
+                        onClick={() => openItemDetails(svc)}
+                        className={`group relative text-left p-6 border-4 transition-all cursor-pointer ${isSelected
+                            ? "bg-[#1A1A1A] text-white border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(0,255,255,1)] -translate-y-1"
+                            : "bg-white border-[#1A1A1A] hover:bg-[#1A1A1A] hover:text-white hover:shadow-[8px_8px_0px_0px_rgba(0,255,255,1)] hover:-translate-y-1"
+                          }`}
+                      >
+                        {isBestSeller && (
+                          <div className="absolute -top-[2px] -right-[2px] z-10 flex items-center gap-1 bg-[#EC008C] border-2 border-[#1A1A1A] px-3 py-1 shadow-[3px_3px_0px_0px_rgba(26,26,26,1)]">
+                            <Star size={10} fill="#FFF200" className="text-[#FFF200]" />
+                            <span className="font-mono text-[9px] font-black uppercase tracking-[0.2em] text-white">Best Seller</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between items-start mb-4">
+                          <span className={`font-mono text-[10px] font-black uppercase tracking-widest px-2 py-1 border-2 ${isSelected ? 'border-[#00FFFF] bg-[#00FFFF] text-[#1A1A1A]' : 'border-[#1A1A1A] bg-[#1A1A1A] text-white group-hover:border-[#00FFFF] group-hover:text-[#00FFFF]'}`}>
+                            {svc.category || "GENERAL"}
+                          </span>
+                          {isSelected && (
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-[10px] font-black uppercase tracking-widest px-2 py-1 border-2 border-[#00FFFF] text-[#00FFFF]">
+                                Qty {getSelectedQty(svc.id)}
+                              </span>
+                              <CheckCircle2 className="text-[#00FFFF]" size={24} />
                             </div>
                           )}
                         </div>
-                      )}
-                    </div>
+
+                        <p className={`font-black uppercase italic text-2xl mb-4 leading-tight ${isSelected ? 'text-[#00FFFF]' : 'group-hover:text-[#00FFFF]'}`}>{svc.name}</p>
+                        
+                        {svc.image_url ? (
+                          <div className={`w-full border-4 p-2 relative ${isSelected ? 'border-[#00FFFF] bg-[#1A1A1A]/50' : 'border-[#1A1A1A] bg-[#F9F9F7] group-hover:border-[#00FFFF]'}`}>
+                            <img
+                              src={svc.image_url}
+                              alt={`${svc.name} sample`}
+                              className="mx-auto h-48 w-full object-contain transition-transform group-hover:scale-105"
+                            />
+                          </div>
+                        ) : (
+                           <div className={`w-full h-48 border-4 border-dashed flex items-center justify-center relative ${isSelected ? 'border-[#00FFFF] bg-[#1A1A1A]/50 text-[#00FFFF]/40' : 'border-[#1A1A1A] bg-[#F9F9F7] text-[#1A1A1A]/40 group-hover:border-[#00FFFF] group-hover:text-[#00FFFF]'}`}>
+                             <p className="font-mono text-[10px] font-black uppercase tracking-widest">No Image</p>
+                           </div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -825,127 +612,64 @@ export default function BusinessDetailsPage({ params }) {
                     const isSelected = selectedServices.some((s) => s.id === svc.id);
                     const stockLeft = Math.max(0, Number(svc.stock_qty || 0));
                     const outOfStock = stockLeft <= 0;
-                    const itemReviews = (reviewsByItem[svc.name] || []).filter(r => !r.feedback_hidden || isOwner);
+                    const isBestSeller = business.bestSellerNames?.has(svc.name);
+                    
                     return (
                       <div
                         key={svc.id}
                         onClick={() => {
                           if (outOfStock) return;
-                          if (checkoutServiceId) {
-                            return alert("You are checking out a custom quoted service. Please complete or cancel this order before adding products.");
-                          }
-                          openQuantityModal(svc);
+                          openItemDetails(svc);
                         }}
                         className={`group relative text-left p-6 border-4 transition-all ${isSelected
                             ? "bg-[#1A1A1A] text-white border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(0,255,255,1)] -translate-y-1"
-                            : "bg-white border-[#1A1A1A] hover:bg-[#F9F9F7]"
+                            : "bg-white border-[#1A1A1A] hover:bg-[#1A1A1A] hover:text-white hover:shadow-[8px_8px_0px_0px_rgba(236,0,140,1)] hover:-translate-y-1"
                           } ${outOfStock ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
                       >
-                        <div className="flex justify-between items-start mb-6">
-                          <span className={`font-mono text-[10px] font-black uppercase tracking-widest px-2 py-1 border-2 ${isSelected ? 'border-[#00FFFF] bg-[#00FFFF] text-[#1A1A1A]' : 'border-[#1A1A1A] bg-[#1A1A1A] text-white'}`}>
+                        {isBestSeller && (
+                          <div className="absolute -top-[2px] -right-[2px] z-10 flex items-center gap-1 bg-[#EC008C] border-2 border-[#1A1A1A] px-3 py-1 shadow-[3px_3px_0px_0px_rgba(26,26,26,1)]">
+                            <Star size={10} fill="#FFF200" className="text-[#FFF200]" />
+                            <span className="font-mono text-[9px] font-black uppercase tracking-[0.2em] text-white">Best Seller</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between items-start mb-4">
+                          <span className={`font-mono text-[10px] font-black uppercase tracking-widest px-2 py-1 border-2 ${isSelected ? 'border-[#00FFFF] bg-[#00FFFF] text-[#1A1A1A]' : 'border-[#1A1A1A] bg-[#1A1A1A] text-white group-hover:border-[#EC008C] group-hover:text-[#EC008C]'}`}>
                             {svc.category || "GENERAL"}
                           </span>
-                          {isSelected ? (
+                          {isSelected && (
                             <div className="flex items-center gap-2">
                               <span className="font-mono text-[10px] font-black uppercase tracking-widest px-2 py-1 border-2 border-[#00FFFF] text-[#00FFFF]">
                                 Qty {getSelectedQty(svc.id)}
                               </span>
                               <CheckCircle2 className="text-[#00FFFF]" size={24} />
                             </div>
-                          ) : null}
+                          )}
                         </div>
 
-                        <p className="font-black uppercase italic text-2xl mb-2 leading-tight">{svc.name}</p>
-                        {svc.image_url && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setPreviewImage({ src: svc.image_url, name: svc.name });
-                            }}
-                            className="mb-4 block w-full"
-                            aria-label={`Preview ${svc.name} image`}
-                          >
+                        <p className={`font-black uppercase italic text-2xl mb-4 leading-tight ${isSelected ? 'text-[#00FFFF]' : 'group-hover:text-[#EC008C]'}`}>{svc.name}</p>
+                        
+                        {svc.image_url ? (
+                          <div className={`w-full border-4 p-2 relative ${isSelected ? 'border-[#00FFFF] bg-[#1A1A1A]/50' : 'border-[#1A1A1A] bg-[#F9F9F7] group-hover:border-[#EC008C]'}`}>
                             <img
                               src={svc.image_url}
                               alt={`${svc.name} sample`}
-                              className="mx-auto h-56 w-full bg-[#F9F9F7] object-contain p-2 transition-transform hover:scale-[1.01]"
+                              className="mx-auto h-48 w-full object-contain transition-transform group-hover:scale-105"
                             />
-                          </button>
-                        )}
-                        <p className={`text-[12px] font-mono uppercase tracking-wide leading-relaxed mb-8 ${isSelected ? 'text-gray-400' : 'text-gray-500'}`}>
-                          {svc.description || "NO_DESCRIPTION_AVAILABLE"}
-                        </p>
-
-                        <div className={`flex justify-between items-end border-t-2 border-dashed ${isSelected ? 'border-gray-800' : 'border-gray-300'} pt-4`}>
-                          <p className={`text-3xl font-black italic ${isSelected ? 'text-[#00FFFF]' : 'text-[#1A1A1A]'}`}>
-                            ₱{Number(svc.price).toFixed(2)}
-                          </p>
-                          <ChevronRight size={20} className={`${isSelected ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-4'} transition-all`} />
-                        </div>
-
-                        <div className="mt-4 flex items-center justify-between gap-3">
-                          {outOfStock ? (
-                            <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#EC008C] border-2 border-[#EC008C] px-2 py-1">
-                              Out_Of_Stock
-                            </span>
-                          ) : isSelected ? (
-                            <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF] border-2 border-[#00FFFF] px-2 py-1">
-                              In_Cart x {getSelectedQty(svc.id)}
-                            </span>
-                          ) : (
-                            <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#1A1A1A] border-2 border-[#1A1A1A] px-2 py-1">
-                              Not_In_Cart
-                            </span>
-                          )}
-                          <span className={`font-mono text-[9px] font-black uppercase tracking-widest ${outOfStock ? "text-[#EC008C]" : isSelected ? "text-[#00FFFF]" : "text-[#EC008C]"}`}>
-                            Stock {stockLeft}
-                          </span>
-                        </div>
-                        
-                        {itemReviews.length > 0 && (
-                          <div className="mt-4 border-t-2 border-dashed border-gray-300 pt-4">
-                            <button
-                              onClick={(e) => toggleReviews(e, svc.id)}
-                              className="w-full flex items-center justify-between font-mono text-[10px] uppercase font-black hover:text-[#00FFFF] transition-colors"
-                            >
-                              <span>View Feedback</span>
-                              <div className="flex items-center gap-1">
-                                <Star size={12} className="text-yellow-500" fill="currentColor" />
-                                <span>{(itemReviews.reduce((s,r)=>s+r.rating,0)/itemReviews.length).toFixed(1)} ({itemReviews.length})</span>
-                              </div>
-                            </button>
-                            
-                            {expandedReviews[svc.id] && (
-                              <div className="mt-4 space-y-3 cursor-default" onClick={e => e.stopPropagation()}>
-                                {itemReviews.map((r, i) => (
-                                  <div key={i} className={`p-3 border-2 border-[#1A1A1A] ${r.feedback_hidden ? "bg-red-50" : "bg-white"}`}>
-                                    <div className="flex items-center justify-between mb-2">
-                                      <span className="font-black text-xs uppercase">{r.customer_name || "AUTHORIZED_CLIENT"}</span>
-                                      <span className="font-mono text-[8px] opacity-50">{new Date(r.created_at).toLocaleDateString()}</span>
-                                    </div>
-                                    <div className="flex gap-1 mb-2">
-                                      {[1,2,3,4,5].map(s => <Star key={s} size={10} fill={s<=r.rating?"#1A1A1A":"none"} className={s<=r.rating?"text-[#1A1A1A]":"text-gray-300"}/>)}
-                                    </div>
-                                    {r.feedback && <p className="font-mono text-[9px] font-bold tracking-wide leading-relaxed text-gray-700 italic">"{r.feedback}"</p>}
-                                    
-                                    {isOwner && (
-                                       <button 
-                                          onClick={(e) => { e.stopPropagation(); hideReview(r.order_id, !r.feedback_hidden); }} 
-                                          className={`mt-2 font-mono text-[8px] uppercase font-black px-2 py-1 border-2 transition-all ${
-                                            r.feedback_hidden
-                                              ? "border-[#00FFFF] text-[#00FFFF] hover:bg-[#00FFFF] hover:text-[#1A1A1A]"
-                                              : "border-[#EC008C] text-[#EC008C] hover:bg-[#EC008C] hover:text-white"
-                                          }`}
-                                       >
-                                         {r.feedback_hidden ? "Restore" : "Delete"}
-                                       </button>
-                                    )}
-                                  </div>
-                                ))}
+                            {outOfStock && (
+                              <div className="absolute inset-0 bg-[#1A1A1A]/80 flex items-center justify-center backdrop-blur-sm">
+                                <span className="font-mono text-[12px] font-black uppercase tracking-[0.2em] text-[#EC008C] border-2 border-[#EC008C] px-3 py-1 bg-[#1A1A1A] rotate-12">OUT_OF_STOCK</span>
                               </div>
                             )}
                           </div>
+                        ) : (
+                           <div className={`w-full h-48 border-4 border-dashed flex items-center justify-center relative ${isSelected ? 'border-[#00FFFF] bg-[#1A1A1A]/50 text-[#00FFFF]/40' : 'border-[#1A1A1A] bg-[#F9F9F7] text-[#1A1A1A]/40 group-hover:border-[#EC008C] group-hover:text-[#EC008C]'}`}>
+                             <p className="font-mono text-[10px] font-black uppercase tracking-widest">No Image</p>
+                             {outOfStock && (
+                              <div className="absolute inset-0 bg-[#1A1A1A]/80 flex items-center justify-center backdrop-blur-sm">
+                                <span className="font-mono text-[12px] font-black uppercase tracking-[0.2em] text-[#EC008C] border-2 border-[#EC008C] px-3 py-1 bg-[#1A1A1A] rotate-12">OUT_OF_STOCK</span>
+                              </div>
+                            )}
+                           </div>
                         )}
                       </div>
                     );
@@ -954,52 +678,6 @@ export default function BusinessDetailsPage({ params }) {
               </section>
             )}
 
-            {/* UPLOAD SECTION */}
-            <section>
-              <h2 className="text-4xl font-black uppercase italic tracking-tighter flex items-center gap-4 mb-8">
-                <span className="bg-[#FFF200] px-3 py-1 text-[#1A1A1A] not-italic border-4 border-[#1A1A1A]">02</span>
-                Blueprint_Upload
-              </h2>
-
-              <label className="flex flex-col items-center justify-center gap-6 p-12 border-4 border-dashed border-[#1A1A1A]/20 bg-white hover:bg-[#EC008C]/5 hover:border-[#EC008C] transition-all cursor-pointer group">
-                <input type="file" multiple className="hidden" accept=".pdf,.png,.jpg,.jpeg,.ai,.psd" onChange={handleFileUpload} />
-                <UploadCloud size={64} className="text-[#1A1A1A] group-hover:scale-110 group-hover:text-[#EC008C] transition-all" />
-                <div className="text-center">
-                  <p className="font-black uppercase italic text-2xl">Upload_Operational_Files</p>
-                  <p className="font-mono text-[11px] font-bold uppercase tracking-widest opacity-50 mt-2">PDF, AI, PSD, SVG (MAX 50MB)</p>
-                </div>
-              </label>
-
-              {uploadedFiles.length > 0 && (
-                <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {uploadedFiles.map((f) => (
-                    <div key={f.id} className="flex flex-col gap-4 bg-[#1A1A1A] text-white p-4 border-l-8 border-[#EC008C] overflow-hidden">
-                      <div className="flex items-center gap-4 w-full">
-                        <FileText size={20} className="text-[#00FFFF] shrink-0" />
-                        <span className="font-mono text-[10px] font-black uppercase tracking-wider truncate">{f.name}</span>
-                        <button onClick={(e) => { e.preventDefault(); setUploadedFiles(prev => prev.filter(x => x.id !== f.id)); }} className="ml-auto text-white opacity-50 hover:opacity-100 hover:text-[#EC008C] transition-colors">
-                          <AlertTriangle size={16} className="rotate-45" />
-                        </button>
-                      </div>
-                      
-                      {f.isUrl && f.url && (
-                        <div className="border-2 border-white/20 w-full bg-white/5">
-                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                           <img src={f.url} alt={f.name} className="w-full h-32 object-contain" />
-                        </div>
-                      )}
-                      
-                      {!f.isUrl && f.file && f.file.type?.startsWith('image/') && (
-                        <div className="border-2 border-white/20 w-full bg-white/5">
-                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                           <img src={URL.createObjectURL(f.file)} alt={f.name} className="w-full h-32 object-contain" />
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
 
 
           </div>
@@ -1096,14 +774,14 @@ export default function BusinessDetailsPage({ params }) {
                           </div>
                         )}
 
-                        {s.isQuotedCheckout && designUrl && (
+                        {s.isQuotedCheckout && s.designUrl && (
                           <div className="border-2 border-[#1A1A1A] p-2 bg-[#1A1A1A]/5 mt-2">
                             <div className="flex items-center justify-between mb-2">
                               <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#EC008C]">Approved_Design</p>
-                              <span className="bg-[#1A1A1A] text-white font-mono text-[9px] font-black uppercase tracking-widest px-2 py-1">Version {designVersion || "1"}</span>
+                              <span className="bg-[#1A1A1A] text-white font-mono text-[9px] font-black uppercase tracking-widest px-2 py-1">Version {s.designVersion || "1"}</span>
                             </div>
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={designUrl} alt="Approved Design" className="w-full h-auto object-contain max-h-48 border-2 border-[#1A1A1A]/20 bg-white" />
+                            <img src={s.designUrl} alt="Approved Design" className="w-full h-auto object-contain max-h-48 border-2 border-[#1A1A1A]/20 bg-white" />
                           </div>
                         )}
                       </div>
@@ -1114,295 +792,26 @@ export default function BusinessDetailsPage({ params }) {
                 <div className="border-t-4 border-[#1A1A1A] pt-8 mb-10">
                   <div className="flex justify-between items-end mb-4">
                     <span className="font-mono text-[11px] uppercase tracking-[0.3em] font-black text-gray-500">Gross_Total (Est)</span>
-                    <span className="text-4xl font-black italic leading-none">₱{total.toFixed(2)}{selectedServices.some(s => s.item_type !== "product") ? "+" : ""}</span>
+                    <span className="text-4xl font-black italic leading-none">₱{selectedServices.reduce((s, x) => s + Number(x.price) * (x.quantity || 1), 0).toFixed(2)}{selectedServices.some(s => s.item_type !== "product") ? "+" : ""}</span>
                   </div>
 
-                  {/* DOWNPAYMENT SELECTION */}
-                  <div className="bg-[#F9F9F7] border-4 border-[#1A1A1A] p-6 mt-6">
-                    <p className="font-black uppercase italic text-sm tracking-widest mb-4">Downpayment_Required</p>
-                    <p className="font-mono text-[10px] opacity-60 uppercase mb-4">A minimum of {minimumDownpaymentPercent}% upfront payment via E-Wallet is required to process all orders.</p>
-                    
-                    <div className="mb-6">
-                      <div className="flex justify-between items-center mb-4 font-mono text-[12px] font-black text-[#1A1A1A] uppercase tracking-widest">
-                        <span className="opacity-50">Min: {minimumDownpaymentPercent}%</span>
-                        <span className="text-[#EC008C] text-xl bg-white border-2 border-[#1A1A1A] px-3 py-1 shadow-[2px_2px_0px_0px_rgba(236,0,140,1)]">
-                          {effectiveDownpaymentPercent}%
-                        </span>
-                        <span className="opacity-50">Full: 100%</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={minimumDownpaymentPercent}
-                        max="100"
-                        step="5"
-                        value={effectiveDownpaymentPercent}
-                        onChange={(e) => setDownpaymentPercent(Number(e.target.value))}
-                        className="w-full h-3 bg-[#1A1A1A]/10 appearance-none cursor-pointer accent-[#EC008C] hover:accent-[#00FFFF] transition-all"
-                      />
-                    </div>
-
-                    <div className="flex justify-between items-end border-t-2 border-dashed border-[#1A1A1A]/20 pt-4">
-                      <span className="font-mono text-[11px] uppercase tracking-[0.3em] font-black text-[#EC008C]">To_Pay_Now</span>
-                      <span className="text-3xl font-black italic leading-none text-[#EC008C]">₱{downpaymentAmount.toFixed(2)}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* DELIVERY SELECTION */}
-                <div className="mb-10 text-black border-b-4 border-[#1A1A1A] pb-8 space-y-4">
-                   <p className="font-black uppercase italic text-sm tracking-widest">Fulfillment_Type</p>
-                   <div className="grid grid-cols-2 gap-4">
-                     <button 
-                       onClick={() => setDeliveryType("PICKUP")}
-                       className={`py-4 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${deliveryType === 'PICKUP' ? 'bg-[#00FFFF] border-[#1A1A1A] text-[#1A1A1A]' : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'}`}
-                     >
-                       <Package size={16} /> PICK_UP
-                     </button>
-                     <button 
-                       onClick={() => setDeliveryType("DELIVERY")}
-                       className={`py-4 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${deliveryType === 'DELIVERY' ? 'bg-[#EC008C] border-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]' : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'}`}
-                     >
-                       <Truck size={16} /> DELIVERY
-                     </button>
-                   </div>
-                   
-                   {deliveryType === "DELIVERY" && (
-                     <div className="mt-6 p-6 bg-[#F9F9F7] border-4 border-[#1A1A1A] space-y-6">
-                       <div>
-                         <div className="flex items-center justify-between mb-2">
-                           <p className="font-mono text-[10px] font-black uppercase tracking-widest opacity-80">Full Address / Plus Code</p>
-                           <button
-                             type="button"
-                             onClick={getCurrentLocation}
-                             className="flex items-center gap-1 font-mono text-[9px] font-black uppercase tracking-widest text-[#EC008C] hover:text-[#00FFFF] transition-colors"
-                           >
-                             <MapPin size={10} /> Use My Location
-                           </button>
-                         </div>
-                         <div className="flex gap-2">
-                           <input 
-                             type="text"
-                             className="flex-1 w-full border-2 border-[#1A1A1A] p-3 text-xs font-mono uppercase bg-white focus:outline-none focus:ring-2 focus:ring-[#00FFFF]"
-                             placeholder="Enter exact address or Plus Code (e.g. MGX8+3Q Bataan)"
-                             value={deliveryAddress}
-                             onChange={(e) => setDeliveryAddress(e.target.value)}
-                           />
-                           <button
-                             type="button"
-                             onClick={geocodeAddress}
-                             disabled={deliveryLocationLoading}
-                             className="inline-flex items-center justify-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] px-4 py-2 font-mono text-[10px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-[#00FFFF] hover:text-[#1A1A1A] disabled:opacity-50"
-                           >
-                             {deliveryLocationLoading ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />} Pin
-                           </button>
-                         </div>
-                       </div>
-                       <div>
-                         <p className="font-mono text-[10px] font-black uppercase tracking-widest mb-2 opacity-80 flex gap-2 items-center"><MapPin size={12} /> Pin Location (Auto-Syncs with Address)</p>
-                         <LocationPicker 
-                           lat={deliveryCoordinates?.lat} 
-                           lng={deliveryCoordinates?.lng} 
-                           onChange={(lat, lng) => {
-                             setDeliveryCoordinates({ lat, lng });
-                             reverseGeocode(lat, lng);
-                           }}
-                         />
-                        {deliveryLocationLoading && (
-                          <p className="mt-2 font-mono text-[9px] font-black uppercase tracking-widest text-[#EC008C] flex items-center gap-1">
-                            <Loader2 size={10} className="animate-spin" /> Detecting location...
-                          </p>
-                        )}
-                        {!deliveryLocationLoading && deliveryCoordinates && (
-                          <p className="mt-2 font-mono text-[9px] font-black uppercase tracking-widest text-[#1A1A1A]/60">
-                            Move the pin to automatically update the address above.
-                          </p>
-                        )}
-                       </div>
-                     </div>
-                   )}
-                </div>
-
-                {/* ORDER TIMING */}
-                <div className="mb-10 text-black border-b-4 border-[#1A1A1A] pb-8 space-y-4">
-                  <p className="font-black uppercase italic text-sm tracking-widest">Order_Timing</p>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {/* PROCEED TO CHECKOUT BUTTON */}
+                  <div className="pt-8 mt-6 border-t-4 border-[#1A1A1A]">
                     <button
-                      type="button"
-                      onClick={() => {
-                        setFulfillmentMode("NEED_NOW");
-                        setExpectedFulfillmentAt("");
-                      }}
-                      className={`py-4 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${fulfillmentMode === 'NEED_NOW' ? 'bg-[#00FFFF] border-[#1A1A1A] text-[#1A1A1A]' : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'}`}
-                    >
-                      <Clock size={16} /> NEED_NOW
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFulfillmentMode("ADVANCE")}
-                      className={`py-4 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${fulfillmentMode === 'ADVANCE' ? 'bg-[#EC008C] border-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]' : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'}`}
-                    >
-                      <Clock size={16} /> ADVANCE_ORDER
-                    </button>
-                  </div>
-
-                  {fulfillmentMode === "ADVANCE" && (
-                    <div className="mt-2 border-4 border-[#1A1A1A] bg-[#F9F9F7] p-4">
-                      <p className="mb-2 font-mono text-[10px] font-black uppercase tracking-widest opacity-70">
-                        Expected {deliveryType === "DELIVERY" ? "Delivery" : "Pick Up"} Date & Time
-                      </p>
-                      <input
-                        type="datetime-local"
-                        value={expectedFulfillmentAt}
-                        min={minAdvanceDateTime}
-                        onChange={(e) => setExpectedFulfillmentAt(e.target.value)}
-                        className="w-full border-2 border-[#1A1A1A] bg-white px-3 py-3 font-mono text-xs font-black uppercase tracking-wider outline-none focus:border-[#00FFFF]"
-                      />
-                    </div>
-                  )}
-                </div>
-
-                {/* PAYMENT METHOD SELECTION */}
-                <div className="mb-10 text-black border-b-4 border-[#1A1A1A] pb-8 space-y-4">
-                   <p className="font-black uppercase italic text-sm tracking-widest">Balance_Payment_Method</p>
-                   <p className="font-mono text-[9px] uppercase opacity-50 font-bold mb-2">How will you pay the remaining balance of <span className="text-[#EC008C]">₱{balanceAmount.toFixed(2)}</span>?</p>
-                   <div className="grid grid-cols-2 gap-4">
-                     <button 
-                       onClick={() => setPaymentMethod("COD")}
-                       className={`py-4 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${paymentMethod === 'COD' ? 'bg-[#FFF200] border-[#1A1A1A] text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]' : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'}`}
-                     >
-                       <Banknote size={16} /> Cash (COD)
-                     </button>
-                     <button 
-                       onClick={() => setPaymentMethod("E-Wallet")}
-                       className={`py-4 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${paymentMethod === 'E-Wallet' ? 'bg-[#1A1A1A] border-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]' : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'}`}
-                     >
-                       <CreditCard size={16} /> E-Wallet
-                     </button>
-                   </div>
-                </div>
-
-                {/* UPLOAD DOWNPAYMENT PROOF (ALWAYS REQUIRED) */}
-                <div className="mb-10 border-b-4 border-[#1A1A1A] pb-8">
-                   <div className="p-6 bg-[#F9F9F7] border-4 border-[#1A1A1A]">
-                     <p className="font-black uppercase italic text-sm tracking-widest mb-1 text-[#EC008C]">Upload Downpayment Proof</p>
-                     <p className="font-mono text-[9px] font-black uppercase tracking-widest mb-4 opacity-60">Upload E-Wallet receipt for ₱{downpaymentAmount.toFixed(2)}</p>
-                     <input type="file" accept="image/*" onChange={handleReceiptUpload} className="text-xs font-mono w-full file:mr-4 file:py-2 file:px-4 file:border-2 file:border-[#1A1A1A] file:text-xs file:font-black file:uppercase file:bg-white hover:file:bg-[#FFF200] cursor-pointer" />
-                     {receiptFile && (
-                       <div className="mt-4 text-[10px] text-[#EC008C] font-black uppercase truncate flex items-center gap-2">
-                         <CheckCircle2 size={12} /> {receiptFile.name}
-                       </div>
-                     )}
-                   </div>
-                </div>
-
-                {!isCustomer ? (
-                  <div className="bg-white text-[#EC008C] border-4 border-[#EC008C] p-6 font-mono text-[11px] font-bold uppercase tracking-wider text-center flex flex-col gap-3 shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
-                    <AlertTriangle size={32} className="mx-auto" />
-                    Auth Required: Only registered CUSTOMERS can place orders.
-                  </div>
-                ) : isClosed ? (
-                  <div className="bg-[#1A1A1A] text-white border-4 border-[#1A1A1A] p-6 font-mono text-[11px] font-bold uppercase tracking-wider text-center flex flex-col gap-3">
-                    <Power size={32} className="mx-auto opacity-40" />
-                    Shop is currently closed. Orders are disabled.
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <button
-                      onClick={checkout}
-                      disabled={isProcessing || !selectedServices.length}
+                      onClick={() => router.push(`/checkout/${business.id}`)}
+                      disabled={selectedServices.length === 0}
                       className="w-full bg-[#1A1A1A] text-white py-6 px-6 font-black uppercase italic text-lg flex items-center justify-center gap-3 hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all shadow-[8px_8px_0px_0px_rgba(236,0,140,1)] disabled:opacity-50 disabled:shadow-none translate-y-0 active:translate-y-2 active:shadow-none group"
                     >
-                      {isProcessing ? (
-                        <><Loader2 size={24} className="animate-spin" /> EXECUTING...</>
-                      ) : (
-                        <>EXECUTE_ORDER <ArrowRight size={20} className="group-hover:translate-x-2 transition-transform" /></>
-                      )}
+                      PROCEED_TO_CHECKOUT <ArrowRight size={20} className="group-hover:translate-x-2 transition-transform" />
                     </button>
                   </div>
-                )}
-
-                <div className="mt-10 p-6 bg-[#F9F9F7] border-2 border-dashed border-[#1A1A1A]">
-                  <p className="font-mono text-[10px] font-bold uppercase leading-relaxed opacity-60">
-                    // NOTICE: By executing, you agree to version control V1 of uploaded assets. Initial proofing begins within 24 standard operational hours.
-                  </p>
                 </div>
               </div>
             </div>
           </aside>
         </div>
 
-        {quantityModalService && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-6">
-            <div className="w-full max-w-md border-4 border-[#1A1A1A] bg-white p-6 shadow-[10px_10px_0px_0px_rgba(0,255,255,1)]">
-              <h3 className="text-2xl font-black uppercase italic tracking-tighter">Set_Quantity</h3>
-              <p className="mt-2 font-mono text-[10px] uppercase tracking-widest opacity-60">
-                {quantityModalService.name}
-              </p>
-              {quantityModalService.item_type === "product" && (
-                <p className="mt-1 font-mono text-[10px] uppercase tracking-widest text-[#EC008C]">
-                  Stock Left: {Math.max(0, Number(quantityModalService.stock_qty || 0))}
-                </p>
-              )}
-
-              <div className="mt-6 flex items-center justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setQuantityInput((q) => String(Math.max(1, (Number.parseInt(q, 10) || 1) - 1)))}
-                  className="inline-flex h-10 w-10 items-center justify-center border-2 border-[#1A1A1A] bg-white"
-                  aria-label="Decrease quantity"
-                >
-                  <Minus size={16} />
-                </button>
-
-                <input
-                  type="number"
-                  min="1"
-                  max={quantityModalService.item_type === "product" ? Math.max(1, Number(quantityModalService.stock_qty || 1)) : 99999}
-                  value={quantityInput}
-                  onChange={(e) => setQuantityInput(e.target.value)}
-                  className="w-24 border-2 border-[#1A1A1A] px-3 py-2 text-center font-mono text-lg font-black outline-none focus:border-[#00FFFF]"
-                />
-
-                <button
-                  type="button"
-                  onClick={() => setQuantityInput((q) => String((Number.parseInt(q, 10) || 1) + 1))}
-                  className="inline-flex h-10 w-10 items-center justify-center border-2 border-[#1A1A1A] bg-white"
-                  aria-label="Increase quantity"
-                >
-                  <Plus size={16} />
-                </button>
-              </div>
-              <div className="mt-6 flex justify-end gap-2">
-                {getSelectedQty(quantityModalService.id) > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      upsertServiceQuantity(quantityModalService, 0);
-                      closeQuantityModal();
-                    }}
-                    className="border-2 border-[#EC008C] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-[0.15em] text-[#EC008C] hover:bg-[#EC008C] hover:text-white"
-                  >
-                    Remove_From_Cart
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={closeQuantityModal}
-                  className="border-2 border-[#1A1A1A] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-[0.15em]"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={applyQuantityToCart}
-                  className="border-2 border-[#1A1A1A] bg-[#1A1A1A] px-4 py-2 font-mono text-[10px] font-black uppercase tracking-[0.15em] text-white hover:bg-[#EC008C]"
-                >
-                  Add_To_Cart
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        
 
         {previewImage && (
           <div
@@ -1435,6 +844,202 @@ export default function BusinessDetailsPage({ params }) {
             </div>
           </div>
         )}
+          {/* ── INQUIRY MODAL ── */}
+          
+        {itemDetailsModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-[#1A1A1A]/80 p-4 md:p-8 backdrop-blur-md overflow-y-auto" onClick={() => setItemDetailsModal(null)}>
+            <div className="w-full max-w-5xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[16px_16px_0px_0px_rgba(236,0,140,1)] flex flex-col md:flex-row max-h-full relative mt-auto mb-auto" onClick={(e) => e.stopPropagation()}>
+              
+              {/* Close Button */}
+              <button
+                onClick={() => setItemDetailsModal(null)}
+                className="absolute -top-4 -right-4 z-50 p-2 bg-[#EC008C] text-white border-4 border-[#1A1A1A] hover:bg-[#FFF200] hover:text-[#1A1A1A] hover:scale-110 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
+              >
+                <X size={24} className="stroke-[3]" />
+              </button>
+
+              {/* Left Side - Image */}
+              <div className="md:w-1/2 border-b-4 md:border-b-0 md:border-r-4 border-[#1A1A1A] bg-[#F9F9F7] flex items-center justify-center p-8 relative shrink-0">
+                <div className="absolute top-4 left-4 z-10">
+                  <span className="font-mono text-[10px] font-black uppercase tracking-widest px-3 py-1 border-2 border-[#1A1A1A] bg-[#1A1A1A] text-white shadow-[2px_2px_0px_0px_rgba(0,255,255,1)]">
+                    {itemDetailsModal.category || "GENERAL"}
+                  </span>
+                </div>
+                {itemDetailsModal.image_url ? (
+                  <img
+                    src={itemDetailsModal.image_url}
+                    alt={itemDetailsModal.name}
+                    className="max-h-[50vh] w-full object-contain"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center opacity-30">
+                    <Package size={64} className="mb-4" />
+                    <p className="font-mono text-sm font-black uppercase tracking-widest">No Image Available</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Right Side - Details & Recommendations */}
+              <div className="md:w-1/2 flex flex-col overflow-y-auto">
+                <div className="p-8 border-b-4 border-[#1A1A1A]">
+                  <h3 className="text-4xl font-black uppercase italic tracking-tighter text-[#1A1A1A] leading-none mb-4">
+                    {itemDetailsModal.name}
+                  </h3>
+                  
+                  <div className="flex items-end gap-4 mb-6">
+                    <p className="text-4xl font-black italic text-[#EC008C] leading-none">
+                      {itemDetailsModal.price_max && parseFloat(itemDetailsModal.price_max) > parseFloat(itemDetailsModal.price) 
+                        ? `₱${Number(itemDetailsModal.price).toFixed(2)} – ₱${Number(itemDetailsModal.price_max).toFixed(2)}` 
+                        : `₱${Number(itemDetailsModal.price).toFixed(2)}${itemDetailsModal.item_type !== "product" ? "+" : ""}`}
+                    </p>
+                    {itemDetailsModal.item_type === "product" && (
+                      <span className="font-mono text-[11px] font-black uppercase tracking-widest text-[#1A1A1A]/50 mb-1">
+                        Stock: {Math.max(0, Number(itemDetailsModal.stock_qty || 0))}
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="font-mono text-sm font-bold text-gray-700 leading-relaxed mb-8 bg-white border-2 border-[#1A1A1A] p-4 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+                    {itemDetailsModal.description || "No description provided for this item."}
+                  </p>
+
+                  {/* Actions based on item_type */}
+                  {itemDetailsModal.item_type !== "product" ? (
+                    <button
+                      onClick={() => {
+                        setItemDetailsModal(null);
+                        setInquiryModalService(itemDetailsModal);
+                      }}
+                      className="w-full bg-[#00FFFF] text-[#1A1A1A] border-4 border-[#1A1A1A] py-5 px-6 font-black uppercase italic text-xl flex items-center justify-center gap-3 hover:bg-[#1A1A1A] hover:text-[#00FFFF] transition-all shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] group"
+                    >
+                      Inquire This Service <ArrowRight size={20} className="group-hover:translate-x-2 transition-transform" />
+                    </button>
+                  ) : (
+                    <div className="flex flex-col gap-4">
+                      {Number(itemDetailsModal.stock_qty) <= 0 ? (
+                        <div className="w-full bg-[#1A1A1A] text-[#EC008C] border-4 border-[#1A1A1A] py-5 px-6 font-black uppercase italic text-xl flex items-center justify-center text-center opacity-80">
+                          Out of Stock
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-4">
+                          <div className="flex items-center gap-3">
+                            <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#1A1A1A]/60">Quantity:</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const current = parseInt(quantityInput, 10) || 1;
+                                setQuantityInput(String(Math.max(1, current - 1)));
+                              }}
+                              className="inline-flex h-10 w-10 items-center justify-center border-2 border-[#1A1A1A] bg-white hover:bg-[#1A1A1A] hover:text-white transition-colors"
+                            >
+                              <Minus size={16} />
+                            </button>
+                            <input
+                              type="number"
+                              min="1"
+                              max={itemDetailsModal.item_type === "product" ? Math.max(1, Number(itemDetailsModal.stock_qty || 1)) : 99999}
+                              value={quantityInput}
+                              onChange={(e) => setQuantityInput(e.target.value)}
+                              className="w-20 border-2 border-[#1A1A1A] px-2 py-2 text-center font-mono text-lg font-black outline-none focus:border-[#00FFFF]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const current = parseInt(quantityInput, 10) || 1;
+                                setQuantityInput(String(current + 1));
+                              }}
+                              className="inline-flex h-10 w-10 items-center justify-center border-2 border-[#1A1A1A] bg-white hover:bg-[#1A1A1A] hover:text-white transition-colors"
+                            >
+                              <Plus size={16} />
+                            </button>
+                          </div>
+
+                          <div className="flex gap-4">
+                            <button
+                              onClick={() => {
+                                const maxStock = Math.max(0, Number(itemDetailsModal.stock_qty || 0));
+                                const parsed = Number.parseInt(quantityInput, 10);
+                                const normalized = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+                                const qty = Math.min(normalized, maxStock);
+                                upsertServiceQuantity(itemDetailsModal, qty);
+                              }}
+                              className="flex-1 bg-[#FFF200] text-[#1A1A1A] border-4 border-[#1A1A1A] py-5 px-6 font-black uppercase italic text-xl flex items-center justify-center gap-3 hover:bg-[#1A1A1A] hover:text-[#FFF200] transition-all shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] group"
+                            >
+                              <Plus size={24} /> {getSelectedQty(itemDetailsModal.id) > 0 ? "Update Cart" : "Add to Cart"}
+                            </button>
+                            {getSelectedQty(itemDetailsModal.id) > 0 && (
+                              <button
+                                onClick={() => { upsertServiceQuantity(itemDetailsModal, 0); setQuantityInput("1"); }}
+                                className="px-6 py-5 border-4 border-[#EC008C] text-[#EC008C] bg-white hover:bg-[#EC008C] hover:text-white font-black uppercase italic transition-all"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                          {getSelectedQty(itemDetailsModal.id) > 0 && (
+                            <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF] bg-[#1A1A1A] px-3 py-2 text-center">
+                              Currently in cart: {getSelectedQty(itemDetailsModal.id)}
+                            </p>
+                          )}
+
+                          {/* Customize button — only for customizable products */}
+                          {itemDetailsModal.is_customizable && isCustomer && (
+                            <button
+                              onClick={() => {
+                                setItemDetailsModal(null);
+                                setInquiryModalService(itemDetailsModal);
+                              }}
+                              className="w-full bg-[#EC008C] text-white border-4 border-[#1A1A1A] py-4 px-6 font-black uppercase italic text-lg flex items-center justify-center gap-3 hover:bg-[#1A1A1A] hover:text-[#EC008C] transition-all shadow-[6px_6px_0px_0px_rgba(236,0,140,1)] group"
+                            >
+                              <span className="text-xl">✦</span> Customize This Product
+                              <ArrowRight size={18} className="group-hover:translate-x-2 transition-transform" />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Recommendations */}
+                <div className="p-8 bg-[#F9F9F7] grow">
+                  <h4 className="font-black uppercase italic text-xl mb-4 flex items-center gap-2">
+                    <Star size={20} className="text-[#EC008C]" fill="#EC008C" /> Also Recommend
+                  </h4>
+                  <div className="flex flex-col gap-3">
+                    {business.services
+                      .filter(s => s.id !== itemDetailsModal.id && s.available)
+                      .sort(() => 0.5 - Math.random())
+                      .slice(0, 3)
+                      .map(rec => (
+                        <div 
+                          key={rec.id}
+                          onClick={() => openItemDetails(rec)}
+                          className="flex items-center gap-4 bg-white border-2 border-[#1A1A1A] p-3 cursor-pointer hover:bg-[#1A1A1A] hover:text-[#00FFFF] group transition-colors shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] hover:shadow-[4px_4px_0px_0px_rgba(236,0,140,1)]"
+                        >
+                          {rec.image_url ? (
+                            <img src={rec.image_url} alt={rec.name} className="w-16 h-16 object-cover border-2 border-[#1A1A1A] bg-[#F9F9F7]" />
+                          ) : (
+                            <div className="w-16 h-16 bg-[#1A1A1A]/5 border-2 border-[#1A1A1A] flex items-center justify-center">
+                              <Package size={20} className="opacity-50" />
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="font-black uppercase italic text-sm truncate group-hover:text-white transition-colors">{rec.name}</p>
+                            <p className="font-mono text-[10px] font-bold text-[#EC008C] uppercase tracking-widest mt-1">
+                              ₱{Number(rec.price).toFixed(2)}{rec.item_type !== "product" ? "+" : ""}
+                            </p>
+                          </div>
+                          <ChevronRight size={20} className="text-[#1A1A1A] group-hover:text-[#00FFFF] shrink-0" />
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
           {/* ── INQUIRY MODAL ── */}
           {inquiryModalService && (
             <div className="fixed inset-0 z-[999] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">

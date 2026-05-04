@@ -37,6 +37,7 @@ const EMPTY_PRODUCT = {
   imageFile: null,
   removeImage: false,
   stock_qty: "0",
+  is_customizable: false,
 };
 
 export default function ServiceFormModal({ mode, initial, onSave, onClose, forcedType }) {
@@ -45,17 +46,18 @@ export default function ServiceFormModal({ mode, initial, onSave, onClose, force
   const [form, setForm] = useState(() => {
     if (initial) {
       return {
-        item_type:   initial.item_type   || defaultType,
-        name:        initial.name        || "",
-        description: initial.description || "",
-        price:       initial.price != null ? String(initial.price) : "",
-        price_max:   initial.price_max != null ? String(initial.price_max) : "",
-        category:    initial.category    || "",
-        available:   initial.available   !== false,
-        imageUrl:    initial.image_url   || null,
-        imageFile:   null,
-        removeImage: false,
-        stock_qty:   initial.stock_qty != null ? String(initial.stock_qty) : "0",
+        item_type:        initial.item_type   || defaultType,
+        name:             initial.name        || "",
+        description:      initial.description || "",
+        price:            initial.price != null ? String(initial.price) : "",
+        price_max:        initial.price_max != null ? String(initial.price_max) : "",
+        category:         initial.category    || "",
+        available:        initial.available   !== false,
+        imageUrl:         initial.image_url   || null,
+        imageFile:        null,
+        removeImage:      false,
+        stock_qty:        initial.stock_qty != null ? String(initial.stock_qty) : "0",
+        is_customizable:  initial.is_customizable || false,
       };
     }
     return defaultType === "product" ? { ...EMPTY_PRODUCT } : { ...EMPTY_SERVICE };
@@ -338,6 +340,32 @@ export default function ServiceFormModal({ mode, initial, onSave, onClose, force
                 )}
               </div>
             </div>
+
+            {/* Customizable toggle — products only */}
+            {!isService && (
+              <div className="flex items-center gap-3 rounded border-2 border-[#FFF200] bg-[#FFFFF0] px-3 py-3">
+                <div className="flex-1">
+                  <label className={`${fieldLabelClass} mb-0`} htmlFor="svc-customizable">
+                    Allow Customization
+                  </label>
+                  <p className="font-mono text-[9px] uppercase tracking-widest text-[#1A1A1A]/50 mt-0.5">
+                    Customers can send a design / request a video call for this product
+                  </p>
+                </div>
+                <button
+                  id="svc-customizable"
+                  type="button"
+                  onClick={() => set("is_customizable", !form.is_customizable)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border-2 border-[#1A1A1A] transition-colors ${form.is_customizable ? "bg-[#FFF200]" : "bg-white"}`}
+                  aria-pressed={form.is_customizable}
+                >
+                  <span className={`h-4 w-4 rounded-full border border-[#1A1A1A] bg-white transition-transform ${form.is_customizable ? "translate-x-5" : "translate-x-1"}`} />
+                </button>
+                <span className="font-mono text-[10px] font-black uppercase tracking-[0.12em] text-[#1A1A1A]/70">
+                  {form.is_customizable ? "Yes" : "No"}
+                </span>
+              </div>
+            )}
 
             {/* Availability toggle */}
             <div className="flex items-center gap-3 rounded border-2 border-[#1A1A1A]/10 bg-[#F9F9F7] px-3 py-3">

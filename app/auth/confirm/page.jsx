@@ -7,34 +7,46 @@ import { Loader2, ShieldCheck } from "lucide-react";
 
 export default function AuthConfirmPage() {
   const router = useRouter();
-  const [status, setStatus] = useState("Processing email verification...");
+  const [status, setStatus] = useState("Authenticating...");
 
   useEffect(() => {
     let active = true;
-    let redirectTimer;
 
-    const clearSessionAndRedirect = async () => {
+    const processLoginAndRedirect = async () => {
       try {
-        setStatus("Clearing active session...");
-        await supabase.auth.signOut({ scope: "global" });
+        setStatus("Verifying credentials...");
+        // Wait briefly for supabase-js to parse the URL hash and save the session
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+        const { data: { user } } = await supabase.auth.getUser();
+        
         if (!active) return;
-        setStatus("Verification complete. Redirecting to login...");
-      } catch {
+
+        if (user) {
+          const role = user.user_metadata?.role || "CUSTOMER";
+          setStatus("Verification complete. Redirecting...");
+          
+          if (role === "BUSINESS_OWNER") {
+            router.replace("/owner/documents");
+          } else {
+            router.replace("/browse");
+          }
+        } else {
+           setStatus("Session not found. Redirecting to login...");
+           setTimeout(() => router.replace("/login"), 1500);
+        }
+        
+      } catch (err) {
         if (!active) return;
-        setStatus("Verification complete. Redirecting to login...");
-      } finally {
-        if (!active) return;
-        redirectTimer = setTimeout(() => {
-          router.replace("/login");
-        }, 900);
+        setStatus("Error verifying email. Redirecting to login...");
+        setTimeout(() => router.replace("/login"), 1500);
       }
     };
 
-    clearSessionAndRedirect();
+    processLoginAndRedirect();
 
     return () => {
       active = false;
-      if (redirectTimer) clearTimeout(redirectTimer);
     };
   }, [router]);
 
@@ -46,8 +58,8 @@ export default function AuthConfirmPage() {
             <ShieldCheck className="h-6 w-6" />
           </div>
           <div>
-            <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-gray-500">Email Verification</p>
-            <h1 className="text-2xl font-black uppercase tracking-tighter">Session Reset</h1>
+            <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-gray-500">System Link</p>
+            <h1 className="text-2xl font-black uppercase tracking-tighter">Connecting</h1>
           </div>
         </div>
 

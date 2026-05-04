@@ -9,14 +9,13 @@ import {
   ShieldCheck, AlertCircle, Users, Building2
 } from "lucide-react";
 
-const REQUIRED_DOC_TYPES = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID", "TIN_NUMBER"];
+const REQUIRED_DOC_TYPES = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID"];
 
 const DOC_META = {
   DTI:           { label: "DTI Certificate",  color: "#00FFFF", textColor: "#1A1A1A" },
   MAYORS_PERMIT: { label: "Mayor's Permit",    color: "#EC008C", textColor: "#ffffff" },
   BIR:           { label: "BIR Certificate",   color: "#FFF200", textColor: "#1A1A1A" },
-  VALID_ID:      { label: "Valid ID (Owner)",  color: "#1A1A1A", textColor: "#ffffff" },
-  TIN_NUMBER:    { label: "TIN Number",        color: "#EC008C", textColor: "#ffffff" },
+  VALID_ID:      { label: "Valid ID",          color: "#1A1A1A", textColor: "#ffffff" },
 };
 
 export default function AdminAccounts() {
@@ -86,11 +85,11 @@ export default function AdminAccounts() {
 
   useEffect(() => { fetchVerifications(); }, [fetchVerifications]);
   useEffect(() => {
-    if (activeTab === "accounts" && users.length === 0) fetchUsers();
+    if (users.length === 0) fetchUsers();
   }, [activeTab, users.length, fetchUsers]);
 
   /* ── AUTO-APPROVE BUSINESS when all docs approved ── */
-  const autoApproveBusiness = async (businessId, updatedDocs) => {
+  const autoApproveBusiness = async (businessId, updatedDocs, business) => {
     const allApproved = REQUIRED_DOC_TYPES.every((type) => {
       const d = updatedDocs.find((d) => d.doc_type === type);
       return d?.status === "APPROVED";
@@ -101,11 +100,43 @@ export default function AdminAccounts() {
         prev.map((b) => b.id === businessId ? { ...b, status: "APPROVED" } : b)
       );
       showToast("All docs approved — business is now VERIFIED! 🎉");
+
+      // Send approval email to owner
+      let ownerEmail = business?.owner?.email;
+      if (!ownerEmail) {
+        // Fallback: look up the true auth email from the admin users array
+        const adminUser = users.find(u => u.id === business?.owner_id);
+        if (adminUser) ownerEmail = adminUser.email;
+      }
+
+      const ownerName  = business?.owner?.full_name;
+      const bizName    = business?.name;
+      if (ownerEmail) {
+        try {
+          const res = await fetch("/api/admin/notify-approved", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ownerEmail, ownerName, businessName: bizName }),
+          });
+          const result = await res.json();
+          if (!res.ok) {
+            console.error("Email API Error:", result);
+            showToast(`Email error: ${result.error}`, "error");
+          } else {
+            showToast("Approval email sent successfully! 📧");
+          }
+        } catch (emailErr) {
+          console.error("Failed to send approval email:", emailErr);
+          showToast("Failed to send approval email.", "error");
+        }
+      } else {
+        showToast("Warning: Could not find owner email to send notification.", "error");
+      }
     }
   };
 
   /* ── APPROVE DOC ── */
-  const approveDoc = async (doc, businessId, allDocs) => {
+  const approveDoc = async (doc, businessId, allDocs, business) => {
     setActionLoading((p) => ({ ...p, [doc.id]: true }));
     try {
       await supabase.from("business_documents")
@@ -119,7 +150,7 @@ export default function AdminAccounts() {
           : b)
       );
       showToast(`${DOC_META[doc.doc_type]?.label} approved ✓`);
-      await autoApproveBusiness(businessId, updatedDocs);
+      await autoApproveBusiness(businessId, updatedDocs, business);
     } finally {
       setActionLoading((p) => ({ ...p, [doc.id]: false }));
     }
@@ -456,7 +487,7 @@ export default function AdminAccounts() {
                                       className="flex-1 bg-white border-2 border-black p-3 font-mono text-[10px] uppercase resize-none focus:outline-none focus:ring-2 ring-[#EC008C]/30" />
                                     <div className="flex sm:flex-col gap-2">
                                       <button
-                                        onClick={() => approveDoc(doc, biz.id, biz.business_documents)}
+                                        onClick={() => approveDoc(doc, biz.id, biz.business_documents, biz)}
                                         disabled={actionLoading[doc.id]}
                                         className="flex-1 sm:flex-none bg-[#00FFFF] text-black border-2 border-black px-4 py-2 font-black text-[10px] uppercase hover:bg-black hover:text-[#00FFFF] transition-all disabled:opacity-50 flex items-center justify-center gap-1 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
                                         {actionLoading[doc.id] ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}

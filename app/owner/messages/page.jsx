@@ -71,7 +71,7 @@ export default function OwnerMessagesPage() {
           TOOLBAR_BUTTONS: [
             "microphone", "camera", "desktop", "fullscreen",
             "fodeviceselection", "hangup", "chat", "settings",
-            "raisehand", "videoquality", "filmstrip", "tileview",
+            "raisehand", "videoquality", "filmstrip", "tileview", "whiteboard",
           ],
         },
         configOverwrite: {
@@ -431,6 +431,37 @@ export default function OwnerMessagesPage() {
     setDesignVersion((prev) => String(Number(prev) + 1));
   };
 
+  const markAsDesignVersion = async (msg) => {
+    if (!activeConv || !user || !msg.image_url) return;
+    const version = window.prompt("Enter version number or name:", "1");
+    if (!version) return;
+
+    setSending(true);
+    await supabase.from("chat_messages").update({
+      message_type: 'design_version',
+      metadata: { ...(msg.metadata || {}), version }
+    }).eq("id", msg.id);
+
+    fetchMessages(activeConv.id, true);
+    setSending(false);
+  };
+
+  const unmarkDesignVersion = async (msg) => {
+    if (!activeConv || !user) return;
+    setSending(true);
+
+    const newMetadata = { ...(msg.metadata || {}) };
+    delete newMetadata.version;
+
+    await supabase.from("chat_messages").update({
+      message_type: null,
+      metadata: Object.keys(newMetadata).length > 0 ? newMetadata : null
+    }).eq("id", msg.id);
+
+    fetchMessages(activeConv.id, true);
+    setSending(false);
+  };
+
   const saveEditMessage = async (msgId) => {
     if (!editingText.trim()) return;
     await supabase
@@ -652,14 +683,41 @@ export default function OwnerMessagesPage() {
                             : "bg-white text-[#1A1A1A] border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(236,0,140,0.3)]"
                         }`}>
                           {msg.image_url && (
-                            <a href={msg.image_url} target="_blank" rel="noopener noreferrer">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={msg.image_url}
-                                alt="Chat upload"
-                                className="mb-3 max-h-64 w-auto rounded border-2 border-black/20"
-                              />
-                            </a>
+                            <div className="relative group/img inline-block">
+                              <a href={msg.image_url} target="_blank" rel="noopener noreferrer">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={msg.image_url}
+                                  alt="Chat upload"
+                                  className={`mb-3 max-h-64 w-auto rounded border-2 border-black/20 ${msg.message_type === 'design_version' ? 'border-[#FFF200]' : ''}`}
+                                />
+                              </a>
+                              
+                              {/* Label if it is a design version */}
+                              {msg.message_type === 'design_version' && (
+                                <div className="absolute bottom-5 left-2 bg-[#1A1A1A] text-[#FFF200] font-mono text-[9px] font-black uppercase tracking-widest px-2 py-1 shadow-[2px_2px_0px_0px_rgba(255,242,0,1)]">
+                                  VERSION {msg.metadata?.version || "1"}
+                                </div>
+                              )}
+
+                              <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover/img:opacity-100 z-10 transition-opacity">
+                                {msg.message_type === 'design_version' ? (
+                                  <button
+                                    onClick={() => unmarkDesignVersion(msg)}
+                                    className="bg-[#EC008C] text-white font-black text-[9px] uppercase px-2 py-1 border-2 border-[#1A1A1A] hover:bg-[#1A1A1A] hover:text-[#EC008C] transition-all shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
+                                  >
+                                    Unmark
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => markAsDesignVersion(msg)}
+                                    className="bg-[#FFF200] text-[#1A1A1A] font-black text-[9px] uppercase px-2 py-1 border-2 border-[#1A1A1A] hover:bg-[#00FFFF] transition-all shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
+                                  >
+                                    Mark as Version
+                                  </button>
+                                )}
+                              </div>
+                            </div>
                           )}
 
                           {isEditing ? (
@@ -731,9 +789,7 @@ export default function OwnerMessagesPage() {
                             </div>
                           ) : msg.message_type === 'design_version' ? (
                             <div className="flex flex-col">
-                              <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#FFF200] mb-2 px-2 py-1 bg-[#1A1A1A] self-start">
-                                Version {msg.metadata?.version || "1"}
-                              </span>
+                              {/* Only show extra text if it was sent by the owner as a version copy originally */}
                               {msg.content && msg.content !== "[image]" && (
                                 <p className="text-sm font-bold leading-relaxed mb-3">{msg.content}</p>
                               )}
