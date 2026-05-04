@@ -40,6 +40,7 @@ export default function OwnerOrdersPage() {
   const [refundFile, setRefundFile] = useState(null);
   const [uploadingRefund, setUploadingRefund] = useState(false);
   const [viewRefundProof, setViewRefundProof] = useState(null); // URL string
+  const [viewDpReceipt, setViewDpReceipt] = useState(null); // URL string
 
   useEffect(() => {
     let subscription;
@@ -408,9 +409,9 @@ export default function OwnerOrdersPage() {
 
                     <td className="p-4">
                       {order.receipt_url ? (
-                        <a href={order.receipt_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-[#1A1A1A] text-white px-2 py-1 hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all font-black text-[9px] uppercase">
+                        <button onClick={() => setViewDpReceipt(order.receipt_url)} className="inline-flex items-center gap-1 bg-[#1A1A1A] text-white px-2 py-1 hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all font-black text-[9px] uppercase">
                           <Eye size={10} /> DP_Receipt
-                        </a>
+                        </button>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-[#EC008C] font-black text-[9px] uppercase animate-pulse">
                           <AlertCircle size={10} /> Unpaid_DP
@@ -731,6 +732,42 @@ export default function OwnerOrdersPage() {
             <div className="p-6 border-t-4 border-[#1A1A1A] flex justify-end">
               <button
                 onClick={() => setViewRefundProof(null)}
+                className="bg-[#1A1A1A] text-white px-6 py-3 font-black uppercase text-[10px] hover:bg-[#EC008C] transition-all shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] active:shadow-none"
+              >
+                CLOSE_VIEWER
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── VIEW DP RECEIPT MODAL ── */}
+      {viewDpReceipt && (
+        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)]">
+            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
+              <div className="flex items-center gap-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-[#00FFFF]" />
+                  <div className="w-2 h-2 bg-[#EC008C]" />
+                  <div className="w-2 h-2 bg-[#FFF200]" />
+                </div>
+                <span className="font-black uppercase italic tracking-widest">DP_Receipt</span>
+              </div>
+              <button onClick={() => setViewDpReceipt(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 bg-gray-100 flex items-center justify-center min-h-[300px]">
+              <img 
+                src={viewDpReceipt} 
+                alt="DP Receipt" 
+                className="max-w-full max-h-[70vh] object-contain border-4 border-[#1A1A1A]"
+              />
+            </div>
+            <div className="p-6 border-t-4 border-[#1A1A1A] flex justify-end">
+              <button
+                onClick={() => setViewDpReceipt(null)}
                 className="bg-[#1A1A1A] text-white px-6 py-3 font-black uppercase text-[10px] hover:bg-[#EC008C] transition-all shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] active:shadow-none"
               >
                 CLOSE_VIEWER

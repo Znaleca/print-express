@@ -64,6 +64,10 @@ export default function ServiceFormModal({ mode, initial, onSave, onClose, force
   });
 
   const [imagePreview, setImagePreview] = useState(initial?.image_url || null);
+  const [isCustomCategory, setIsCustomCategory] = useState(() => {
+    const cat = initial?.category || "";
+    return cat && !CATEGORIES.includes(cat) && cat !== "Custom";
+  });
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState(null);
 
@@ -298,8 +302,16 @@ export default function ServiceFormModal({ mode, initial, onSave, onClose, force
               <label className={fieldLabelClass} htmlFor="svc-category">Category</label>
               <select
                 id="svc-category"
-                value={form.category}
-                onChange={(e) => set("category", e.target.value)}
+                value={isCustomCategory ? "Custom" : form.category}
+                onChange={(e) => {
+                  if (e.target.value === "Custom") {
+                    setIsCustomCategory(true);
+                    set("category", "");
+                  } else {
+                    setIsCustomCategory(false);
+                    set("category", e.target.value);
+                  }
+                }}
                 className={inputClass}
               >
                 <option value="">— Select category —</option>
@@ -307,6 +319,17 @@ export default function ServiceFormModal({ mode, initial, onSave, onClose, force
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
+
+              {isCustomCategory && (
+                <input
+                  type="text"
+                  value={form.category}
+                  onChange={(e) => set("category", e.target.value)}
+                  placeholder="Type custom category name..."
+                  className={`${inputClass} mt-2`}
+                  autoFocus
+                />
+              )}
             </div>
 
             {/* Image */}

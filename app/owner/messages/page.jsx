@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
   MessageSquare, Send, Loader2, User, Store,
-  ChevronRight, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, Banknote, FileText
+  ChevronRight, ChevronLeft, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, Banknote, FileText
 } from "lucide-react";
 
 export default function OwnerMessagesPage() {
@@ -33,6 +33,7 @@ export default function OwnerMessagesPage() {
   const [videoCallRequestAlert, setVideoCallRequestAlert] = useState(false);
   const [viewImagePopup, setViewImagePopup] = useState(null); // { url, label }
   const bottomRef = useRef(null);
+  const scrollContainerRef = useRef(null);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
   const jitsiApiRef = useRef(null);
@@ -287,7 +288,16 @@ export default function OwnerMessagesPage() {
       setHasMoreMsgs(count > limit);
       
       if (limit === 20 || isBg) {
-        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: isBg ? "smooth" : "auto" }), 50);
+        setTimeout(() => {
+          if (scrollContainerRef.current) {
+            scrollContainerRef.current.scrollTo({
+              top: scrollContainerRef.current.scrollHeight,
+              behavior: isBg ? "smooth" : "auto"
+            });
+          } else {
+            bottomRef.current?.scrollIntoView({ behavior: isBg ? "smooth" : "auto", block: "nearest" });
+          }
+        }, 50);
       }
     }
     if (!isBg) setLoadingMsgs(false);
@@ -515,7 +525,7 @@ export default function OwnerMessagesPage() {
 
       <div className="flex flex-1 w-full max-w-[1920px] mx-auto overflow-hidden">
         {/* ── LEFT: CONVERSATION LIST ── */}
-        <aside className="w-full md:w-80 lg:w-96 border-r-4 border-l-4 border-b-4 border-[#1A1A1A] flex flex-col shrink-0 bg-white">
+        <aside className={`${activeConv ? 'hidden md:flex' : 'flex'} w-full md:w-80 lg:w-96 border-r-4 border-l-4 border-b-4 border-[#1A1A1A] flex-col shrink-0 bg-white`}>
           <div className="px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
             <p className="font-mono text-[10px] uppercase tracking-widest font-black text-[#00FFFF]">
               {conversations.length} Active Thread{conversations.length !== 1 ? "s" : ""}
@@ -579,7 +589,7 @@ export default function OwnerMessagesPage() {
         </aside>
 
         {/* ── RIGHT: CHAT PANEL ── */}
-        <div className="flex-1 flex flex-col min-w-0 border-r-4 border-b-4 border-[#1A1A1A]">
+        <div className={`flex-1 flex-col min-w-0 border-r-4 border-b-4 border-[#1A1A1A] ${!activeConv ? 'hidden md:flex' : 'flex'}`}>
           {!activeConv ? (
             <div className="flex-1 flex flex-col items-center justify-center bg-[#F9F9F7]">
               <div className="w-20 h-20 bg-[#1A1A1A] flex items-center justify-center mb-6 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
@@ -593,8 +603,15 @@ export default function OwnerMessagesPage() {
           ) : (
             <>
               {/* Chat header */}
-              <div className="px-8 py-5 bg-white border-b-4 border-[#1A1A1A] flex items-center gap-4 shrink-0 shadow-[0_4px_0_0_rgba(26,26,26,1)]">
-                <div className="w-10 h-10 bg-[#1A1A1A] flex items-center justify-center border-2 border-[#1A1A1A]">
+              <div className="px-4 md:px-8 py-5 bg-white border-b-4 border-[#1A1A1A] flex items-center gap-4 shrink-0 shadow-[0_4px_0_0_rgba(26,26,26,1)]">
+                <button
+                  type="button"
+                  onClick={() => setActiveConv(null)}
+                  className="md:hidden flex items-center justify-center w-10 h-10 bg-[#1A1A1A] text-[#00FFFF] border-2 border-[#1A1A1A] shrink-0"
+                >
+                  <ChevronLeft size={20} />
+                </button>
+                <div className="w-10 h-10 bg-[#1A1A1A] items-center justify-center border-2 border-[#1A1A1A] hidden md:flex shrink-0">
                   <User size={16} className="text-[#00FFFF]" />
                 </div>
                 <div>
@@ -613,7 +630,7 @@ export default function OwnerMessagesPage() {
               </div>
 
               {/* Messages area */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#F9F9F7] relative">
+              <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#F9F9F7] relative">
 
                 {/* Video Call Request Alert Banner */}
                 {videoCallRequestAlert && (
@@ -823,6 +840,23 @@ export default function OwnerMessagesPage() {
                                 )}
                               </div>
                             </div>
+                          ) : msg.message_type === 'category_list' ? (
+                            <div className="flex flex-col min-w-[200px]">
+                              {msg.content && <p className="text-sm font-bold leading-relaxed mb-3">{msg.content}</p>}
+                              {msg.metadata?.categories && msg.metadata.categories.length > 0 && (
+                                <div className="flex flex-col gap-2">
+                                  {msg.metadata.categories.map((cat, i) => (
+                                    <button
+                                      key={i}
+                                      disabled
+                                      className="text-left px-3 py-2 border-2 border-[#1A1A1A] bg-[#FFF200] text-[#1A1A1A] font-mono text-[10px] font-black uppercase tracking-widest cursor-default"
+                                    >
+                                      {cat}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           ) : (
                             msg.content !== "[image]" && <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap word-break break-words">{msg.content}</p>
                           )}
@@ -884,6 +918,11 @@ export default function OwnerMessagesPage() {
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Tab") {
+                      e.preventDefault();
+                    }
+                  }}
                   placeholder="Type a message..."
                   className="flex-1 px-5 py-4 border-2 border-[#1A1A1A] font-mono text-sm bg-[#F9F9F7] focus:outline-none focus:bg-white focus:ring-4 ring-[#00FFFF]/40 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
                 />

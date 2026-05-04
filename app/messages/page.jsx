@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
   MessageSquare, Send, Loader2, User, Store,
-  ChevronRight, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, MapPin
+  ChevronRight, ChevronLeft, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, MapPin
 } from "lucide-react";
 
 function MessagesInner() {
@@ -34,6 +34,7 @@ function MessagesInner() {
   const [showQuickReplies, setShowQuickReplies] = useState(false);
   const [viewImagePopup, setViewImagePopup] = useState(null); // { url, label }
   const bottomRef = useRef(null);
+  const scrollContainerRef = useRef(null);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
   const pendingDesignUpload = useRef(false);
@@ -153,7 +154,7 @@ function MessagesInner() {
       }
 
       // Auto-open conversation if ?business= param present
-      if (initBizId) {
+      if (initBizId && !isBg) {
         const existing = data.find((c) => c.business_id === initBizId);
         if (existing) {
           openConversation(existing);
@@ -259,7 +260,16 @@ function MessagesInner() {
       
       // Scroll to bottom if it's the initial load or a background (new message) load
       if (limit === 20 || isBg) {
-        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: isBg ? "smooth" : "auto" }), 50);
+        setTimeout(() => {
+          if (scrollContainerRef.current) {
+            scrollContainerRef.current.scrollTo({
+              top: scrollContainerRef.current.scrollHeight,
+              behavior: isBg ? "smooth" : "auto"
+            });
+          } else {
+            bottomRef.current?.scrollIntoView({ behavior: isBg ? "smooth" : "auto", block: "nearest" });
+          }
+        }, 50);
       }
     }
     if (!isBg) setLoadingMsgs(false);
@@ -359,12 +369,12 @@ function MessagesInner() {
   const sendQuickReply = async (action) => {
     if (!activeConv || !user) return;
     setSending(true);
-    setShowQuickReplies(false);
 
     let customerText = "";
     if (action === "hi") customerText = "Hi";
     else if (action === "offer") customerText = "What do you offer?";
     else if (action === "location") customerText = "Where are you located?";
+    else if (action === "categories") customerText = "What are the categories you are working in?";
 
     // 1. Send customer message
     await supabase.from("chat_messages").insert({
@@ -416,6 +426,20 @@ function MessagesInner() {
         messageType = 'location_pin';
         meta = { lat: biz.lat, lng: biz.lng, address: biz.address };
       }
+    } else if (action === "categories") {
+      const { data: items } = await supabase.from('services').select('category').eq('business_id', activeConv.business_id).eq('available', true);
+      if (items && items.length > 0) {
+        const uniqueCategories = [...new Set(items.map(i => i.category).filter(Boolean))];
+        if (uniqueCategories.length > 0) {
+          botReplyText = `We currently offer services and products in the following categories:`;
+          messageType = 'category_list';
+          meta = { categories: uniqueCategories };
+        } else {
+          botReplyText = "We haven't categorized our offerings yet, but we have many available. Please ask 'What do you offer?' to see our full list.";
+        }
+      } else {
+        botReplyText = "We currently have no available categories or offerings.";
+      }
     }
 
     if (biz?.owner_id && botReplyText) {
@@ -426,6 +450,49 @@ function MessagesInner() {
         content: botReplyText,
         message_type: messageType,
         metadata: meta,
+        is_read: false,
+      });
+    }
+
+    setSending(false);
+  };
+
+  const sendCategoryInquiry = async (category) => {
+    if (!activeConv || !user) return;
+    setSending(true);
+
+    const customerText = `What is ${category}?`;
+
+    // 1. Send customer message
+    await supabase.from("chat_messages").insert({
+      conversation_id: activeConv.id,
+      sender_id: user.id,
+      sender_role: "CUSTOMER",
+      content: customerText,
+      is_read: false,
+    });
+
+    const { data: biz } = await supabase.from('businesses').select('owner_id').eq('id', activeConv.business_id).single();
+
+    let botReplyText = "";
+    if (category === "Digital Printing") {
+      botReplyText = "Digital printing is a modern method of printing from digital-based images directly to a variety of media. It's fast, flexible, and ideal for smaller print runs.";
+    } else if (category === "Offset Printing") {
+      botReplyText = "Offset printing is a traditional, high-quality printing technique where the inked image is transferred from a plate to a rubber blanket, then to the printing surface. It provides the best quality and value for large quantities.";
+    } else if (category === "Large Format") {
+      botReplyText = "Large format printing refers to printing large graphics or designs onto rolls of materials, such as banners, posters, signage, and vehicle wraps.";
+    } else if (category === "Finishing") {
+      botReplyText = "Finishing includes post-printing processes like binding, laminating, folding, and cutting to give your product its final polished look and feel.";
+    } else {
+      botReplyText = "Please wait for the shop owner to reply for more details about this specific category.";
+    }
+
+    if (biz?.owner_id && botReplyText) {
+      await supabase.from("chat_messages").insert({
+        conversation_id: activeConv.id,
+        sender_id: biz.owner_id,
+        sender_role: "BUSINESS_OWNER",
+        content: botReplyText,
         is_read: false,
       });
     }
@@ -725,7 +792,7 @@ function MessagesInner() {
         </aside>
 
         {/* ── RIGHT: CHAT PANEL ── */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className={`flex-1 flex-col min-w-0 ${!activeConv ? 'hidden md:flex' : 'flex'}`}>
           {!activeConv ? (
             <div className="flex-1 flex flex-col items-center justify-center bg-[#F9F9F7]">
               <div className="w-20 h-20 bg-[#1A1A1A] flex items-center justify-center mb-6 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
@@ -739,8 +806,15 @@ function MessagesInner() {
           ) : (
             <>
               {/* Chat header */}
-              <div className="px-8 py-5 bg-white border-b-4 border-[#1A1A1A] flex items-center gap-4 shrink-0 shadow-[0_4px_0_0_rgba(26,26,26,1)]">
-                <div className="w-10 h-10 bg-[#1A1A1A] flex items-center justify-center border-2 border-[#1A1A1A]">
+              <div className="px-4 md:px-8 py-5 bg-white border-b-4 border-[#1A1A1A] flex items-center gap-4 shrink-0 shadow-[0_4px_0_0_rgba(26,26,26,1)]">
+                <button
+                  type="button"
+                  onClick={() => setActiveConv(null)}
+                  className="md:hidden flex items-center justify-center w-10 h-10 bg-[#1A1A1A] text-[#00FFFF] border-2 border-[#1A1A1A] shrink-0"
+                >
+                  <ChevronLeft size={20} />
+                </button>
+                <div className="w-10 h-10 bg-[#1A1A1A] items-center justify-center border-2 border-[#1A1A1A] hidden md:flex shrink-0">
                   <Store size={16} className="text-[#EC008C]" />
                 </div>
                 <div>
@@ -759,7 +833,7 @@ function MessagesInner() {
               </div>
 
               {/* Messages area */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth bg-gray-50/50">
+              <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth bg-gray-50/50">
                     
                     {hasMoreMsgs && (
                       <div className="flex justify-center pt-2 pb-4">
@@ -985,6 +1059,24 @@ function MessagesInner() {
                                 </a>
                               )}
                             </div>
+                          ) : msg.message_type === 'category_list' ? (
+                            <div className="flex flex-col min-w-[200px]">
+                              {msg.content && <p className="text-sm font-bold leading-relaxed mb-3">{msg.content}</p>}
+                              {msg.metadata?.categories && msg.metadata.categories.length > 0 && (
+                                <div className="flex flex-col gap-2">
+                                  {msg.metadata.categories.map((cat, i) => (
+                                    <button
+                                      key={i}
+                                      onClick={() => sendCategoryInquiry(cat)}
+                                      disabled={sending}
+                                      className="text-left px-3 py-2 border-2 border-[#1A1A1A] bg-[#FFF200] text-[#1A1A1A] hover:bg-[#EC008C] hover:text-white font-mono text-[10px] font-black uppercase tracking-widest transition-colors disabled:opacity-50"
+                                    >
+                                      {cat}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           ) : (
                             msg.content !== "[image]" && <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap word-break break-words">{msg.content}</p>
                           )}
@@ -1032,6 +1124,12 @@ function MessagesInner() {
                     Where are you located?
                   </button>
                   <button
+                    onClick={() => sendQuickReply("categories")}
+                    className="whitespace-nowrap px-4 py-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] text-white font-mono text-[10px] font-black uppercase hover:bg-[#FFF200] hover:text-[#1A1A1A] transition-colors"
+                  >
+                    What are the categories you are working in?
+                  </button>
+                  <button
                     onClick={() => setShowQuickReplies(false)}
                     className="whitespace-nowrap px-2 py-2 ml-auto text-gray-500 hover:text-[#1A1A1A] transition-colors shrink-0"
                     title="Dismiss"
@@ -1048,6 +1146,11 @@ function MessagesInner() {
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Tab") {
+                      e.preventDefault();
+                    }
+                  }}
                   placeholder="Type a message..."
                   className="flex-1 px-5 py-4 border-2 border-[#1A1A1A] font-mono text-sm bg-[#F9F9F7] focus:outline-none focus:bg-white focus:ring-4 ring-[#00FFFF]/40 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
                 />
