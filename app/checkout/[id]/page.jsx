@@ -419,6 +419,10 @@ export default function CheckoutPage({ params }) {
   const effectiveDownpaymentPercent = userSelectedDownpaymentPercent !== null ? userSelectedDownpaymentPercent : minimumDownpaymentPercent;
   const downpaymentAmount = total * (effectiveDownpaymentPercent / 100);
   const balanceAmount = total - downpaymentAmount;
+  const isReadyToExecute =
+    selectedServices.length > 0 &&
+    !(deliveryType === "DELIVERY" && !deliveryAddress) &&
+    !(fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt);
 
   const setDownpaymentPercent = (val) => {
     setUserSelectedDownpaymentPercent(val);
