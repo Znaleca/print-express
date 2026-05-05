@@ -1,30 +1,30 @@
 "use client";
 
-import { Terminal, FileText, ShieldAlert, Cpu, Layout } from "lucide-react";
+import { Cpu } from "lucide-react";
 
 const team = [
   {
     name: "Angelo Mayce Fredriel D. Santos",
     role: "Lead Programmer",
-    icon: <Terminal size={48} />,
+    image: "/Angelo.JPG",
     details: ["System Architecture", "Logic Implementation", "Database Management", "API Integration"]
   },
   {
     name: "James Ivan C. Carreon",
     role: "Programmer 2",
-    icon: <Layout size={48} />,
+    image: "/James.jpg",
     details: ["UI/UX Engineering", "User Flow Mapping", "Visual Hierarchy", "Interaction Design"]
   },
   {
     name: "Liana C. Roldan",
     role: "Project Leader / QA",
-    icon: <ShieldAlert size={48} />,
+    image: "/final.png",
     details: ["Project Oversight", "Quality Assurance", "Beta Testing", "System Validation"]
   },
   {
     name: "Jhon Stefano S. Ching",
     role: "Documenter",
-    icon: <FileText size={48} />,
+    image: "/Stefano.png",
     details: ["Technical Writing", "System Manuals", "Documentation", "Project Reporting"]
   }
 ];
@@ -92,7 +92,7 @@ export default function AboutSection() {
           >
             <div className="relative z-10">
               <div className="w-24 h-24 flex items-center justify-center bg-[#1A1A1A] text-white mb-12 group-hover:bg-white group-hover:text-black transition-all duration-500 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)] group-hover:shadow-[8px_8px_0px_0px_rgba(236,0,140,1)]">
-                {member.icon}
+                <img src={member.image} alt={member.name} className="w-full h-full object-cover" />
               </div>
               <h3 className="text-xs font-mono font-black uppercase tracking-[0.5em] mb-6 text-[#EC008C] group-hover:text-[#00FFFF] transition-colors">
                 {member.role}
