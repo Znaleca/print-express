@@ -3,13 +3,26 @@
 import { useEffect, useState } from "react";
 import { X, Save, Loader2, ImagePlus, ImageOff } from "lucide-react";
 
-const CATEGORIES = [
-  "Digital Printing",
-  "Offset Printing",
-  "Large Format",
-  "Finishing",
-  "Custom",
-];
+const CATEGORY_GROUPS = {
+  "Core Printing Categories": [
+    "Digital Printing", "Offset Printing", "Large Format Printing", "Screen Printing", "UV Printing"
+  ],
+  "Specialty Printing": [
+    "Sublimation Printing", "3D Printing", "Textile / Fabric Printing", "Packaging Printing"
+  ],
+  "Finishing & Post-Press": [
+    "Cutting", "Binding", "Lamination", "Folding", "Embossing / Debossing", "Foil Stamping"
+  ],
+  "Marketing & Business Materials": [
+    "Business Cards", "Flyers & Brochures", "Posters", "Banners", "Stickers & Labels"
+  ],
+  "Custom & Promotional": [
+    "T-Shirt Printing", "Mug Printing", "ID Cards", "Giveaways / Souvenirs"
+  ]
+};
+
+const FLAT_CATEGORIES = Object.values(CATEGORY_GROUPS).flat();
+
 
 const EMPTY_SERVICE = {
   item_type: "service",
@@ -66,7 +79,7 @@ export default function ServiceFormModal({ mode, initial, onSave, onClose, force
   const [imagePreview, setImagePreview] = useState(initial?.image_url || null);
   const [isCustomCategory, setIsCustomCategory] = useState(() => {
     const cat = initial?.category || "";
-    return cat && !CATEGORIES.includes(cat) && cat !== "Custom";
+    return cat && !FLAT_CATEGORIES.includes(cat) && cat !== "Custom";
   });
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState(null);
@@ -315,9 +328,16 @@ export default function ServiceFormModal({ mode, initial, onSave, onClose, force
                 className={inputClass}
               >
                 <option value="">— Select category —</option>
-                {CATEGORIES.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
+                <option disabled></option>
+                {Object.entries(CATEGORY_GROUPS).map(([groupName, categories]) => [
+                  <optgroup key={groupName} label={groupName}>
+                    {categories.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </optgroup>,
+                  <option key={`space-${groupName}`} disabled></option>
+                ])}
+                <option value="Custom">+ Not on the list? Create your own...</option>
               </select>
 
               {isCustomCategory && (

@@ -474,18 +474,34 @@ function MessagesInner() {
 
     const { data: biz } = await supabase.from('businesses').select('owner_id').eq('id', activeConv.business_id).single();
 
-    let botReplyText = "";
-    if (category === "Digital Printing") {
-      botReplyText = "Digital printing is a modern method of printing from digital-based images directly to a variety of media. It's fast, flexible, and ideal for smaller print runs.";
-    } else if (category === "Offset Printing") {
-      botReplyText = "Offset printing is a traditional, high-quality printing technique where the inked image is transferred from a plate to a rubber blanket, then to the printing surface. It provides the best quality and value for large quantities.";
-    } else if (category === "Large Format") {
-      botReplyText = "Large format printing refers to printing large graphics or designs onto rolls of materials, such as banners, posters, signage, and vehicle wraps.";
-    } else if (category === "Finishing") {
-      botReplyText = "Finishing includes post-printing processes like binding, laminating, folding, and cutting to give your product its final polished look and feel.";
-    } else {
-      botReplyText = "Please wait for the shop owner to reply for more details about this specific category.";
-    }
+    const CATEGORY_DEFINITIONS = {
+      "Digital Printing": "Digital printing is a modern method of printing from digital-based images directly to a variety of media. It's fast, flexible, and ideal for smaller print runs.",
+      "Offset Printing": "Offset printing is a traditional, high-quality printing technique where the inked image is transferred from a plate to a rubber blanket, then to the printing surface. It provides the best quality and value for large quantities.",
+      "Large Format Printing": "Large format printing refers to printing large graphics or designs onto rolls of materials, such as banners, posters, signage, and vehicle wraps.",
+      "Screen Printing": "Screen printing is a technique where ink is forced through a meshed screen to create a printed design. Excellent for apparel and bulk items.",
+      "UV Printing": "UV printing uses ultra-violet light to cure or dry ink as it is printed, allowing for printing on almost any material including plastic, glass, and metal.",
+      "Sublimation Printing": "Sublimation printing uses heat to transfer dye onto materials such as a plastic, card, paper, or fabric, perfect for high-quality apparel and mugs.",
+      "3D Printing": "3D printing is the construction of a three-dimensional object from a CAD model or a digital 3D model.",
+      "Textile / Fabric Printing": "Textile printing is the process of applying color to fabric in definite patterns or designs, used for clothing, banners, and soft signage.",
+      "Packaging Printing": "Packaging printing involves creating custom boxes, bags, and wrappers with your brand's design to make your products stand out.",
+      "Cutting": "Cutting involves trimming printed materials down to their final finished size using precision equipment.",
+      "Binding": "Binding is the process of fastening individual sheets together to create books, magazines, catalogs, or reports.",
+      "Lamination": "Lamination applies a thin layer of clear plastic to printed materials to protect them and enhance their finish (glossy or matte).",
+      "Folding": "Folding services crease and bend printed sheets into formats like bi-folds, tri-folds, and intricate brochures.",
+      "Embossing / Debossing": "Embossing creates a raised 3D effect on paper, while debossing creates an indented effect, adding a premium tactile feel.",
+      "Foil Stamping": "Foil stamping applies a thin layer of metallic or pigmented foil to paper using heat and pressure for a luxurious finish.",
+      "Business Cards": "We print high-quality business cards in various finishes to help you make a lasting professional impression.",
+      "Flyers & Brochures": "Flyers and brochures are effective promotional materials for marketing your business, events, or products.",
+      "Posters": "Posters are large printed graphics designed to be attached to a wall or vertical surface for advertising or decoration.",
+      "Banners": "Banners are large signs made of vinyl or fabric, perfect for events, trade shows, and outdoor advertising.",
+      "Stickers & Labels": "We produce custom stickers and product labels in various shapes, sizes, and finishes (matte, glossy, waterproof).",
+      "T-Shirt Printing": "Custom t-shirt printing using various methods (silkscreen, direct-to-garment, heat transfer) for uniforms, events, or merchandise.",
+      "Mug Printing": "Personalized custom printed mugs, great for corporate giveaways, gifts, or souvenirs.",
+      "ID Cards": "High-quality PVC ID card printing for corporate employees, schools, and event passes.",
+      "Giveaways / Souvenirs": "Customized promotional items like pens, keychains, and umbrellas to help promote your brand."
+    };
+
+    const botReplyText = CATEGORY_DEFINITIONS[category] || "Please wait for the shop owner to reply for more details about this specific category.";
 
     if (biz?.owner_id && botReplyText) {
       await supabase.from("chat_messages").insert({
