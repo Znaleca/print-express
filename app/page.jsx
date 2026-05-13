@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { Sparkles, MapPin, FileUp, CreditCard, ShieldCheck, ArrowRight, Printer } from "lucide-react";
-import AboutSection from "@/components/owner/AboutSection";
 
 const features = [
   {
@@ -150,7 +149,7 @@ export default function Home() {
         </div>
       </section>
 
-      <AboutSection />
+      
 
     </main>
   );
