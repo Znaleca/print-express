@@ -2,43 +2,44 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { 
   Truck, Printer, Clock, 
-  MapPin, CheckCircle2, Hash, 
+  MapPin, CheckCircle2, 
   Loader2, AlertTriangle, FileText, ShoppingBag,
-  Star, Activity, Terminal, Package, XCircle, RefreshCcw, Upload, Eye, AlertOctagon, MessageSquare
+  Star, Package, XCircle, RefreshCcw, Eye, MessageSquare, AlertOctagon, X
 } from "lucide-react";
 import ReceiptModal from "@/components/ReceiptModal";
 
-// Updated Status Map with exact requested labels
 const STATUS_MAP = {
-  PENDING:           { icon: <Clock size={16} />,        label: "PENDING",           color: "bg-blue-100 text-blue-800 border-blue-200" },
-  PLACED:            { icon: <CheckCircle2 size={16} />, label: "ORDER_PLACED",      color: "bg-white text-black border-black/10" },
-  PREPARING:         { icon: <Printer size={16} />,      label: "PREPARING",         color: "bg-[#FFF200] text-black border-[#FFF200]" },
-  READY_TO_PICK_UP:  { icon: <MapPin size={16} />,       label: "READY_TO_PICK_UP",  color: "bg-[#00FFFF] text-black border-[#00FFFF]" },
-  RIDER_ON_THE_WAY:  { icon: <Truck size={16} />,        label: "RIDER_ON_THE_WAY",  color: "bg-[#EC008C] text-white border-[#EC008C]" },
-  COMPLETED:         { icon: <CheckCircle2 size={16} />, label: "COMPLETED",         color: "bg-black text-[#00FFFF] border-[#00FFFF]" },
-  CANCELLED:         { icon: <XCircle size={16} />,      label: "CANCELLED",         color: "bg-red-500 text-white border-red-500" },
-  REFUND_PENDING:    { icon: <RefreshCcw size={16} />,   label: "REFUND_PENDING",    color: "bg-orange-400 text-white border-orange-400" },
-  REFUNDED:          { icon: <RefreshCcw size={16} />,   label: "REFUNDED_BY_SELLER", color: "bg-green-500 text-white border-green-500" },
-  REFUND_CONFIRMED:  { icon: <CheckCircle2 size={16} />, label: "REFUND_CONFIRMED",  color: "bg-green-700 text-white border-green-700" },
+  PENDING:           { icon: <Clock size={16} />,        label: "Pending Confirmation",  color: "bg-amber-50 text-amber-700 border-amber-200" },
+  PLACED:            { icon: <CheckCircle2 size={16} />, label: "Order Placed",          color: "bg-blue-50 text-blue-700 border-blue-200" },
+  PREPARING:         { icon: <Printer size={16} />,      label: "In Production",         color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+  READY_TO_PICK_UP:  { icon: <MapPin size={16} />,       label: "Ready for Pickup",      color: "bg-cyan-50 text-cyan-800 border-cyan-200" },
+  RIDER_ON_THE_WAY:  { icon: <Truck size={16} />,        label: "Out for Delivery",      color: "bg-pink-50 text-pink-700 border-pink-200" },
+  COMPLETED:         { icon: <CheckCircle2 size={16} />, label: "Order Completed",       color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  CANCELLED:         { icon: <XCircle size={16} />,      label: "Cancelled",             color: "bg-rose-50 text-rose-700 border-rose-200" },
+  REFUND_PENDING:    { icon: <RefreshCcw size={16} />,   label: "Refund Processing",     color: "bg-orange-50 text-orange-700 border-orange-200" },
+  REFUNDED:          { icon: <RefreshCcw size={16} />,   label: "Refunded by Shop",      color: "bg-teal-50 text-teal-700 border-teal-200" },
+  REFUND_CONFIRMED:  { icon: <CheckCircle2 size={16} />, label: "Refund Confirmed",      color: "bg-emerald-100 text-emerald-800 border-emerald-300" },
 };
 
 export default function TrackOrderPage() {
   const router = useRouter();
   const [user, setUser] = useState(null);
-  const [reportingRefundId, setReportingRefundId] = useState(null);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isCustomer, setIsCustomer] = useState(false);
   const [reviewsState, setReviewsState] = useState({});
   const [submittingReviewId, setSubmittingReviewId] = useState(null);
   const [confirmingRefundId, setConfirmingRefundId] = useState(null);
-  const [cancelModal, setCancelModal] = useState(null); // { orderId }  
+  const [reportingRefundId, setReportingRefundId] = useState(null);
+  const [cancelModal, setCancelModal] = useState(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [viewReceipt, setViewReceipt] = useState(null);
+  const [viewDocType, setViewDocType] = useState("RECEIPT");
   const [viewRefundProof, setViewRefundProof] = useState(null);
 
   useEffect(() => {
@@ -46,635 +47,460 @@ export default function TrackOrderPage() {
     let subscription;
 
     async function loadUserAndOrders() {
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-      if (!isActive) return;
-      setUser(authUser);
+      try {
+        const { data: { user: authUser } } = await supabase.auth.getUser();
+        if (!isActive) return;
+        setUser(authUser);
 
-      if (!authUser) {
-        setLoading(false);
-        return;
-      }
+        if (!authUser) return;
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", authUser.id)
-        .single();
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", authUser.id)
+          .maybeSingle();
 
-      const resolvedRole = profile?.role || authUser.user_metadata?.role;
-      const customer = resolvedRole === "CUSTOMER";
-      setIsCustomer(customer);
+        const resolvedRole = profile?.role || authUser.user_metadata?.role;
+        const customer = resolvedRole === "CUSTOMER";
+        setIsCustomer(customer);
 
-      if (!customer) {
-        setLoading(false);
-        return;
-      }
+        if (!customer) return;
 
-      const fetchOrders = async () => {
-        const { data, error } = await supabase
-          .from("orders")
-          .select(`
-            *,
-            businesses ( name, address, phone )
-          `)
-          .eq("customer_id", authUser.id)
-          .order("created_at", { ascending: false });
+        const fetchOrders = async () => {
+          const { data, error } = await supabase
+            .from("orders")
+            .select(`
+              *,
+              businesses ( name, address, phone )
+            `)
+            .eq("customer_id", authUser.id)
+            .order("created_at", { ascending: false });
 
-        if (!isActive || error || !data) return;
-
-        setOrders(data);
-        const initReviews = {};
-        data.forEach((o) => {
-          initReviews[o.id] = {
-            rating: o.rating || 0,
-            feedback: o.feedback || "",
-          };
-        });
-        setReviewsState(initReviews);
-      };
-
-      await fetchOrders();
-
-      // Realtime subscription for status and order lifecycle changes.
-      const channelName = `customer_orders_status_${authUser.id}_${Date.now()}`;
-      subscription = supabase
-        .channel(channelName)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "orders",
-            filter: `customer_id=eq.${authUser.id}`,
-          },
-          async () => {
-            await fetchOrders();
+          if (!isActive) return;
+          if (error) {
+            console.error("[Track] Failed to load orders:", error.message);
+            setOrders([]);
+            setReviewsState({});
+            return;
           }
-        )
-        .subscribe();
 
-      setLoading(false);
+          const rows = data || [];
+          setOrders(rows);
+          const initReviews = {};
+          rows.forEach((o) => {
+            initReviews[o.id] = {
+              rating: o.rating || 0,
+              feedback: o.feedback || "",
+            };
+          });
+          setReviewsState(initReviews);
+        };
+
+        await fetchOrders();
+
+        const channelName = `customer_orders_status_${authUser.id}_${Date.now()}`;
+        subscription = supabase
+          .channel(channelName)
+          .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `customer_id=eq.${authUser.id}` }, () => {
+            fetchOrders();
+          })
+          .subscribe();
+      } catch (err) {
+        console.error("[Track] Failed to initialize order tracking:", err);
+      } finally {
+        if (isActive) setLoading(false);
+      }
     }
+
     loadUserAndOrders();
 
     return () => {
       isActive = false;
-      if (subscription) {
-        supabase.removeChannel(subscription);
-      }
+      if (subscription) supabase.removeChannel(subscription);
     };
   }, []);
 
-  const updateReviewState = (orderId, key, value) => {
-    setReviewsState(prev => ({
-      ...prev,
-      [orderId]: { ...prev[orderId], [key]: value }
-    }));
-  };
-
-  const openCancelModal = (orderId) => {
-    setCancelModal({ orderId });
-    setCancelReason("");
-  };
-
-  const cancelOrder = async () => {
+  const handleCancelOrder = async () => {
     if (!cancelModal) return;
-    if (!cancelReason.trim()) return;
     setCancelling(true);
-    const { error } = await supabase
-      .from("orders")
-      .update({ status: "CANCELLED", cancel_reason: cancelReason.trim() })
-      .eq("id", cancelModal.orderId)
-      .eq("customer_id", user.id);
-    setCancelling(false);
-    if (!error) {
-      setOrders(prev => prev.map(o =>
-        o.id === cancelModal.orderId ? { ...o, status: "CANCELLED", cancel_reason: cancelReason.trim() } : o
-      ));
-      setCancelModal(null);
-    } else {
-      alert("Failed to cancel: " + error.message);
-    }
-  };
-
-  const submitFeedback = async (order) => {
-    const rev = reviewsState[order.id];
-    if (!rev.rating) return alert("Select a star rating.");
-
-    setSubmittingReviewId(order.id);
-    const { error } = await supabase
-      .from("orders")
-      .update({ rating: rev.rating, feedback: rev.feedback })
-      .eq("id", order.id)
-      .eq("customer_id", user.id);
-
-    setSubmittingReviewId(null);
-
-    if (error) {
-      alert("Failed: " + error.message);
-    } else {
-      setOrders(prev => prev.map(o => o.id === order.id ? { ...o, rating: rev.rating, feedback: rev.feedback } : o));
-    }
-  };
-
-  const confirmRefundReceived = async (orderId) => {
-    if (!confirm("Confirm that you have received your refund from the seller?")) return;
-    setConfirmingRefundId(orderId);
-    const { error } = await supabase
-      .from('orders')
-      .update({ status: 'REFUND_CONFIRMED' })
-      .eq('id', orderId)
-      .eq('customer_id', user.id);
-    setConfirmingRefundId(null);
-    if (error) {
-      alert("Failed to confirm: " + error.message);
-    } else {
-      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'REFUND_CONFIRMED' } : o));
-    }
-  };
-
-  const reportRefundNotReceived = async (order) => {
-    setReportingRefundId(order.id);
     try {
-      // 1. Upsert conversation with business owner
-      const { data: conv, error: convErr } = await supabase
-        .from('chat_conversations')
-        .upsert(
-          { business_id: order.business_id, customer_id: user.id },
-          { onConflict: 'business_id,customer_id' }
-        )
-        .select('id')
-        .single();
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          status: "CANCELLED",
+          cancel_reason: cancelReason || "Cancelled by customer",
+          cancelled_at: new Date().toISOString()
+        })
+        .eq("id", cancelModal.orderId);
 
-      if (convErr || !conv) {
-        alert('Could not open chat: ' + (convErr?.message || 'unknown error'));
-        setReportingRefundId(null);
-        return;
+      if (error) throw error;
+
+      setOrders(prev => prev.map(o => o.id === cancelModal.orderId ? { ...o, status: "CANCELLED", cancel_reason: cancelReason || "Cancelled by customer" } : o));
+      setCancelModal(null);
+      setCancelReason("");
+    } catch (err) {
+      alert(err.message || "Failed to cancel order.");
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const handleConfirmRefund = async (orderId) => {
+    setConfirmingRefundId(orderId);
+    try {
+      const { error } = await supabase
+        .from("orders")
+        .update({ status: "REFUND_CONFIRMED" })
+        .eq("id", orderId);
+      if (error) throw error;
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: "REFUND_CONFIRMED" } : o));
+    } catch (err) {
+      alert(err.message || "Failed to confirm refund.");
+    } finally {
+      setConfirmingRefundId(null);
+    }
+  };
+
+  const handleReportNonRefund = async (orderId) => {
+    setReportingRefundId(orderId);
+    try {
+      const { error } = await supabase
+        .from("orders")
+        .update({ status: "REFUND_PENDING" })
+        .eq("id", orderId);
+      if (error) throw error;
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: "REFUND_PENDING" } : o));
+      alert("Report submitted to shop owner.");
+    } catch (err) {
+      alert(err.message || "Failed to report issue.");
+    } finally {
+      setReportingRefundId(null);
+    }
+  };
+
+  const handleReviewSubmit = async (orderId) => {
+    const rev = reviewsState[orderId];
+    if (!rev || !rev.rating) return alert("Please select a star rating.");
+    const targetOrder = orders.find(o => o.id === orderId);
+    if (targetOrder?.status !== "COMPLETED") {
+      return alert("Feedback and rating can only be submitted after delivery or pickup is completed.");
+    }
+    setSubmittingReviewId(orderId);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const customerName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || "Customer";
+
+      const { error } = await supabase
+        .from("orders")
+        .update({ rating: rev.rating, feedback: rev.feedback })
+        .eq("id", orderId);
+
+      if (error) throw error;
+
+      if (targetOrder && targetOrder.business_id) {
+        await supabase
+          .from("business_reviews")
+          .upsert({
+            order_id: orderId,
+            business_id: targetOrder.business_id,
+            customer_id: user?.id,
+            customer_name: customerName,
+            rating: rev.rating,
+            feedback: rev.feedback,
+            created_at: new Date().toISOString(),
+          }, { onConflict: "order_id" });
       }
 
-      const orderId = order.id.split('-')[0].toUpperCase();
-      const amount = Number(order.downpayment_amount || 0).toFixed(2);
-      const itemNames = (order.items || []).map(i => i.name).join(', ') || 'N/A';
-
-      // 2. Auto-send dispute message
-      const messageContent = `Hi, I have NOT received my refund yet for Order #${orderId}.\n\nRefund Amount: ₱${amount}\nItems: ${itemNames}\n\nPlease check and process my refund. Thank you.`;
-
-      await supabase.from('chat_messages').insert({
-        conversation_id: conv.id,
-        sender_id: user.id,
-        sender_role: 'CUSTOMER',
-        content: messageContent,
-        message_type: 'refund_dispute',
-        metadata: {
-          order_id: order.id,
-          refund_amount: amount,
-          receipt_url: order.receipt_url || null,
-          refund_receipt_url: order.refund_receipt_url || null,
-        },
-        is_read: false,
-      });
-
-      // 3. Redirect to messages with this business
-      router.push(`/messages?business=${order.business_id}`);
-    } catch (e) {
-      alert('Something went wrong.');
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, rating: rev.rating, feedback: rev.feedback } : o));
+      alert("Thank you! Your review has been published.");
+    } catch (err) {
+      alert(err.message || "Failed to submit review.");
+    } finally {
+      setSubmittingReviewId(null);
     }
-    setReportingRefundId(null);
   };
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-80px)] bg-[#1A1A1A] text-[#00FFFF] font-mono">
-        <Loader2 className="animate-spin mb-4" size={48} />
-        <p className="uppercase tracking-[0.4em] text-[10px] font-black">Syncing_Telemetry_Stream...</p>
-      </div>
+      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={36} className="animate-spin text-[#EC008C]" />
+          <p className="text-xs font-semibold uppercase tracking-wider">Loading your orders...</p>
+        </div>
+      </main>
     );
   }
 
   if (!user || !isCustomer) {
     return (
-      <div className="flex items-center justify-center min-h-[calc(100vh-80px)] bg-[#FDFDFD] p-6">
-         <div className="bg-[#1A1A1A] border-l-8 border-[#EC008C] p-10 text-white max-w-lg w-full">
-            <AlertTriangle size={48} className="mb-6 text-[#EC008C]" />
-            <h1 className="text-4xl font-black uppercase italic tracking-tighter mb-4">Auth_Required</h1>
-            <p className="font-mono text-xs uppercase opacity-50 tracking-widest">Client credentials missing from active session.</p>
-         </div>
-      </div>
+      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans p-6 text-slate-900">
+        <div className="bg-white border border-slate-200 rounded-2xl p-10 shadow-xl max-w-sm text-center">
+          <ShoppingBag size={40} className="mx-auto mb-3 text-slate-400" />
+          <h1 className="text-xl font-bold">Customer Portal Only</h1>
+          <p className="text-xs text-slate-500 mt-1 mb-6">Please sign in with a customer account to view your order history.</p>
+          <button onClick={() => router.push('/login')} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold text-xs hover:bg-[#EC008C] transition-colors">
+            Sign In Now
+          </button>
+        </div>
+      </main>
     );
   }
 
   return (
-    <main className="min-h-screen w-full bg-[#FDFDFD] font-sans overflow-x-hidden">
-      <section className="relative px-6 pb-24 pt-10 md:px-10 md:pt-12">
-        <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
-        <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
-        <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
-
-        <div className="relative w-full space-y-12">
-        
-        {/* INDUSTRIAL HEADER */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 border-b-8 border-[#1A1A1A] pb-10">
-          <div>
-            <div className="flex items-center gap-2 mb-4">
-              <Activity size={20} className="text-[#EC008C]" />
-              <span className="font-mono text-[9px] uppercase tracking-[0.5em] text-gray-400">ORDER_STATUS_MONITOR // v.2026</span>
-            </div>
-            <h1 className="text-7xl font-black uppercase italic tracking-tighter leading-none">Tracking</h1>
-          </div>
-          <div className="bg-[#1A1A1A] text-white p-6 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
-             <div className="flex items-center gap-4">
-               <Terminal size={24} className="text-[#FFF200]" />
-               <div>
-                <p className="font-mono text-[8px] uppercase tracking-widest text-white/40">Total_Requests</p>
-                <p className="text-2xl font-black leading-none">{orders.length}</p>
-               </div>
-             </div>
-          </div>
-        </div>
-
-        <div className="border-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
-          <div className="flex items-center gap-6 px-5 font-mono text-[10px] font-black uppercase tracking-[0.35em] text-white md:px-6">
-            <span className="text-[#00FFFF]">Cyan</span>
-            <span className="text-[#EC008C]">Magenta</span>
-            <span className="text-[#FFF200]">Yellow</span>
-            <span>Black</span>
-          </div>
-        </div>
-
-        {/* LISTING */}
-        {orders.length === 0 ? (
-          <div className="border-4 border-dashed border-[#1A1A1A]/10 py-32 text-center">
-             <ShoppingBag size={64} className="mx-auto mb-6 text-gray-200" />
-             <p className="font-black uppercase italic text-2xl text-gray-300">Null_Sequence_Detected</p>
-          </div>
-        ) : (
-          <div className="grid gap-10">
-            {orders.map((order) => {
-              const info = STATUS_MAP[order.status] || STATUS_MAP.PLACED;
-              const date = new Date(order.created_at).toLocaleString();
-              const items = order.items || [];
-              const bInfo = order.businesses || {};
-              const revState = reviewsState[order.id] || { rating: 0, feedback: "" };
-              const isRated = !!order.rating;
-
-              return (
-                <div key={order.id} className="bg-white border-4 border-[#1A1A1A] overflow-hidden group">
-                  {/* Status Strip */}
-                  <div className={`px-6 py-4 flex justify-between items-center border-b-4 border-[#1A1A1A] ${info.color}`}>
-                      <div className="flex items-center gap-3 font-black uppercase italic text-sm tracking-[0.2em]">
-                        {info.icon} {info.label}
-                      </div>
-                      <span className="font-mono text-[9px] tracking-[0.4em] font-black opacity-50 text-right uppercase">System_State_Active</span>
-                  </div>
-
-                  <div className="flex flex-col lg:flex-row divide-y lg:divide-y-0 lg:divide-x-4 divide-[#1A1A1A]">
-                    {/* Primary Info */}
-                    <div className="flex-1 p-8">
-                      <div className="mb-8">
-                        <div className="flex gap-1 mb-3">
-                          <div className="w-8 h-2 bg-[#00FFFF]" />
-                          <div className="w-8 h-2 bg-[#EC008C]" />
-                          <div className="w-8 h-2 bg-[#FFF200]" />
-                        </div>
-                        <h2 className="text-5xl font-black uppercase italic leading-none tracking-tighter">{bInfo.name || "UNNAMED_UNIT"}</h2>
-                        <div className="flex items-center gap-3 mt-4">
-                          <MapPin size={14} className="text-[#EC008C]" />
-                          <p className="font-mono text-[10px] uppercase font-bold text-gray-500 tracking-wider">
-                            {bInfo.address} // TEL: {bInfo.phone || "---"}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="bg-[#F9F9F7] border-4 border-[#1A1A1A] p-6 relative overflow-hidden">
-                        <h3 className="font-black text-[12px] uppercase tracking-[0.2em] mb-4 border-b-4 border-[#1A1A1A] pb-2">Manifest_Content</h3>
-                        <div className="space-y-3">
-                          {items.map((it, idx) => (
-                            <div key={idx} className="flex justify-between items-center group/item">
-                              <span className="font-mono text-[11px] uppercase font-bold text-gray-600">[{idx+1}] {it.name}</span>
-                              <div className="flex-1 border-b-2 border-dotted border-gray-200 mx-4" />
-                              <span className="font-mono text-[11px] font-black">₱{Number(it.price).toFixed(2)}</span>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="mt-6 pt-4 border-t-4 border-[#1A1A1A] flex justify-between items-end">
-                           <div>
-                             <p className="font-mono text-[9px] uppercase tracking-widest opacity-60 font-black text-[#EC008C]">DP Paid: ₱{Number(order.downpayment_amount || 0).toFixed(2)}</p>
-                             <p className="font-mono text-[9px] uppercase tracking-widest opacity-60 font-black mt-1">Balance ({order.payment_method}): ₱{Number(order.balance_amount || 0).toFixed(2)}</p>
-                           </div>
-                           <div className="text-right">
-                             <p className="font-mono text-[9px] uppercase tracking-widest opacity-40 mb-1">Gross Total</p>
-                             <p className="text-3xl font-black leading-none">₱{Number(order.total).toFixed(2)}</p>
-                           </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Meta & Feedback */}
-                    <div className="w-full lg:w-[420px] bg-[#F9F9F7] p-8 flex flex-col justify-between space-y-8">
-                      <div className="space-y-6">
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-1">
-                            <p className="font-mono text-[8px] uppercase tracking-widest opacity-40 font-black">Request_ID</p>
-                            <div className="flex gap-2">
-                               <p className="font-mono text-[10px] font-black truncate bg-[#1A1A1A] text-white px-2 py-1">#{order.id.split('-')[0]}</p>
-                               <button 
-                                 onClick={() => setViewReceipt(order)}
-                                 className="font-mono text-[10px] font-black bg-white text-black border-2 border-black px-2 py-1 hover:bg-[#00FFFF] transition-colors flex items-center gap-1 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:shadow-none"
-                               >
-                                 <Printer size={12} /> Receipt
-                               </button>
-                            </div>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="font-mono text-[8px] uppercase tracking-widest opacity-40 font-black">Assets_Attached</p>
-                            <p className="font-mono text-[10px] font-black flex items-center gap-1">
-                              <FileText size={12} className="text-[#00FFFF]" /> {(order.design_files || []).length} FILES
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Fulfillment Route */}
-                        <div className="pt-4 border-t-2 border-[#1A1A1A]/10">
-                           <p className="font-mono text-[8px] uppercase tracking-widest opacity-40 font-black mb-2">Fulfillment_Type</p>
-                           {order.delivery_type === 'DELIVERY' ? (
-                             <div className="bg-[#1A1A1A] text-white p-4 border-l-8 border-[#EC008C]">
-                               <div className="flex items-center gap-2 font-black text-[11px] mb-1">
-                                 <Truck size={14} className="text-[#EC008C]" /> {order.delivery_type}
-                               </div>
-                               <p className="font-mono text-[9px] uppercase opacity-70 mt-2 leading-relaxed">{order.delivery_address || 'ADDRESS_MISSING'}</p>
-                             </div>
-                           ) : (
-                             <div className="bg-white border-4 border-[#1A1A1A] p-4 text-[#1A1A1A]">
-                               <div className="flex items-center gap-2 font-black text-[11px]">
-                                 <Package size={14} className="text-[#00FFFF]" /> {order.delivery_type}
-                               </div>
-                             </div>
-                           )}
-                        </div>
-
-                        {/* FULLY PAID BADGE for completed orders */}
-                        {order.status === 'COMPLETED' && (
-                          <div className="pt-4 border-t-4 border-[#00FFFF]/30">
-                            <div className="bg-[#00FFFF] border-4 border-[#1A1A1A] p-4 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] flex items-center gap-3">
-                              <CheckCircle2 size={20} className="text-[#1A1A1A] flex-shrink-0" />
-                              <div>
-                                <p className="font-black text-[11px] uppercase tracking-[0.2em] text-[#1A1A1A]">FULLY_PAID</p>
-                                <p className="font-mono text-[9px] uppercase opacity-60 text-[#1A1A1A]">Order complete. Balance: ₱0.00</p>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* RATING MODULE */}
-                        {order.status === 'COMPLETED' && (
-                          <div className="pt-6 border-t-4 border-[#1A1A1A]">
-                            <p className="font-black text-[10px] uppercase tracking-[0.2em] mb-4">User_Feedback_Log</p>
-                            {isRated ? (
-                              <div className="bg-white border-2 border-[#1A1A1A] p-4 shadow-[4px_4px_0px_0px_rgba(236,0,140,1)]">
-                                <div className="flex gap-1 mb-2">
-                                  {[1,2,3,4,5].map(s => (
-                                    <Star key={s} size={12} fill={s <= order.rating ? "#1A1A1A" : "none"} className={s <= order.rating ? "text-[#1A1A1A]" : "text-gray-200"} />
-                                  ))}
-                                </div>
-                                <p className="font-mono text-[10px] uppercase italic opacity-60">"{order.feedback}"</p>
-                              </div>
-                            ) : (
-                              <div className="space-y-4">
-                                <div className="flex gap-2">
-                                  {[1,2,3,4,5].map(star => (
-                                    <button 
-                                      key={star} 
-                                      onClick={() => updateReviewState(order.id, 'rating', star)}
-                                      className="hover:scale-110 transition-transform"
-                                    >
-                                      <Star size={24} fill={star <= revState.rating ? "#EC008C" : "none"} className={star <= revState.rating ? "text-[#EC008C]" : "text-gray-300"} />
-                                    </button>
-                                  ))}
-                                </div>
-                                <textarea 
-                                  value={revState.feedback}
-                                  onChange={(e) => updateReviewState(order.id, 'feedback', e.target.value)}
-                                  placeholder="Type feedback here..."
-                                  className="w-full bg-white border-4 border-[#1A1A1A] p-3 font-mono text-[10px] uppercase h-20 focus:outline-none focus:ring-4 ring-[#00FFFF]/20"
-                                />
-                                <button 
-                                  onClick={() => submitFeedback(order)}
-                                  disabled={submittingReviewId === order.id}
-                                  className="w-full bg-[#1A1A1A] text-white py-4 font-black font-mono text-[10px] uppercase tracking-[0.3em] hover:bg-[#00FFFF] hover:text-black transition-all"
-                                >
-                                  {submittingReviewId === order.id ? "TRANSMITTING..." : "SUBMIT_DATA"}
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* REFUND MODULE — customer confirms after seller sends money */}
-                        {order.status === 'REFUNDED' && (
-                          <div className="pt-6 border-t-4 border-green-500/20">
-                            <p className="font-black text-[10px] uppercase tracking-[0.2em] mb-3 text-green-600">Refund_Sent_By_Seller</p>
-                            <p className="font-mono text-[9px] uppercase opacity-60 mb-4">The seller has marked your ₱{Number(order.downpayment_amount || 0).toFixed(2)} refund as sent. Click below once you have received it.</p>
-                            {order.refund_receipt_url && (
-                              <button onClick={() => setViewRefundProof(order.refund_receipt_url)} className="mb-4 font-mono text-[9px] uppercase font-black text-green-700 flex items-center gap-1 hover:underline text-left">
-                                <Eye size={12} /> View Refund Proof
-                              </button>
-                            )}
-                            <div className="flex flex-col gap-3">
-                              <button
-                                onClick={() => confirmRefundReceived(order.id)}
-                                disabled={confirmingRefundId === order.id}
-                                className="w-full bg-green-500 text-white border-4 border-[#1A1A1A] py-4 font-black font-mono text-[10px] uppercase tracking-[0.3em] hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:shadow-none flex items-center justify-center gap-2"
-                              >
-                                <CheckCircle2 size={16} />
-                                {confirmingRefundId === order.id ? 'CONFIRMING...' : 'I RECEIVED MY REFUND'}
-                              </button>
-                              <button
-                                onClick={() => reportRefundNotReceived(order)}
-                                disabled={reportingRefundId === order.id}
-                                className="w-full bg-white text-[#EC008C] border-4 border-[#EC008C] py-4 font-black font-mono text-[10px] uppercase tracking-[0.3em] hover:bg-[#EC008C] hover:text-white transition-all shadow-[4px_4px_0px_0px_rgba(236,0,140,0.4)] active:shadow-none flex items-center justify-center gap-2"
-                              >
-                                <AlertOctagon size={16} />
-                                {reportingRefundId === order.id ? 'OPENING CHAT...' : 'I HAVE NOT RECEIVED MY REFUND'}
-                              </button>
-                              <p className="font-mono text-[8px] uppercase opacity-40 text-center">This will send an automatic message to the seller.</p>
-                            </div>
-                          </div>
-                        )}
-
-                        {order.status === 'REFUND_CONFIRMED' && (
-                          <div className="pt-6 border-t-4 border-green-700/20">
-                            <div className="bg-green-50 border-4 border-green-700 p-4 flex flex-col gap-3">
-                              <div className="flex items-center gap-3">
-                                <CheckCircle2 size={20} className="text-green-700 flex-shrink-0" />
-                                <div>
-                                  <p className="font-black text-[10px] uppercase tracking-[0.2em] text-green-700">Refund_Confirmed</p>
-                                  <p className="font-mono text-[9px] uppercase opacity-60">You confirmed receiving your refund.</p>
-                                </div>
-                              </div>
-                              {order.refund_receipt_url && (
-                                <div className="mt-2 pt-3 border-t-2 border-green-700/20">
-                                  <button onClick={() => setViewRefundProof(order.refund_receipt_url)} className="font-mono text-[9px] uppercase font-black text-green-700 flex items-center gap-1 hover:underline text-left">
-                                    <Eye size={12} /> View Refund Receipt
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {order.status === 'CANCELLED' && (
-                          <div className="pt-6 border-t-4 border-red-500/20">
-                            <p className="font-black text-[10px] uppercase tracking-[0.2em] mb-3 text-red-500">Order_Cancelled</p>
-                            {order.cancel_reason && (
-                              <div className="bg-red-50 border-2 border-red-300 px-3 py-2 mb-3">
-                                <p className="font-mono text-[9px] uppercase font-black text-red-600 mb-1">Reason:</p>
-                                <p className="font-mono text-[9px] uppercase opacity-80 italic">{order.cancel_reason}</p>
-                              </div>
-                            )}
-                            <p className="font-mono text-[9px] uppercase opacity-60">Your order has been cancelled. The seller will process your refund of ₱{Number(order.downpayment_amount || 0).toFixed(2)} and you will be notified here.</p>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex justify-between items-center mt-4 pt-4 border-t-2 border-[#1A1A1A]/5">
-                         {(order.status === "PENDING" || order.status === "PLACED") && (
-                           <button onClick={() => openCancelModal(order.id)} className="font-mono text-[9px] uppercase font-black text-red-500 hover:text-white hover:bg-red-500 tracking-widest border-2 border-red-500 px-3 py-1 transition-all">
-                             CANCEL_REQUEST
-                           </button>
-                         )}
-                         <div className="flex items-center gap-2 ml-auto text-gray-400">
-                           <Hash size={18} strokeWidth={3} />
-                           <p className="font-mono text-[8px] uppercase font-black text-right tracking-widest leading-none">{date}</p>
-                         </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-      </section>
-
-      {/* ── CANCELLATION REASON MODAL ── */}
-      {cancelModal && (
-        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(236,0,140,1)]">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
-              <div className="flex items-center gap-3">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 bg-[#00FFFF]" />
-                  <div className="w-2 h-2 bg-[#EC008C]" />
-                  <div className="w-2 h-2 bg-[#FFF200]" />
-                </div>
-                <span className="font-black uppercase italic tracking-widest">Cancel_Order</span>
-              </div>
-              <button onClick={() => setCancelModal(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
-                <XCircle size={20} />
-              </button>
-            </div>
-
-            {/* Body */}
-            <div className="p-6">
-              <p className="font-mono text-[10px] uppercase tracking-widest text-gray-500 font-black mb-1">Cancellation Reason</p>
-              <p className="text-sm font-bold text-gray-700 mb-4">Please tell us why you are cancelling this order. This will be shared with the shop owner.</p>
-
-              <div className="space-y-3">
-                {[
-                  "Changed my mind",
-                  "Found a better price elsewhere",
-                  "Ordered by mistake",
-                  "Taking too long",
-                  "Other",
-                ].map((preset) => (
-                  <button
-                    key={preset}
-                    onClick={() => setCancelReason(preset)}
-                    className={`w-full text-left px-4 py-3 border-2 font-mono text-[10px] uppercase font-black tracking-wider transition-all ${
-                      cancelReason === preset
-                        ? "border-[#EC008C] bg-[#EC008C] text-white"
-                        : "border-[#1A1A1A] bg-white hover:bg-[#FFF200] text-[#1A1A1A]"
-                    }`}
-                  >
-                    {cancelReason === preset ? "✓ " : ""}{preset}
-                  </button>
-                ))}
-
-                <textarea
-                  value={cancelReason}
-                  onChange={(e) => setCancelReason(e.target.value)}
-                  placeholder="Or type your own reason..."
-                  rows={2}
-                  className="w-full border-2 border-[#1A1A1A] px-4 py-3 font-mono text-[10px] uppercase focus:outline-none focus:ring-4 ring-[#00FFFF]/30 bg-[#F9F9F7] resize-none"
-                />
-              </div>
-
-              <div className="flex gap-3 mt-6">
-                <button
-                  onClick={() => setCancelModal(null)}
-                  className="flex-1 border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#1A1A1A] hover:text-white transition-all"
-                >
-                  Go Back
-                </button>
-                <button
-                  onClick={cancelOrder}
-                  disabled={!cancelReason.trim() || cancelling}
-                  className="flex-1 bg-[#EC008C] text-white border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#1A1A1A] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:shadow-none"
-                >
-                  {cancelling ? "Cancelling..." : "Confirm Cancel"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── RECEIPT MODAL ── */}
+    <>
+      {/* RECEIPT MODAL */}
       {viewReceipt && (
-        <ReceiptModal 
-          order={viewReceipt} 
-          onClose={() => setViewReceipt(null)} 
-          isOwner={false} 
-        />
+        <ReceiptModal order={viewReceipt} onClose={() => setViewReceipt(null)} isOwner={false} initialDocType={viewDocType} />
       )}
 
-      {/* ── VIEW REFUND PROOF MODAL ── */}
+      {/* REFUND PROOF MODAL */}
       {viewRefundProof && (
-        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)]">
-            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
-              <div className="flex items-center gap-3">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 bg-[#00FFFF]" />
-                  <div className="w-2 h-2 bg-[#EC008C]" />
-                  <div className="w-2 h-2 bg-[#FFF200]" />
-                </div>
-                <span className="font-black uppercase italic tracking-widest">Refund_Proof</span>
-              </div>
-              <button onClick={() => setViewRefundProof(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
-                <XCircle size={20} />
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm" onClick={() => setViewRefundProof(null)}>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-sm text-slate-900">Refund Payment Proof</h3>
+              <button onClick={() => setViewRefundProof(null)} className="p-1 rounded-lg text-slate-400 hover:text-slate-800"><X size={18} /></button>
+            </div>
+            <img src={viewRefundProof} alt="Refund Proof" className="w-full h-auto rounded-xl border border-slate-200 max-h-[60vh] object-contain" />
+          </div>
+        </div>
+      )}
+
+      {/* CANCEL MODAL */}
+      {cancelModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm" onClick={() => setCancelModal(null)}>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-base text-slate-900">Request Order Cancellation</h3>
+            <p className="text-xs text-slate-500">Please select or type a reason for cancelling this print order:</p>
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="e.g. Changed specs, ordered wrong item..."
+              className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-rose-400 h-24"
+            />
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setCancelModal(null)} className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-semibold text-xs rounded-xl hover:bg-slate-200">
+                Back
               </button>
-            </div>
-            <div className="p-6 bg-gray-100 flex items-center justify-center min-h-[300px]">
-              <img 
-                src={viewRefundProof} 
-                alt="Refund Proof" 
-                className="max-w-full max-h-[70vh] object-contain border-4 border-[#1A1A1A]"
-              />
-            </div>
-            <div className="p-6 border-t-4 border-[#1A1A1A] flex justify-end">
-              <button
-                onClick={() => setViewRefundProof(null)}
-                className="bg-[#1A1A1A] text-white px-6 py-3 font-black uppercase text-[10px] hover:bg-[#EC008C] transition-all shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] active:shadow-none"
-              >
-                CLOSE_VIEWER
+              <button onClick={handleCancelOrder} disabled={cancelling} className="flex-1 py-2.5 bg-rose-600 text-white font-bold text-xs rounded-xl hover:bg-rose-700">
+                {cancelling ? "Cancelling..." : "Confirm Cancellation"}
               </button>
             </div>
           </div>
         </div>
       )}
-    </main>
+
+      <main className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+        
+        {/* Header */}
+        <section className="bg-white border-b border-slate-200 py-6 px-4 sm:px-6 lg:px-8 relative shadow-sm">
+          <div className="cmyk-bar absolute top-0 left-0 right-0" />
+          <div className="max-w-[1600px] mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Order Tracking</h1>
+              <p className="mt-1 text-xs text-slate-500">Track your active printing jobs, view digital receipts, and confirm order completions.</p>
+            </div>
+            <div className="px-3.5 py-2 rounded-xl bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-700 flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span>SMS Notifications: Disabled (In-App Realtime Push Active)</span>
+            </div>
+          </div>
+        </section>
+
+        {/* Orders List */}
+        <section className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+          {orders.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center max-w-md mx-auto space-y-4">
+              <ShoppingBag size={48} className="mx-auto text-slate-300" />
+              <h2 className="text-lg font-bold text-slate-900">No Orders Yet</h2>
+              <p className="text-xs text-slate-500">You haven't placed any print orders yet. Browse our print shop directory to get started!</p>
+              <button onClick={() => router.push('/browse')} className="px-5 py-2.5 bg-slate-900 text-white font-bold text-xs rounded-xl hover:bg-[#EC008C] transition-colors">
+                Find Print Shops
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {orders.map((o) => {
+                const statusInfo = STATUS_MAP[o.status] || { icon: <Clock size={16} />, label: o.status, color: "bg-slate-100 text-slate-800" };
+                const bInfo = o.businesses || {};
+                const canCancel = o.status === "PLACED" || o.status === "PENDING";
+                const isCompleted = o.status === "COMPLETED";
+                const isRefunded = o.status === "REFUNDED";
+
+                return (
+                  <div key={o.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden relative">
+                    <div className="cmyk-bar-sm" />
+
+                    <div className="p-6 sm:p-8 space-y-6">
+                      
+                      {/* Top Header */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-100">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-bold text-base text-slate-900">{bInfo.name || "Print Shop"}</span>
+                            <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border flex items-center gap-1.5 ${statusInfo.color}`}>
+                              {statusInfo.icon}
+                              <span>{statusInfo.label}</span>
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500">Order ID: <strong className="text-slate-800 font-mono">{o.id.split('-')[0].toUpperCase()}</strong> • Placed on {new Date(o.created_at).toLocaleDateString()}</p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            onClick={() => { setViewDocType("RECEIPT"); setViewReceipt(o); }}
+                            className="px-3.5 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                          >
+                            <FileText size={14} /> Receipt
+                          </button>
+                          <button
+                            onClick={() => { setViewDocType("QUOTATION"); setViewReceipt(o); }}
+                            className="px-3.5 py-2 bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                          >
+                            <FileText size={14} /> Quotation
+                          </button>
+                          <button
+                            onClick={() => { setViewDocType("DELIVERY"); setViewReceipt(o); }}
+                            className="px-3.5 py-2 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                          >
+                            <Truck size={14} /> Delivery
+                          </button>
+                          <button
+                            onClick={() => { setViewDocType("INVOICE"); setViewReceipt(o); }}
+                            className="px-3.5 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                          >
+                            <Printer size={14} /> Invoice
+                          </button>
+
+                          <Link
+                            href={`/messages?business=${o.business_id}`}
+                            className="px-3.5 py-2 bg-slate-900 text-white hover:bg-[#EC008C] rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                          >
+                            <MessageSquare size={14} /> Chat Shop
+                          </Link>
+                        </div>
+                      </div>
+
+                      {/* Items & Pricing */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        
+                        <div className="md:col-span-2 space-y-3">
+                          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Order Items</p>
+                          <div className="space-y-2">
+                            {(o.items || []).map((it, idx) => (
+                              <div key={idx} className="flex items-start justify-between p-3 rounded-xl bg-slate-50 border border-slate-100 text-xs">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-slate-900">{it.name}</span>
+                                    <span className="text-slate-400 text-[11px]">×{it.quantity || 1}</span>
+                                  </div>
+                                  {it.selected_specs && (
+                                    <div className="text-[11px] text-slate-600 mt-1 space-y-0.5 font-medium">
+                                      {it.selected_specs.size && <div>Size: <span className="font-semibold text-slate-900">{it.selected_specs.size}</span></div>}
+                                      {it.selected_specs.material && <div>Paper/Material: <span className="font-semibold text-slate-900">{it.selected_specs.material}</span></div>}
+                                      {it.selected_specs.quality && <div>Quality: <span className="font-semibold text-slate-900">{it.selected_specs.quality}</span></div>}
+                                      {it.selected_specs.notes && <div className="text-amber-800 italic">"Notes: {it.selected_specs.notes}"</div>}
+                                    </div>
+                                  )}
+                                </div>
+                                <span className="font-bold text-slate-900 shrink-0">₱{(Number(it.price) * (it.quantity || 1)).toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Summary breakdown */}
+                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2 text-xs">
+                          <p className="font-bold text-slate-900 uppercase tracking-wider text-[11px] mb-2">Payment Details</p>
+                          <div className="flex justify-between text-slate-600">
+                            <span>Total Amount:</span>
+                            <span className="font-bold text-slate-900">₱{Number(o.total).toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between text-slate-600">
+                            <span>Downpayment Paid:</span>
+                            <span className="font-bold text-emerald-600">₱{Number(o.downpayment_amount || 0).toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between text-slate-600 pt-1 border-t border-slate-200">
+                            <span>Remaining Balance:</span>
+                            <span className="font-bold text-slate-900">₱{Number(o.balance_amount || 0).toFixed(2)}</span>
+                          </div>
+                        </div>
+
+                      </div>
+
+                      {/* Actions Banner */}
+                      {canCancel && (
+                        <div className="pt-4 border-t border-slate-100 flex justify-end">
+                          <button
+                            onClick={() => setCancelModal({ orderId: o.id })}
+                            className="px-4 py-2 border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-colors"
+                          >
+                            Cancel Order
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Refund Confirmation Banner */}
+                      {isRefunded && (
+                        <div className="p-4 rounded-xl bg-teal-50 border border-teal-200 space-y-3">
+                          <p className="text-xs text-teal-900 font-medium">The print shop has processed a refund for this order. Please check your e-wallet / account balance.</p>
+                          <div className="flex gap-2">
+                            {o.refund_proof_url && (
+                              <button onClick={() => setViewRefundProof(o.refund_proof_url)} className="px-3 py-1.5 bg-white border border-teal-300 text-teal-800 rounded-lg text-xs font-bold">
+                                View Refund Proof
+                              </button>
+                            )}
+                            <button onClick={() => handleConfirmRefund(o.id)} disabled={confirmingRefundId === o.id} className="px-3 py-1.5 bg-teal-700 text-white rounded-lg text-xs font-bold">
+                              Confirm Refund Received
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Review Submission for Completed Orders */}
+                      {isCompleted && (
+                        <div className="pt-4 border-t border-slate-100 bg-slate-50/50 p-4 rounded-xl space-y-3">
+                          <p className="text-xs font-bold text-slate-900">Leave a Review for {bInfo.name}</p>
+                          <div className="flex items-center gap-1">
+                            {[1, 2, 3, 4, 5].map((star) => (
+                              <button
+                                key={star}
+                                type="button"
+                                onClick={() => setReviewsState(prev => ({ ...prev, [o.id]: { ...prev[o.id], rating: star } }))}
+                              >
+                                <Star
+                                  size={18}
+                                  className={(reviewsState[o.id]?.rating || 0) >= star ? "fill-amber-400 text-amber-400" : "text-slate-300"}
+                                />
+                              </button>
+                            ))}
+                          </div>
+                          <textarea
+                            value={reviewsState[o.id]?.feedback || ""}
+                            onChange={(e) => setReviewsState(prev => ({ ...prev, [o.id]: { ...prev[o.id], feedback: e.target.value } }))}
+                            placeholder="Share your experience with print quality, turnaround time, or service..."
+                            className="w-full p-3 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-[#EC008C]"
+                          />
+                          <button
+                            onClick={() => handleReviewSubmit(o.id)}
+                            disabled={submittingReviewId === o.id}
+                            className="px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-xl hover:bg-[#EC008C] transition-colors"
+                          >
+                            Submit Review
+                          </button>
+                        </div>
+                      )}
+
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+      </main>
+    </>
   );
 }

@@ -3,7 +3,8 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { User, Lock, Mail, Save, Loader2, ShieldCheck, AlertTriangle } from "lucide-react";
+import { User, Lock, Mail, Save, Loader2, ShieldCheck, AlertTriangle, Phone } from "lucide-react";
+import { normalizePhilippinePhone } from "@/lib/phone";
 
 export default function AccountSettingsPage() {
   const router = useRouter();
@@ -13,6 +14,7 @@ export default function AccountSettingsPage() {
   // Form states
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState(""); // Read-only
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
@@ -31,7 +33,14 @@ export default function AccountSettingsPage() {
       }
       setUser(user);
       setEmail(user.email || "");
-      setFullName(user.user_metadata?.full_name || "");
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("full_name, phone")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      setFullName(profile?.full_name || user.user_metadata?.full_name || "");
+      setPhone(profile?.phone || user.user_metadata?.phone || "");
       setLoading(false);
     }
     getUser();
@@ -42,15 +51,31 @@ export default function AccountSettingsPage() {
     setIsSavingProfile(true);
     setProfileMessage({ text: "", type: "" });
 
-    const { error } = await supabase.auth.updateUser({
-      data: { full_name: fullName }
+    const normalizedPhone = normalizePhilippinePhone(phone);
+    if (!normalizedPhone) {
+      setIsSavingProfile(false);
+      setProfileMessage({ text: "Enter a valid Philippine mobile number. Example: 09171234567 or +639171234567.", type: "error" });
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const res = await fetch("/api/account/profile", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sessionData?.session?.access_token || ""}`,
+      },
+      body: JSON.stringify({ fullName, phone: normalizedPhone }),
     });
+    const data = await res.json();
 
     setIsSavingProfile(false);
 
-    if (error) {
-      setProfileMessage({ text: error.message, type: "error" });
+    if (!res.ok) {
+      setProfileMessage({ text: data.error || "Failed to update profile.", type: "error" });
     } else {
+      setFullName(data.profile?.full_name || fullName.trim());
+      setPhone(data.profile?.phone || normalizedPhone);
       setProfileMessage({ text: "Profile updated successfully.", type: "success" });
     }
   };
@@ -95,43 +120,43 @@ export default function AccountSettingsPage() {
 
   return (
     <main className="min-h-screen w-full bg-[#FDFDFD] font-sans overflow-x-hidden">
-      <section className="relative px-6 pb-24 pt-10 md:px-10 md:pt-12">
+      <section className="relative px-4 pb-16 pt-6 md:px-8 md:pt-8">
         <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
         <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
         <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
 
-        <div className="relative w-full space-y-12">
-        {/* HEADER SECTION */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 border-b-8 border-[#1A1A1A] pb-10">
-          <div>
-            <div className="flex items-center gap-2 mb-4">
-              <div className="flex gap-1">
-                <div className="w-4 h-1 bg-[#00FFFF]" />
-                <div className="w-4 h-1 bg-[#EC008C]" />
-                <div className="w-4 h-1 bg-[#FFF200]" />
+        <div className="relative max-w-[1400px] mx-auto space-y-8">
+          {/* HEADER SECTION */}
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b-8 border-[#1A1A1A] pb-6">
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <div className="flex gap-1">
+                  <div className="w-4 h-1 bg-[#00FFFF]" />
+                  <div className="w-4 h-1 bg-[#EC008C]" />
+                  <div className="w-4 h-1 bg-[#FFF200]" />
+                </div>
+                <span className="font-mono text-[9px] uppercase tracking-[0.5em] text-gray-400">Settings_v1.0</span>
               </div>
-              <span className="font-mono text-[9px] uppercase tracking-[0.5em] text-gray-400">Settings_v1.0</span>
-            </div>
-            <h1 className="text-5xl md:text-7xl font-black uppercase italic tracking-tighter leading-none mb-6">
-              Account Settings
-            </h1>
-            
-            <div className="flex flex-wrap items-center gap-6">
-              <div className="flex items-center gap-2 bg-[#1A1A1A] text-white px-4 py-2 font-mono text-[10px] uppercase tracking-widest font-black shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]">
-                <ShieldCheck size={14} className="text-[#00FFFF]" /> Access_Level: {user.user_metadata?.role || "CUSTOMER"}
+              <h1 className="text-5xl md:text-7xl font-black uppercase italic tracking-tighter leading-none mb-6">
+                Account Settings
+              </h1>
+              
+              <div className="flex flex-wrap items-center gap-6">
+                <div className="flex items-center gap-2 bg-[#1A1A1A] text-white px-4 py-2 font-mono text-[10px] uppercase tracking-widest font-black shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]">
+                  <ShieldCheck size={14} className="text-[#00FFFF]" /> Access_Level: {user.user_metadata?.role || "CUSTOMER"}
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <div className="border-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
-          <div className="flex items-center gap-6 px-5 font-mono text-[10px] font-black uppercase tracking-[0.35em] text-white md:px-6">
-            <span className="text-[#00FFFF]">Cyan</span>
-            <span className="text-[#EC008C]">Magenta</span>
-            <span className="text-[#FFF200]">Yellow</span>
-            <span>Black</span>
+          <div className="border-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
+            <div className="flex items-center gap-6 px-5 font-mono text-[10px] font-black uppercase tracking-[0.35em] text-white md:px-6">
+              <span className="text-[#00FFFF]">Cyan</span>
+              <span className="text-[#EC008C]">Magenta</span>
+              <span className="text-[#FFF200]">Yellow</span>
+              <span>Black</span>
+            </div>
           </div>
-        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
           {/* PROFILE SETTINGS */}
@@ -140,7 +165,7 @@ export default function AccountSettingsPage() {
             
             <div className="bg-[#1A1A1A] text-white px-6 py-4 flex items-center gap-3 border-b-4 border-[#1A1A1A]">
               <User size={20} className="text-[#FFF200]" />
-              <h2 className="font-black uppercase italic tracking-widest text-lg">Change Nickname</h2>
+              <h2 className="font-black uppercase italic tracking-widest text-lg">Profile Details</h2>
             </div>
 
             <form onSubmit={handleUpdateProfile} className="p-6 md:p-8 space-y-6 relative z-10">
@@ -171,9 +196,23 @@ export default function AccountSettingsPage() {
                   type="text" 
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
-                  placeholder="Enter your nickname"
+                  placeholder="Enter your name"
                   className="w-full bg-white border-2 border-[#1A1A1A] p-4 font-mono text-sm uppercase text-[#1A1A1A] focus:outline-none focus:ring-4 ring-[#FFF200]/50 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
                 />
+              </div>
+
+              <div className="space-y-2">
+                <label className="font-mono text-[10px] uppercase font-black tracking-widest flex items-center gap-2">
+                  <Phone size={12} className="text-[#00FFFF]" /> Mobile_Number
+                </label>
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="0917 123 4567"
+                  className="w-full bg-white border-2 border-[#1A1A1A] p-4 font-mono text-sm uppercase text-[#1A1A1A] focus:outline-none focus:ring-4 ring-[#00FFFF]/40 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
+                />
+                <p className="font-mono text-[9px] uppercase tracking-widest text-zinc-500">Saved in +63 format for SMS order updates.</p>
               </div>
 
               <button 
@@ -182,7 +221,7 @@ export default function AccountSettingsPage() {
                 className="w-full mt-4 bg-[#1A1A1A] text-white py-4 font-black uppercase italic text-sm flex justify-center items-center gap-2 hover:bg-[#FFF200] hover:text-[#1A1A1A] transition-all disabled:opacity-50"
               >
                 {isSavingProfile ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                Save Nickname
+                Save Profile
               </button>
             </form>
           </section>

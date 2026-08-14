@@ -1,91 +1,165 @@
 import { FaFacebookF, FaInstagram, FaYoutube } from 'react-icons/fa';
 import { SiTiktok } from 'react-icons/si';
-import { MapPin, FileUp, CreditCard, ShieldCheck } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
+import Link from 'next/link';
+
+function CropMarks({ className = "w-8 h-8 text-[#00FFFF]/30" }) {
+    return (
+        <svg viewBox="0 0 40 40" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M 2 12 L 12 12 L 12 2" />
+            <path d="M 28 2 L 28 12 L 38 12" />
+            <path d="M 2 28 L 12 28 L 12 38" />
+            <path d="M 38 28 L 28 28 L 28 38" />
+        </svg>
+    );
+}
+
+function CMYKBar() {
+    return (
+        <div className="cmyk-bar" aria-hidden="true">
+            <div />
+            <div />
+            <div />
+            <div />
+        </div>
+    );
+}
 
 export default function Footer() {
     const socialLinks = [
-        { icon: <FaFacebookF size={20} />, color: 'hover:bg-[#00FFFF]', border: 'border-[#00FFFF]', text: 'text-[#00FFFF]', label: 'Facebook' },
-        { icon: <FaInstagram size={20} />, color: 'hover:bg-[#EC008C]', border: 'border-[#EC008C]', text: 'text-[#EC008C]', label: 'Instagram' },
-        { icon: <SiTiktok size={20} />, color: 'hover:bg-[#FFF200]', border: 'border-[#FFF200]', text: 'text-[#FFF200]', label: 'TikTok' },
-        { icon: <FaYoutube size={20} />, color: 'hover:bg-white', border: 'border-white', text: 'text-white', label: 'YouTube' },
+        { icon: <FaFacebookF size={14} />, label: 'Facebook', href: '#' },
+        { icon: <FaInstagram size={14} />, label: 'Instagram', href: '#' },
+        { icon: <SiTiktok size={14} />, label: 'TikTok', href: '#' },
+        { icon: <FaYoutube size={14} />, label: 'YouTube', href: '#' },
     ];
 
-    const quickLinks = [
-        { name: "Location Discovery", icon: <MapPin size={14} /> },
-        { name: "Seamless Proofing", icon: <FileUp size={14} /> },
-        { name: "Secure Payments", icon: <CreditCard size={14} /> },
-        { name: "Verified Partners", icon: <ShieldCheck size={14} /> },
+    const exploreLinks = [
+        { name: "Browse Services", href: "/browse" },
+        { name: "Print Shops Directory", href: "/shops" },
+        { name: "Track Order", href: "/track" },
+    ];
+
+    const partnerLinks = [
+        { name: "Register Shop", href: "/signup" },
+        { name: "Owner Login", href: "/login" },
     ];
 
     return (
-        <footer className="bg-[#1A1A1A] text-white py-20 px-8 border-t-8 border-[#EC008C] relative overflow-hidden">
-            {/* Background Decorative Element */}
-            <div className="absolute top-0 right-0 w-64 h-64 bg-[#EC008C] opacity-[0.03] rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
-            
-            <div className="w-full">
-                <div className="flex flex-col lg:flex-row justify-between items-start gap-16 mb-20">
-                    
-                    {/* Brand Section */}
-                    <div className="max-w-md group">
-                        <h4 className="text-5xl font-black uppercase italic tracking-tighter mb-4 transition-transform duration-300 group-hover:-skew-x-2">
-                            Press <span className="text-[#00FFFF]">&</span> Present
-                        </h4>
-                        <p className="font-mono text-xs tracking-widest opacity-40 uppercase leading-relaxed mb-6">
-                            The industrial hub for local production. <br />
-                            Connecting shops & creators since 2026.
-                        </p>
-                        <div className="flex h-1 w-32">
-                            <div className="flex-1 bg-[#00FFFF]" />
-                            <div className="flex-1 bg-[#EC008C]" />
-                            <div className="flex-1 bg-[#FFF200]" />
+        <footer className="bg-[#121212] text-white pt-10 pb-8 px-4 sm:px-8 lg:px-12 relative overflow-hidden border-t border-white/10">
+            {/* Top Signature CMYK Accent Bar */}
+            <div className="absolute top-0 left-0 right-0">
+                <CMYKBar />
+            </div>
+
+            {/* Subtle Print Decorative Mark */}
+            <div className="absolute bottom-8 right-8 hidden md:block opacity-15 pointer-events-none">
+                <CropMarks className="w-10 h-10 text-[#FFF200]" />
+            </div>
+
+            <div className="max-w-[1600px] mx-auto relative z-10">
+
+                {/* ── TOP EDITORIAL SPLIT LAYOUT ── */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 mb-8 items-start">
+
+                    {/* Left Side CTA Section */}
+                    <div className="lg:col-span-6 space-y-4">
+                        <div className="space-y-2">
+                            <h3 className="text-2xl sm:text-3xl lg:text-4xl font-black text-white tracking-tight leading-tight">
+                                Let our print partners help you.
+                            </h3>
+                            <p className="text-sm sm:text-base text-white/70 font-normal">
+                                Start your custom print order today.
+                            </p>
+                        </div>
+
+                        {/* Circular Arrow Button */}
+                        <div className="pt-1">
+                            <Link
+                                href="/browse"
+                                className="w-12 h-12 rounded-full bg-white hover:bg-[#00FFFF] text-[#121212] flex items-center justify-center transition-all shadow-lg group hover:scale-105"
+                                aria-label="Start your print order"
+                            >
+                                <ArrowUpRight size={22} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                            </Link>
                         </div>
                     </div>
 
-                    {/* Quick Info Grid */}
-                    <div className="grid grid-cols-2 gap-x-12 gap-y-4">
-                        {quickLinks.map((link) => (
-                            <div key={link.name} className="flex items-center gap-3 group cursor-pointer">
-                                <span className="text-[#EC008C] group-hover:text-[#00FFFF] transition-colors">{link.icon}</span>
-                                <span className="font-mono text-[10px] uppercase tracking-wider opacity-60 group-hover:opacity-100">
-                                    {link.name}
-                                </span>
+                    {/* Right Side Simplified Links */}
+                    <div className="lg:col-span-6 grid grid-cols-2 sm:grid-cols-3 gap-6">
+
+                        {/* Column 1: Explore */}
+                        <div className="space-y-3">
+                            <h4 className="text-xs font-mono font-bold uppercase tracking-widest text-white/40">
+                                Explore
+                            </h4>
+                            <ul className="space-y-2 text-xs font-semibold text-white/70">
+                                {exploreLinks.map((item) => (
+                                    <li key={item.name}>
+                                        <Link href={item.href} className="hover:text-[#00FFFF] transition-colors">
+                                            {item.name}
+                                        </Link>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+
+                        {/* Column 2: For Shops */}
+                        <div className="space-y-3">
+                            <h4 className="text-xs font-mono font-bold uppercase tracking-widest text-white/40">
+                                For Shops
+                            </h4>
+                            <ul className="space-y-2 text-xs font-semibold text-white/70">
+                                {partnerLinks.map((item) => (
+                                    <li key={item.name}>
+                                        <Link href={item.href} className="hover:text-[#EC008C] transition-colors">
+                                            {item.name}
+                                        </Link>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+
+                        {/* Column 3: Connect & Socials */}
+                        <div className="space-y-3 col-span-2 sm:col-span-1">
+                            <h4 className="text-xs font-mono font-bold uppercase tracking-widest text-white/40">
+                                Connect
+                            </h4>
+                            <div className="flex flex-wrap gap-2">
+                                {socialLinks.map((social, index) => (
+                                    <a
+                                        key={index}
+                                        href={social.href}
+                                        className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white/70 hover:text-white hover:bg-[#EC008C] hover:border-[#EC008C] transition-all"
+                                        aria-label={social.label}
+                                    >
+                                        {social.icon}
+                                    </a>
+                                ))}
                             </div>
-                        ))}
+                        </div>
+
                     </div>
 
-                    {/* Social Section */}
-                    <div className="flex flex-col items-center lg:items-end gap-6">
-                        <div className="flex gap-4">
-                            {socialLinks.map((social, index) => (
-                                <a
-                                    key={index}
-                                    href="#"
-                                    className={`w-12 h-12 border-2 ${social.border} ${social.text} flex items-center justify-center transition-all duration-300 ${social.color} hover:text-black hover:-translate-y-1 shadow-[4px_4px_0px_0px_rgba(255,255,255,0.1)] hover:shadow-none`}
-                                    aria-label={social.label}
-                                >
-                                    {social.icon}
-                                </a>
-                            ))}
-                        </div>
-                        <div className="text-right">
-                            <span className="font-mono text-[10px] uppercase tracking-[0.4em] opacity-30 block">
-                                Validated // Secure_Access_Only
-                            </span>
-                        </div>
+                </div>
+
+                {/* ── OVERSIZED DISPLAY BRAND TEXT TREATMENT ── */}
+                <div className="my-8 py-6 border-t border-b border-white/10 text-center overflow-hidden">
+                    <Link href="/" className="inline-block group">
+                        <h2 className="font-serif-brand font-black tracking-tight text-[#F6F6F2]/90 group-hover:text-white transition-colors uppercase leading-none select-none text-[clamp(2.5rem,8vw,7.5rem)]">
+                            PRESS <span className="text-[#EC008C] font-serif italic font-normal">&</span> PRESENT
+                        </h2>
+                    </Link>
+                </div>
+
+                {/* ── BOTTOM LEGAL BAR ── */}
+                <div className="pt-2 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-white/40 font-medium">
+                    <p>© 2026 Press & Present. All rights reserved.</p>
+                    <div className="flex items-center gap-6">
+                        <a href="#" className="hover:text-white/80 transition-colors">Privacy</a>
+                        <a href="#" className="hover:text-white/80 transition-colors">Terms</a>
                     </div>
                 </div>
 
-                {/* Bottom Bar */}
-                <div className="pt-8 border-t border-white/10 flex flex-col md:flex-row justify-between items-center gap-6">
-                    <p className="font-mono text-[9px] uppercase tracking-widest opacity-40">
-                        © 2026 Press & Present Portal // All Rights Reserved
-                    </p>
-                    <div className="flex gap-8 font-mono text-[9px] uppercase tracking-[0.2em] opacity-40">
-                        <a href="#" className="hover:text-[#00FFFF] transition-colors">Privacy_Protocol</a>
-                        <a href="#" className="hover:text-[#EC008C] transition-colors">Terms_Of_Service</a>
-                        <a href="#" className="hover:text-[#FFF200] transition-colors">Support_Line</a>
-                    </div>
-                </div>
             </div>
         </footer>
     );

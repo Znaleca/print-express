@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 
 const REQUIRED_DOCS = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID"];
+const MAX_DOCUMENT_SIZE_BYTES = 5 * 1024 * 1024;
+const ACCEPTED_DOCUMENT_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
 
 const DOC_META = {
   DTI:           { label: "DTI Certificate",  color: "#00FFFF", textColor: "#1A1A1A" },
@@ -204,7 +206,7 @@ export default function OwnerLayout({ children }) {
       setDocStatuses(freshDocs);
 
       const stillRejected = freshDocs.some((d) => d.status === "REJECTED");
-      if (!stillRejected && freshDocs.length >= 5) setState("docs_pending");
+      if (!stillRejected && freshDocs.length >= REQUIRED_DOCS.length) setState("docs_pending");
 
       // Clear local state
       setReuploadFiles((p) => { const n = { ...p }; delete n[docTypeStr]; return n; });
@@ -261,7 +263,7 @@ export default function OwnerLayout({ children }) {
       setDocStatuses(freshDocs);
 
       const stillRejected = freshDocs.some((d) => d.status === "REJECTED");
-      if (!stillRejected && freshDocs.length >= 5) {
+      if (!stillRejected && freshDocs.length >= REQUIRED_DOCS.length) {
         setState("docs_pending");
       } else {
         setState("docs_action_required");
@@ -322,6 +324,16 @@ export default function OwnerLayout({ children }) {
     const docMap = Object.fromEntries(docStatuses.map((d) => [d.doc_type, d]));
 
     const handlePreviewFile = (docType, file) => {
+      if (file && !ACCEPTED_DOCUMENT_TYPES.includes(file.type)) {
+        setReuploadError("Upload a PNG, JPG, WEBP image, or PDF document only.");
+        return;
+      }
+      if (file && file.size > MAX_DOCUMENT_SIZE_BYTES) {
+        setReuploadError("Upload a file that is 5.00 MB or smaller.");
+        return;
+      }
+      setReuploadError(null);
+
       setReuploadFiles((prev) => {
         const next = { ...prev, [docType]: file || null };
         if (!file) delete next[docType];
@@ -367,14 +379,14 @@ export default function OwnerLayout({ children }) {
             <div className="mt-8 grid gap-8 lg:grid-cols-[1.3fr_0.7fr] lg:items-end">
               <div>
                 <h1 className="text-5xl md:text-7xl lg:text-8xl font-black uppercase italic tracking-tighter leading-[0.92]">
-                  {hasRejected ? "Re-Upload_Files" : docStatuses.length < 5 ? "Complete_Requirements" : "Under_Review"}
+                  {hasRejected ? "Replace Documents" : docStatuses.length < REQUIRED_DOCS.length ? "Complete Requirements" : "Under Review"}
                 </h1>
                 <p className="mt-4 max-w-3xl font-mono text-[11px] md:text-sm uppercase tracking-[0.2em] leading-relaxed text-gray-600">
-                  {docStatuses.length < 5
-                    ? `Upload the required verification documents for [${businessName}] so the shop can be reviewed.`
+                  {docStatuses.length < REQUIRED_DOCS.length
+                    ? `Upload the required verification documents for ${businessName} so the shop can be reviewed.`
                     : hasRejected
-                      ? `One or more documents for [${businessName}] were rejected. Replace the flagged files below.`
-                      : `Your documents for [${businessName}] are now in the admin review queue.`}
+                      ? `One or more documents for ${businessName} were rejected. Replace the flagged files below.`
+                      : `Your documents for ${businessName} are now in the admin review queue.`}
                 </p>
               </div>
 
@@ -383,7 +395,7 @@ export default function OwnerLayout({ children }) {
                   <div>
                     <p className="font-mono text-[9px] uppercase tracking-[0.35em] text-gray-500">Status</p>
                     <p className="mt-1 text-lg font-black uppercase tracking-tighter">
-                      {hasRejected ? "Action Required" : docStatuses.length < 5 ? "Missing Files" : "Pending Review"}
+                      {hasRejected ? "Action Required" : docStatuses.length < REQUIRED_DOCS.length ? "Missing Files" : "Pending Review"}
                     </p>
                   </div>
                   <div className="flex h-12 w-12 items-center justify-center bg-[#1A1A1A] text-white">
@@ -636,7 +648,7 @@ export default function OwnerLayout({ children }) {
 
   /* ── PORTAL (all verified and unverified owners) ── */
   return (
-    <div className="flex min-h-[calc(100vh-80px)] bg-[radial-gradient(circle_at_top_left,rgba(0,255,255,0.14),transparent_28%),radial-gradient(circle_at_top_right,rgba(236,0,140,0.12),transparent_24%),linear-gradient(180deg,#fdfdfd_0%,#f7f7f4_100%)]">
+    <div className="flex min-h-[calc(100vh-88px)] bg-[radial-gradient(circle_at_top_left,rgba(0,255,255,0.14),transparent_28%),radial-gradient(circle_at_top_right,rgba(236,0,140,0.12),transparent_24%),linear-gradient(180deg,#fdfdfd_0%,#f7f7f4_100%)]">
       <OwnerSidebar
         businessName={businessName}
         isOpen={sidebarOpen}

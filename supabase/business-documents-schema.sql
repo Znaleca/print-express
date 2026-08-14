@@ -9,6 +9,11 @@ CREATE TABLE IF NOT EXISTS public.business_documents (
   business_id  UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
   doc_type     TEXT NOT NULL CHECK (doc_type IN ('DTI', 'MAYORS_PERMIT', 'BIR', 'VALID_ID', 'TIN_NUMBER')),
   file_url     TEXT,                      -- NULL for TIN_NUMBER (text doc)
+  file_name    TEXT,
+  file_size_bytes BIGINT,
+  file_type    TEXT,
+  file_format  TEXT,
+  quality_requirement TEXT DEFAULT '300 DPI clear scan or sharp unedited photo',
   tin_number   TEXT,                      -- Only filled for TIN_NUMBER type
   status       TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
   admin_comment  TEXT,                    -- Admin writes feedback when rejecting

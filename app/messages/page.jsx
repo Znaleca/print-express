@@ -5,13 +5,73 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
   MessageSquare, Send, Loader2, User, Store,
-  ChevronRight, ChevronLeft, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, MapPin
+  ChevronRight, ChevronLeft, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, MapPin, Sparkles, CheckCircle2, ArrowRight, FileText
 } from "lucide-react";
+
+const DESIGN_FILE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,image/svg+xml,.ai,.psd,.eps,.tif,.tiff";
+const DESIGN_MAX_BYTES = 50 * 1024 * 1024;
+
+const formatBytes = (bytes = 0) => {
+  if (!bytes) return "0 KB";
+  const units = ["bytes", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+};
+
+const getUploadProfile = (file) => {
+  const extension = (file.name.split(".").pop() || "").toLowerCase();
+  const mime = file.type || "application/octet-stream";
+  const fileType = mime.startsWith("image/") ? "Artwork image" : mime === "application/pdf" ? "Print PDF" : "Source design file";
+  const quality = mime.startsWith("image/") || mime === "application/pdf"
+    ? "Use 300 DPI or vector-quality artwork with embedded fonts and CMYK-safe colors."
+    : "Source file accepted for prepress review; export proof PDF before production.";
+
+  return { extension, mime, fileType, quality };
+};
+
+const GENERATED_PRINT_QUESTIONS = [
+  {
+    key: "file_check",
+    label: "Check my file before printing",
+    customerText: "Can you check if my file is print-ready before I place the order?",
+    reply: "Yes. Please upload the file here and we can check resolution, bleed, margins, font issues, and whether it is suitable for production.",
+  },
+  {
+    key: "color_match",
+    label: "Will colors match my screen?",
+    customerText: "Will the printed colors match what I see on my screen?",
+    reply: "Screen colors can differ from print output. For important colors, ask for a proof and specify CMYK-safe colors or a printed sample before full production.",
+  },
+  {
+    key: "bleed_margin",
+    label: "Do I need bleed or margins?",
+    customerText: "Do I need to add bleed, crop marks, or safe margins to my design?",
+    reply: "For trimmed prints, include at least 3mm bleed and keep important text/logos inside the safe margin. We can review your uploaded file before printing.",
+  },
+  {
+    key: "paper_finish",
+    label: "Best paper or finish?",
+    customerText: "Which paper, material, or finish is best for my design and budget?",
+    reply: "Send the product type, size, use case, and budget range. We can recommend bond, glossy, matte cardstock, sticker, vinyl, or other materials based on durability and finish.",
+  },
+  {
+    key: "deadline",
+    label: "Can this meet my deadline?",
+    customerText: "Can this order be finished before my deadline?",
+    reply: "Please send your needed date/time, quantity, size, material, and finishing requirements. Rush production depends on shop queue, file readiness, and material availability.",
+  },
+  {
+    key: "proof_cost_lock",
+    label: "Proof and final cost lock",
+    customerText: "Can I approve a proof first and lock the final cost before production?",
+    reply: "Yes. The shop can upload proof versions here. After approval, the final design and total cost can be locked before production starts.",
+  },
+];
 
 function MessagesInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const initBizId = searchParams.get("business"); // auto-open if ?business=...
+  const initBizId = searchParams.get("business");
   const initServiceId = searchParams.get("service");
 
   const [user, setUser] = useState(null);
@@ -24,15 +84,13 @@ function MessagesInner() {
   const [loadingConvs, setLoadingConvs] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [sending, setSending] = useState(false);
-  const [sendingImage, setSendingImage] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editingText, setEditingText] = useState("");
   const [unreadByConv, setUnreadByConv] = useState({});
   const [menuMessageId, setMenuMessageId] = useState(null);
-  const [quoteCheckoutPending, setQuoteCheckoutPending] = useState(null);
   const [jitsiRoom, setJitsiRoom] = useState(null);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
-  const [viewImagePopup, setViewImagePopup] = useState(null); // { url, label }
+  const [viewImagePopup, setViewImagePopup] = useState(null);
   const bottomRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const channelRef = useRef(null);
@@ -41,10 +99,9 @@ function MessagesInner() {
   const jitsiApiRef = useRef(null);
   const jitsiScriptRef = useRef(null);
 
-  /* ── 0. Jitsi External API (no-logo) ── */
+  /* Jitsi API setup */
   useEffect(() => {
     if (!jitsiRoom) {
-      // Dispose existing API instance if room closed
       if (jitsiApiRef.current) {
         try { jitsiApiRef.current.dispose(); } catch (_) {}
         jitsiApiRef.current = null;
@@ -99,108 +156,83 @@ function MessagesInner() {
       jitsiScriptRef.current = script;
       document.head.appendChild(script);
     }
-
-    return () => {
-      if (jitsiApiRef.current) {
-        try { jitsiApiRef.current.dispose(); } catch (_) {}
-        jitsiApiRef.current = null;
-      }
-    };
   }, [jitsiRoom]);
 
-  /* ── 1. Auth ── */
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) { router.push("/login"); return; }
-      setUser(user);
-    });
-  }, [router]);
-
-  /* ── 2. Load conversations ── */
-  useEffect(() => {
-    if (!user) return;
-    loadConversations();
-  }, [user]);
-
-  const loadConversations = async (isBg = false) => {
-    if (!isBg) setLoadingConvs(true);
-    let data, error;
-
-    ({ data, error } = await supabase
-      .from("chat_conversations")
-      .select("*, businesses(id, name, address)")
-      .eq("customer_id", user.id)
-      .order("updated_at", { ascending: false }));
-
-    if (!error && data) {
-      setConversations(data);
-
-      if (data.length > 0) {
-        const convIds = data.map((c) => c.id);
-        const { data: unreadRows } = await supabase
-          .from("chat_messages")
-          .select("conversation_id")
-          .in("conversation_id", convIds)
-          .eq("is_read", false)
-          .neq("sender_id", user.id);
-
-        const unreadMap = {};
-        (unreadRows || []).forEach((row) => {
-          unreadMap[row.conversation_id] = (unreadMap[row.conversation_id] || 0) + 1;
-        });
-        setUnreadByConv(unreadMap);
-      } else {
-        setUnreadByConv({});
+    async function init() {
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      if (!currentUser) {
+        setLoadingConvs(false);
+        return;
       }
+      setUser(currentUser);
 
-      // Auto-open conversation if ?business= param present
-      if (initBizId && !isBg) {
-        const existing = data.find((c) => c.business_id === initBizId);
-        if (existing) {
-          openConversation(existing);
-        } else {
-          // Create new conversation
-          await startNewConversation(initBizId);
+      if (initBizId) {
+        const { data: existing } = await supabase
+          .from("chat_conversations")
+          .select("id")
+          .eq("customer_id", currentUser.id)
+          .eq("business_id", initBizId)
+          .maybeSingle();
+
+        if (!existing) {
+          await supabase
+            .from("chat_conversations")
+            .insert({ customer_id: currentUser.id, business_id: initBizId });
         }
       }
-    }
-    if (!isBg) setLoadingConvs(false);
-  };
 
-  /* ── 3. Start a new conversation with a business ── */
-  const startNewConversation = async (businessId) => {
-    const { data, error } = await supabase
+      await loadConversations(currentUser);
+    }
+
+    init();
+  }, [initBizId]);
+
+  const loadConversations = async (currentUser = user) => {
+    if (!currentUser) return;
+    setLoadingConvs(true);
+
+    const { data: convsData } = await supabase
       .from("chat_conversations")
-      .upsert(
-        { business_id: businessId, customer_id: user.id },
-        { onConflict: "business_id,customer_id" }
-      )
-      .select("*, businesses(id, name, address)")
-      .single();
+      .select(`
+        id, created_at, business_id,
+        businesses ( name, logo_url )
+      `)
+      .eq("customer_id", currentUser.id)
+      .order("updated_at", { ascending: false });
 
-    if (!error && data) {
-      setConversations((prev) => {
-        const exists = prev.find((c) => c.id === data.id);
-        return exists ? prev : [data, ...prev];
-      });
-      openConversation(data);
+    if (!convsData) {
+      setLoadingConvs(false);
+      return;
     }
+
+    const unreadMap = {};
+    for (const c of convsData) {
+      const { count } = await supabase
+        .from("chat_messages")
+        .select("id", { count: "exact", head: true })
+        .eq("conversation_id", c.id)
+        .neq("sender_id", currentUser.id)
+        .eq("is_read", false);
+      unreadMap[c.id] = count || 0;
+    }
+
+    setUnreadByConv(unreadMap);
+    setConversations(convsData);
+
+    if (initBizId) {
+      const target = convsData.find((c) => c.business_id === initBizId);
+      if (target) setActiveConv(target);
+    } else if (convsData.length > 0 && !activeConv) {
+      setActiveConv(convsData[0]);
+    }
+
+    setLoadingConvs(false);
   };
 
-  /* ── 4. Open a conversation ── */
-  const openConversation = (conv) => {
-    setActiveConv(conv);
-    setMessages([]);
-    setMsgLimit(20);
-    setHasMoreMsgs(false);
-    setUnreadByConv((prev) => ({ ...prev, [conv.id]: 0 }));
-  };
-
-  /* ── 5. Load messages + subscribe realtime + poll fallback ── */
   useEffect(() => {
     if (!activeConv) return;
 
-    // Unsubscribe previous channel
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
@@ -208,16 +240,11 @@ function MessagesInner() {
 
     fetchMessages(activeConv.id, false, msgLimit);
 
-    // Subscribe to ALL new chat_messages (no filter — filter client-side)
     const channel = supabase
       .channel(`chat_all:${activeConv.id}`)
       .on(
         "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "chat_messages",
-        },
+        { event: "*", schema: "public", table: "chat_messages" },
         async (payload) => {
           const row = payload.new || payload.old;
           if (!row?.conversation_id) return;
@@ -226,8 +253,7 @@ function MessagesInner() {
             await fetchMessages(activeConv.id, true);
             await markConversationRead(activeConv.id);
           }
-
-          await loadConversations(true);
+          await loadConversations();
         }
       )
       .subscribe();
@@ -237,13 +263,7 @@ function MessagesInner() {
     return () => {
       if (channelRef.current) supabase.removeChannel(channelRef.current);
     };
-  }, [activeConv]);
-
-  useEffect(() => {
-    if (activeConv) {
-      fetchMessages(activeConv.id, false, msgLimit);
-    }
-  }, [msgLimit]);
+  }, [activeConv, msgLimit]);
 
   const fetchMessages = async (convId, isBg = false, limit = 20) => {
     if (!isBg) setLoadingMsgs(true);
@@ -253,12 +273,11 @@ function MessagesInner() {
       .eq("conversation_id", convId)
       .order("created_at", { ascending: false })
       .limit(limit);
-      
+
     if (data) {
       setMessages(data.reverse());
       setHasMoreMsgs(count > limit);
-      
-      // Scroll to bottom if it's the initial load or a background (new message) load
+
       if (limit === 20 || isBg) {
         setTimeout(() => {
           if (scrollContainerRef.current) {
@@ -266,17 +285,11 @@ function MessagesInner() {
               top: scrollContainerRef.current.scrollHeight,
               behavior: isBg ? "smooth" : "auto"
             });
-          } else {
-            bottomRef.current?.scrollIntoView({ behavior: isBg ? "smooth" : "auto", block: "nearest" });
           }
         }, 50);
       }
     }
     if (!isBg) setLoadingMsgs(false);
-  };
-
-  const loadMoreMessages = () => {
-    setMsgLimit(prev => prev + 20);
   };
 
   const markConversationRead = async (convId) => {
@@ -290,258 +303,38 @@ function MessagesInner() {
     setUnreadByConv((prev) => ({ ...prev, [convId]: 0 }));
   };
 
-  useEffect(() => {
-    if (!activeConv || !user) return;
-    markConversationRead(activeConv.id);
-  }, [activeConv, user]);
+  const handleSendMessage = async (e) => {
+    if (e) e.preventDefault();
+    if (!input.trim() || !activeConv || !user || sending) return;
 
-  // Handle greet=1
-  useEffect(() => {
-    if (activeConv && initBizId && activeConv.business_id === initBizId) {
-      if (searchParams.get("greet") === "1") {
-        setShowQuickReplies(true);
-        // Clear param without reloading
-        const params = new URLSearchParams(searchParams.toString());
-        params.delete("greet");
-        router.replace(`/messages?${params.toString()}`);
-      }
-    }
-  }, [activeConv, initBizId, searchParams, router]);
-
-  // Auto-send service inquiry
-  useEffect(() => {
-    if (!activeConv || !initServiceId || !user) return;
-    
-    const sendInquiry = async () => {
-      const actionParam = searchParams.get("action");
-      
-      // Remove query params to prevent loop
-      const params = new URLSearchParams(searchParams.toString());
-      params.delete("service");
-      params.delete("action");
-      router.replace(`/messages?${params.toString()}`);
-
-      // Fetch service name to include in metadata
-      const { data: serviceData } = await supabase.from('services').select('name').eq('id', initServiceId).single();
-      const serviceName = serviceData?.name || "a custom service";
-
-      let initialContent = "I would like to inquire about this service.";
-      if (actionParam === "upload_design") {
-        initialContent = "I want to inquire about your services with this design.";
-      } else if (actionParam === "video_call") {
-        initialContent = "I would like to request a video call to discuss this service.";
-      }
-
-      await supabase.from("chat_messages").insert({
-        conversation_id: activeConv.id,
-        sender_id: user.id,
-        sender_role: "CUSTOMER",
-        content: initialContent,
-        message_type: 'service_inquiry',
-        metadata: { service_id: initServiceId, service_name: serviceName },
-        is_read: false,
-      });
-      
-      // Handle follow-up actions based on modal choice
-      if (actionParam === "upload_design") {
-        // Trigger file picker after a short delay so chat is visible first
-        pendingDesignUpload.current = true;
-        setTimeout(() => {
-          fileInputRef.current?.click();
-        }, 600);
-      } else if (actionParam === "video_call") {
-        // Send immediately in the same async chain — reliable, no setTimeout race condition
-        await supabase.from("chat_messages").insert({
-          conversation_id: activeConv.id,
-          sender_id: user.id,
-          sender_role: "CUSTOMER",
-          content: "[VIDEO_CALL_REQUEST]",
-          is_read: false,
-        });
-      } else if (actionParam === "chat") {
-        setShowQuickReplies(true);
-      }
-    };
-
-    sendInquiry();
-  }, [activeConv, initServiceId, user, router, searchParams]);
-
-  const sendQuickReply = async (action) => {
-    if (!activeConv || !user) return;
     setSending(true);
-
-    let customerText = "";
-    if (action === "hi") customerText = "Hi";
-    else if (action === "offer") customerText = "What do you offer?";
-    else if (action === "location") customerText = "Where are you located?";
-    else if (action === "categories") customerText = "What are the categories you are working in?";
-
-    // 1. Send customer message
-    await supabase.from("chat_messages").insert({
-      conversation_id: activeConv.id,
-      sender_id: user.id,
-      sender_role: "CUSTOMER",
-      content: customerText,
-      is_read: false,
-    });
-
-    // 2. Bot reply logic
-    let botReplyText = "";
-    let messageType = 'text';
-    let meta = {};
-
-    const { data: biz } = await supabase.from('businesses').select('owner_id, name, address, lat, lng').eq('id', activeConv.business_id).single();
-
-    if (action === "hi") {
-      botReplyText = `Welcome to ${biz?.name || 'our shop'} and we are pleased to serve you!`;
-    } else if (action === "offer") {
-      const { data: items } = await supabase.from('services').select('name, price, price_max, item_type').eq('business_id', activeConv.business_id).eq('available', true);
-      let listText = "";
-      
-      if (items && items.length > 0) {
-        const products = items.filter(i => i.item_type === 'product');
-        const services = items.filter(i => i.item_type !== 'product');
-        
-        if (products.length > 0) {
-          listText += "📦 PRODUCTS\n";
-          listText += products.map(p => `• ${p.name} - ₱${Number(p.price).toFixed(2)}`).join('\n') + "\n\n";
-        }
-        if (services.length > 0) {
-          listText += "🛠️ SERVICES\n";
-          listText += services.map(s => {
-            const p1 = Number(s.price).toFixed(2);
-            if (s.price_max && Number(s.price_max) > Number(s.price)) {
-              return `• ${s.name} - ₱${p1} to ₱${Number(s.price_max).toFixed(2)}`;
-            }
-            return `• ${s.name} - ₱${p1}`;
-          }).join('\n');
-        }
-      } else {
-        listText = "We currently have no available services or products.";
-      }
-      botReplyText = `Here is a preview of our offerings:\n\n${listText.trim()}`;
-    } else if (action === "location") {
-      botReplyText = `We are located at:\n${biz?.address || 'our address'}`;
-      if (biz?.lat && biz?.lng) {
-        messageType = 'location_pin';
-        meta = { lat: biz.lat, lng: biz.lng, address: biz.address };
-      }
-    } else if (action === "categories") {
-      const { data: items } = await supabase.from('services').select('category').eq('business_id', activeConv.business_id).eq('available', true);
-      if (items && items.length > 0) {
-        const uniqueCategories = [...new Set(items.map(i => i.category).filter(Boolean))];
-        if (uniqueCategories.length > 0) {
-          botReplyText = `We currently offer services and products in the following categories:`;
-          messageType = 'category_list';
-          meta = { categories: uniqueCategories };
-        } else {
-          botReplyText = "We haven't categorized our offerings yet, but we have many available. Please ask 'What do you offer?' to see our full list.";
-        }
-      } else {
-        botReplyText = "We currently have no available categories or offerings.";
-      }
-    }
-
-    if (biz?.owner_id && botReplyText) {
-      await supabase.from("chat_messages").insert({
-        conversation_id: activeConv.id,
-        sender_id: biz.owner_id,
-        sender_role: "BUSINESS_OWNER",
-        content: botReplyText,
-        message_type: messageType,
-        metadata: meta,
-        is_read: false,
-      });
-    }
-
-    setSending(false);
-  };
-
-  const sendCategoryInquiry = async (category) => {
-    if (!activeConv || !user) return;
-    setSending(true);
-
-    const customerText = `What is ${category}?`;
-
-    // 1. Send customer message
-    await supabase.from("chat_messages").insert({
-      conversation_id: activeConv.id,
-      sender_id: user.id,
-      sender_role: "CUSTOMER",
-      content: customerText,
-      is_read: false,
-    });
-
-    const { data: biz } = await supabase.from('businesses').select('owner_id').eq('id', activeConv.business_id).single();
-
-    const CATEGORY_DEFINITIONS = {
-      "Digital Printing": "Digital printing is a modern method of printing from digital-based images directly to a variety of media. It's fast, flexible, and ideal for smaller print runs.",
-      "Offset Printing": "Offset printing is a traditional, high-quality printing technique where the inked image is transferred from a plate to a rubber blanket, then to the printing surface. It provides the best quality and value for large quantities.",
-      "Large Format Printing": "Large format printing refers to printing large graphics or designs onto rolls of materials, such as banners, posters, signage, and vehicle wraps.",
-      "Screen Printing": "Screen printing is a technique where ink is forced through a meshed screen to create a printed design. Excellent for apparel and bulk items.",
-      "UV Printing": "UV printing uses ultra-violet light to cure or dry ink as it is printed, allowing for printing on almost any material including plastic, glass, and metal.",
-      "Sublimation Printing": "Sublimation printing uses heat to transfer dye onto materials such as a plastic, card, paper, or fabric, perfect for high-quality apparel and mugs.",
-      "3D Printing": "3D printing is the construction of a three-dimensional object from a CAD model or a digital 3D model.",
-      "Textile / Fabric Printing": "Textile printing is the process of applying color to fabric in definite patterns or designs, used for clothing, banners, and soft signage.",
-      "Packaging Printing": "Packaging printing involves creating custom boxes, bags, and wrappers with your brand's design to make your products stand out.",
-      "Cutting": "Cutting involves trimming printed materials down to their final finished size using precision equipment.",
-      "Binding": "Binding is the process of fastening individual sheets together to create books, magazines, catalogs, or reports.",
-      "Lamination": "Lamination applies a thin layer of clear plastic to printed materials to protect them and enhance their finish (glossy or matte).",
-      "Folding": "Folding services crease and bend printed sheets into formats like bi-folds, tri-folds, and intricate brochures.",
-      "Embossing / Debossing": "Embossing creates a raised 3D effect on paper, while debossing creates an indented effect, adding a premium tactile feel.",
-      "Foil Stamping": "Foil stamping applies a thin layer of metallic or pigmented foil to paper using heat and pressure for a luxurious finish.",
-      "Business Cards": "We print high-quality business cards in various finishes to help you make a lasting professional impression.",
-      "Flyers & Brochures": "Flyers and brochures are effective promotional materials for marketing your business, events, or products.",
-      "Posters": "Posters are large printed graphics designed to be attached to a wall or vertical surface for advertising or decoration.",
-      "Banners": "Banners are large signs made of vinyl or fabric, perfect for events, trade shows, and outdoor advertising.",
-      "Stickers & Labels": "We produce custom stickers and product labels in various shapes, sizes, and finishes (matte, glossy, waterproof).",
-      "T-Shirt Printing": "Custom t-shirt printing using various methods (silkscreen, direct-to-garment, heat transfer) for uniforms, events, or merchandise.",
-      "Mug Printing": "Personalized custom printed mugs, great for corporate giveaways, gifts, or souvenirs.",
-      "ID Cards": "High-quality PVC ID card printing for corporate employees, schools, and event passes.",
-      "Giveaways / Souvenirs": "Customized promotional items like pens, keychains, and umbrellas to help promote your brand."
-    };
-
-    const botReplyText = CATEGORY_DEFINITIONS[category] || "Please wait for the shop owner to reply for more details about this specific category.";
-
-    if (biz?.owner_id && botReplyText) {
-      await supabase.from("chat_messages").insert({
-        conversation_id: activeConv.id,
-        sender_id: biz.owner_id,
-        sender_role: "BUSINESS_OWNER",
-        content: botReplyText,
-        is_read: false,
-      });
-    }
-
-    setSending(false);
-  };
-
-  const sendMessage = async (e) => {
-    e.preventDefault();
-    if (!input.trim() || !activeConv) return;
-    setSending(true);
-
-    await supabase.from("chat_messages").insert({
-      conversation_id: activeConv.id,
-      sender_id: user.id,
-      sender_role: "CUSTOMER",
-      content: input.trim(),
-      is_read: false,
-    });
-
+    const content = input.trim();
     setInput("");
+
+    await supabase.from("chat_messages").insert({
+      conversation_id: activeConv.id,
+      sender_id: user.id,
+      sender_role: "CUSTOMER",
+      content,
+      is_read: false,
+    });
+
+    await supabase.from("chat_conversations").update({ updated_at: new Date().toISOString() }).eq("id", activeConv.id);
+
     setSending(false);
   };
 
-  const sendImageMessage = async (file) => {
+  const sendDesignUpload = async (file) => {
     if (!file || !activeConv || !user) return;
-    setSendingImage(true);
+    if (file.size > DESIGN_MAX_BYTES) {
+      window.alert("Design files must be 50 MB or smaller.");
+      return;
+    }
 
-    const isDesignUpload = pendingDesignUpload.current;
-    pendingDesignUpload.current = false;
-
-    const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-    const filePath = `${activeConv.id}/${user.id}-${Date.now()}.${ext}`;
+    setSending(true);
+    const uploadProfile = getUploadProfile(file);
+    const ext = uploadProfile.extension || "file";
+    const filePath = `${activeConv.id}/${user.id}-customer-design-${Date.now()}.${ext}`;
 
     const { error: uploadErr } = await supabase.storage
       .from("chat-images")
@@ -549,257 +342,162 @@ function MessagesInner() {
 
     if (!uploadErr) {
       const { data } = supabase.storage.from("chat-images").getPublicUrl(filePath);
-      if (isDesignUpload) {
-        // Scope the version number to the current service inquiry session
-        const { data: inquiries } = await supabase
-          .from("chat_messages")
-          .select("created_at")
-          .eq("conversation_id", activeConv.id)
-          .eq("message_type", "service_inquiry")
-          .order("created_at", { ascending: false })
-          .limit(1);
-        
-        const sessionStart = inquiries?.[0]?.created_at || '1970-01-01T00:00:00Z';
-
-        // Count existing design versions for this session to get next version number
-        const { data: existingDesigns } = await supabase
-          .from("chat_messages")
-          .select("id")
-          .eq("conversation_id", activeConv.id)
-          .eq("message_type", "design_version")
-          .gte("created_at", sessionStart);
-          
-        const nextVersion = ((existingDesigns?.length) || 0) + 1;
-        await supabase.from("chat_messages").insert({
-          conversation_id: activeConv.id,
-          sender_id: user.id,
-          sender_role: "CUSTOMER",
-          content: "I want to inquire about your services with this design.",
-          message_type: "design_version",
-          image_url: data?.publicUrl || null,
-          metadata: { version: String(nextVersion) },
-          is_read: false,
-        });
-      } else {
-        await supabase.from("chat_messages").insert({
-          conversation_id: activeConv.id,
-          sender_id: user.id,
-          sender_role: "CUSTOMER",
-          content: "[image]",
-          image_url: data?.publicUrl || null,
-          is_read: false,
-        });
-      }
+      await supabase.from("chat_messages").insert({
+        conversation_id: activeConv.id,
+        sender_id: user.id,
+        sender_role: "CUSTOMER",
+        content: "Customer design file uploaded for checking and quotation.",
+        message_type: "design_upload",
+        metadata: {
+          file_name: file.name,
+          file_size_bytes: file.size,
+          file_type: uploadProfile.fileType,
+          file_format: ext,
+          file_mime: uploadProfile.mime,
+          quality_notes: uploadProfile.quality,
+        },
+        image_url: data?.publicUrl || null,
+        is_read: false,
+      });
     }
 
-    setSendingImage(false);
+    setSending(false);
   };
 
-  const startEditMessage = (msg) => {
-    setMenuMessageId(null);
-    setEditingId(msg.id);
-    if (msg.content === "[image]" || msg.content === "[VIDEO_CALL_REQUEST]" || msg.content.startsWith("[VIDEO_CALL_INVITE:")) {
-      setEditingText("");
-    } else {
-      setEditingText(msg.content || "");
-    }
-  };
-
-  const sendVideoCallRequest = async () => {
-    if (!activeConv || !user) return;
+  const requestVideoCall = async () => {
+    if (!activeConv || !user || sending) return;
     setSending(true);
     await supabase.from("chat_messages").insert({
       conversation_id: activeConv.id,
       sender_id: user.id,
       sender_role: "CUSTOMER",
       content: "[VIDEO_CALL_REQUEST]",
+      message_type: "video_call",
+      metadata: {
+        capabilities: ["camera", "microphone", "screen share", "chat", "raise hand", "tile view", "video quality controls"],
+      },
       is_read: false,
     });
     setSending(false);
   };
 
-  const saveEditMessage = async (msgId) => {
-    if (!editingText.trim()) return;
-    await supabase
-      .from("chat_messages")
-      .update({ content: editingText.trim(), edited_at: new Date().toISOString() })
-      .eq("id", msgId)
-      .eq("sender_id", user.id);
-    setEditingId(null);
-    setEditingText("");
-    fetchMessages(activeConv.id, true);
+  const updateProofStatus = async (msg, status) => {
+    if (!activeConv || !user) return;
+    const metadata = {
+      ...(msg.metadata || {}),
+      proof_status: status,
+      reviewed_at: new Date().toISOString(),
+      reviewed_by: user.id,
+    };
+
+    setSending(true);
+    await supabase.from("chat_messages").update({ metadata }).eq("id", msg.id);
+    if (msg.metadata?.proof_id) {
+      await supabase.from("design_proofs").update({ status }).eq("id", msg.metadata.proof_id);
+    }
+    await supabase.from("chat_messages").insert({
+      conversation_id: activeConv.id,
+      sender_id: user.id,
+      sender_role: "CUSTOMER",
+      content: status === "APPROVED"
+        ? `I approve proof version ${msg.metadata?.version || ""}. Please lock the final cost before production.`
+        : `Proof version ${msg.metadata?.version || ""} needs changes. I will send notes in this chat.`,
+      message_type: "proof_status",
+      metadata,
+      is_read: false,
+    });
+    await fetchMessages(activeConv.id, true);
+    setSending(false);
   };
 
-  const deleteMessage = async (msg) => {
-    setMenuMessageId(null);
-    await supabase
-      .from("chat_messages")
-      .delete()
-      .eq("id", msg.id)
-      .eq("sender_id", user.id);
-    fetchMessages(activeConv.id, true);
+  const sendQuickReply = async (action) => {
+    if (!activeConv || !user) return;
+    const question = GENERATED_PRINT_QUESTIONS.find((item) => item.key === action);
+    if (!question) return;
+    setSending(true);
+
+    await supabase.from("chat_messages").insert({
+      conversation_id: activeConv.id,
+      sender_id: user.id,
+      sender_role: "CUSTOMER",
+      content: question.customerText,
+      is_read: false,
+    });
+
+    await supabase.from("chat_messages").insert({
+      conversation_id: activeConv.id,
+      sender_id: activeConv.business_id,
+      sender_role: "BUSINESS_OWNER",
+      content: question.reply,
+      message_type: "generated_guidance",
+      metadata: { question_key: question.key },
+      is_read: false,
+    });
+
+    setSending(false);
   };
-
-  const convLabel = (conv) => conv.businesses?.name || "Unknown Shop";
-
-  /* ── UI ── */
-  if (!user) {
-    return (
-      <div className="flex items-center justify-center min-h-[calc(100vh-80px)] bg-[#1A1A1A] text-[#00FFFF] font-mono">
-        <Loader2 className="animate-spin mb-4" size={48} />
-      </div>
-    );
-  }
 
   return (
-    <div className="h-[calc(100vh-80px)] overflow-hidden bg-[#FDFDFD] font-sans flex flex-col">
-      {/* PAGE HEADER */}
-      <div className="border-b-8 border-[#1A1A1A] px-8 py-6 bg-white shrink-0">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="flex gap-1">
-              <div className="w-4 h-1 bg-[#00FFFF]" /><div className="w-4 h-1 bg-[#EC008C]" /><div className="w-4 h-1 bg-[#FFF200]" />
-            </div>
-            <span className="font-mono text-[9px] uppercase tracking-[0.5em] text-gray-400">Comms_Terminal // v1.0</span>
+    <main className="min-h-screen bg-slate-50 font-sans text-slate-900 flex flex-col">
+      
+      {/* Header */}
+      <section className="bg-white border-b border-slate-200 py-6 px-4 sm:px-6 lg:px-8 relative shadow-sm shrink-0">
+        <div className="cmyk-bar absolute top-0 left-0 right-0" />
+        <div className="max-w-[1800px] mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">Messages & Proofing</h1>
+            <p className="text-xs text-slate-500 mt-0.5">Chat directly with print shop owners, receive price quotes, and approve design proofs.</p>
           </div>
-          <h1 className="text-5xl md:text-7xl font-black uppercase italic tracking-tighter leading-none">
-            Live_Chat
-          </h1>
         </div>
-      </div>
+      </section>
 
-      <div className="flex flex-1 max-w-7xl w-full mx-auto overflow-hidden">
-
-        {/* ── LEFT: CONVERSATION LIST ── */}
-        <aside className="w-full md:w-80 lg:w-96 border-r-4 border-[#1A1A1A] flex flex-col shrink-0 bg-white">
-          <div className="px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#F9F9F7]">
-            <p className="font-mono text-[9px] uppercase tracking-widest font-black opacity-50">
-              {conversations.length} Active Thread{conversations.length !== 1 ? "s" : ""}
-            </p>
+      {/* Main Chat Container */}
+      <div className="max-w-[1800px] w-full mx-auto p-3 sm:p-4 flex-1 flex gap-4 h-[calc(100vh-170px)] min-h-[500px]">
+        
+        {/* Sidebar Conversations List */}
+        <aside className="w-full sm:w-80 shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+          <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">Conversations</h2>
           </div>
-          {/* QUOTE CHECKOUT VERSION SELECTOR */}
-          {quoteCheckoutPending && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-              <div className="w-full max-w-lg bg-white border-4 border-[#1A1A1A] p-6 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)] max-h-[90vh] overflow-y-auto">
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-xl font-black uppercase italic tracking-widest text-[#1A1A1A]">Select Approved Design</h3>
-                  <button
-                    type="button"
-                    onClick={() => setQuoteCheckoutPending(null)}
-                    className="p-1 hover:bg-[#EC008C] hover:text-white transition-colors"
-                  >
-                    <X size={24} />
-                  </button>
-                </div>
-                
-                <p className="text-sm font-bold mb-6 text-gray-600">
-                  Please select the design version you want to proceed with for this order.
-                </p>
 
-                <div className="grid grid-cols-2 gap-4 mb-6">
-                  {(() => {
-                    // Find the most recent service_inquiry before this quote to scope designs to this session
-                    const inquiryMessages = messages.filter(m => m.message_type === 'service_inquiry' && m.created_at <= quoteCheckoutPending.created_at);
-                    const lastInquiry = inquiryMessages.length > 0 ? inquiryMessages[inquiryMessages.length - 1] : null;
-                    const sessionStart = lastInquiry?.created_at || '1970-01-01';
-
-                    const allVersions = messages.filter(m =>
-                      m.message_type === 'design_version' &&
-                      m.created_at >= sessionStart &&
-                      m.created_at <= quoteCheckoutPending.created_at
-                    );
-                    // Keep only the latest upload per version number
-                    const latestByVersion = Object.values(
-                      allVersions.reduce((acc, m) => {
-                        const v = m.metadata?.version || '1';
-                        if (!acc[v] || m.created_at > acc[v].created_at) acc[v] = m;
-                        return acc;
-                      }, {})
-                    );
-                    if (latestByVersion.length === 0) return (
-                      <p className="col-span-2 text-center font-mono text-[10px] uppercase opacity-50 py-4">No design versions uploaded yet.</p>
-                    );
-                    return latestByVersion.map(versionMsg => (
-                      <button
-                        key={versionMsg.id}
-                        onClick={() => {
-                          const checkoutUrl = `/business/${activeConv.business_id}?checkout_service=${quoteCheckoutPending.metadata?.service_id || ''}&quote=${quoteCheckoutPending.metadata?.quote_amount}&design_url=${encodeURIComponent(versionMsg.image_url)}&design_version=${versionMsg.metadata?.version || '1'}&quote_id=${quoteCheckoutPending.id}`;
-                          router.push(checkoutUrl);
-                        }}
-                        className="flex flex-col items-center border-2 border-[#1A1A1A] hover:bg-[#FFF200] transition-colors p-2 cursor-pointer group text-left"
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={versionMsg.image_url} alt="Design Version" className="w-full h-32 object-contain bg-[#1A1A1A]/5 mb-2" />
-                        <span className="font-mono text-[10px] font-black uppercase tracking-widest bg-[#1A1A1A] text-white px-2 py-1 w-full text-center group-hover:bg-[#00FFFF] group-hover:text-[#1A1A1A] transition-colors">
-                          Version {versionMsg.metadata?.version || "1"}
-                        </span>
-                      </button>
-                    ));
-                  })()}
-                </div>
-                
-                <button
-                  onClick={() => {
-                      const checkoutUrl = `/business/${activeConv.business_id}?checkout_service=${quoteCheckoutPending.metadata?.service_id || ''}&quote=${quoteCheckoutPending.metadata?.quote_amount}&quote_id=${quoteCheckoutPending.id}`;
-                      router.push(checkoutUrl);
-                  }}
-                  className="w-full border-2 border-[#1A1A1A] py-3 font-black uppercase text-xs hover:bg-[#1A1A1A] hover:text-white transition-colors"
-                >
-                  Skip / No Design
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
             {loadingConvs ? (
-              <div className="flex items-center justify-center py-20">
-                <Loader2 size={32} className="animate-spin text-[#00FFFF]" />
+              <div className="p-8 text-center text-xs text-slate-400 font-medium">
+                <Loader2 className="animate-spin mx-auto mb-2 text-[#EC008C]" size={24} />
+                Loading conversations...
               </div>
             ) : conversations.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
-                <MessageSquare size={48} className="mb-4 text-gray-200" />
-                <p className="font-black uppercase italic text-lg text-gray-300">No_Threads</p>
-                <p className="font-mono text-[10px] uppercase opacity-40 mt-2 leading-relaxed">
-                  Visit a business page and press Message to start.
-                </p>
+              <div className="p-8 text-center text-xs text-slate-400">
+                No active conversations. Start chatting from a shop's profile page.
               </div>
             ) : (
-              conversations.map((conv) => {
-                const isActive = activeConv?.id === conv.id;
-                const unread = unreadByConv[conv.id] || 0;
+              conversations.map((c) => {
+                const isActive = activeConv?.id === c.id;
+                const biz = c.businesses || {};
+                const unread = unreadByConv[c.id] || 0;
+
                 return (
                   <button
-                    key={conv.id}
-                    onClick={() => openConversation(conv)}
-                    className={`w-full text-left px-6 py-5 border-b-2 border-[#1A1A1A]/10 transition-all flex items-center gap-4 group ${
-                      isActive
-                        ? "bg-[#1A1A1A] text-white"
-                        : "hover:bg-[#00FFFF]/10"
+                    key={c.id}
+                    onClick={() => setActiveConv(c)}
+                    className={`w-full p-4 text-left flex items-start gap-3 transition-colors ${
+                      isActive ? "bg-slate-100/80 font-semibold" : "hover:bg-slate-50"
                     }`}
                   >
-                    <div className={`w-10 h-10 flex items-center justify-center shrink-0 border-2 ${isActive ? "bg-[#00FFFF] border-[#00FFFF]" : "bg-[#F9F9F7] border-[#1A1A1A]"}`}>
-                      <Store size={16} className={isActive ? "text-[#1A1A1A]" : "text-[#EC008C]"} />
+                    <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 shrink-0 font-bold text-sm">
+                      {biz.name ? biz.name.charAt(0) : <Store size={18} />}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className={`font-black uppercase italic text-sm leading-none truncate ${isActive ? "text-white" : "text-[#1A1A1A]"}`}>
-                        {convLabel(conv)}
-                      </p>
-                      {conv.businesses?.address && (
-                        <p className={`font-mono text-[9px] uppercase mt-1.5 font-bold truncate ${isActive ? "text-white/50" : "opacity-40"}`}>
-                          {conv.businesses.address}
-                        </p>
-                      )}
-                      <p className={`font-mono text-[8px] uppercase mt-1 font-black ${isActive ? "text-white/40" : "opacity-30"}`}>
-                        {new Date(conv.updated_at).toLocaleDateString()}
-                      </p>
-                    </div>
-                    {unread > 0 && (
-                      <div className="min-w-6 h-6 px-2 bg-[#EC008C] text-white border-2 border-[#1A1A1A] flex items-center justify-center font-mono text-[9px] font-black">
-                        {unread}
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-bold text-slate-900 truncate">{biz.name || "Print Shop"}</p>
+                        {unread > 0 && (
+                          <span className="w-5 h-5 rounded-full bg-[#EC008C] text-white text-[10px] font-bold flex items-center justify-center">
+                            {unread}
+                          </span>
+                        )}
                       </div>
-                    )}
-                    <ChevronRight size={14} className={`shrink-0 ${isActive ? "text-[#00FFFF]" : "opacity-0 group-hover:opacity-100 text-[#EC008C]"} transition-opacity`} />
+                      <p className="text-[11px] text-slate-400 mt-0.5">Click to view chat history</p>
+                    </div>
                   </button>
                 );
               })
@@ -807,308 +505,165 @@ function MessagesInner() {
           </div>
         </aside>
 
-        {/* ── RIGHT: CHAT PANEL ── */}
-        <div className={`flex-1 flex-col min-w-0 ${!activeConv ? 'hidden md:flex' : 'flex'}`}>
-          {!activeConv ? (
-            <div className="flex-1 flex flex-col items-center justify-center bg-[#F9F9F7]">
-              <div className="w-20 h-20 bg-[#1A1A1A] flex items-center justify-center mb-6 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
-                <MessageSquare size={36} className="text-[#00FFFF]" />
-              </div>
-              <p className="font-black uppercase italic text-2xl tracking-tighter mb-2">Select_A_Thread</p>
-              <p className="font-mono text-[10px] uppercase tracking-widest opacity-40">
-                Pick a conversation to begin transmission.
-              </p>
-            </div>
-          ) : (
+        {/* Chat Thread */}
+        <section className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden relative">
+          {activeConv ? (
             <>
-              {/* Chat header */}
-              <div className="px-4 md:px-8 py-5 bg-white border-b-4 border-[#1A1A1A] flex items-center gap-4 shrink-0 shadow-[0_4px_0_0_rgba(26,26,26,1)]">
-                <button
-                  type="button"
-                  onClick={() => setActiveConv(null)}
-                  className="md:hidden flex items-center justify-center w-10 h-10 bg-[#1A1A1A] text-[#00FFFF] border-2 border-[#1A1A1A] shrink-0"
-                >
-                  <ChevronLeft size={20} />
-                </button>
-                <div className="w-10 h-10 bg-[#1A1A1A] items-center justify-center border-2 border-[#1A1A1A] hidden md:flex shrink-0">
-                  <Store size={16} className="text-[#EC008C]" />
-                </div>
-                <div>
-                  <p className="font-black uppercase italic text-xl tracking-tighter leading-none">
-                    {convLabel(activeConv)}
-                  </p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Hash size={10} className="text-[#00FFFF]" />
-                    <p className="font-mono text-[9px] uppercase tracking-widest opacity-40 font-black">
-                      {activeConv.id.split("-")[0]}
-                    </p>
-                    <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse ml-1" />
-                    <p className="font-mono text-[9px] uppercase tracking-widest text-green-500 font-black">Online</p>
+              {/* Active Header */}
+              <div className="p-4 border-b border-slate-200 bg-white flex items-center justify-between z-10">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-xs">
+                    {activeConv.businesses?.name?.charAt(0) || "S"}
                   </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-slate-900">{activeConv.businesses?.name || "Print Shop"}</h2>
+                    <p className="text-[11px] text-slate-500">Live chat & proofing thread</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowQuickReplies(!showQuickReplies)}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 text-xs font-medium hover:bg-slate-100 flex items-center gap-1.5"
+                  >
+                    <Sparkles size={14} className="text-[#EC008C]" /> Quick Questions
+                  </button>
                 </div>
               </div>
 
-              {/* Messages area */}
-              <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth bg-gray-50/50">
-                    
-                    {hasMoreMsgs && (
-                      <div className="flex justify-center pt-2 pb-4">
-                        <button
-                          onClick={loadMoreMessages}
-                          className="bg-white border-2 border-[#1A1A1A] font-mono text-[10px] uppercase font-black tracking-widest px-4 py-2 hover:bg-[#1A1A1A] hover:text-[#00FFFF] transition-all"
-                        >
-                          {loadingMsgs ? "Loading..." : "Load Previous Messages"}
-                        </button>
-                      </div>
-                    )}
+              {/* Quick Reply Drawer */}
+              {showQuickReplies && (
+                <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap gap-2 animate-slide-up">
+                  {GENERATED_PRINT_QUESTIONS.map((question) => (
+                    <button
+                      key={question.key}
+                      onClick={() => sendQuickReply(question.key)}
+                      className="px-3 py-1.5 rounded-full bg-white border border-slate-200 text-slate-800 text-xs font-semibold hover:border-slate-400 shadow-sm"
+                    >
+                      {question.label}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-                    {loadingMsgs && messages.length === 0 ? (
-                  <div className="flex items-center justify-center py-20">
-                    <Loader2 size={32} className="animate-spin text-[#00FFFF]" />
-                  </div>
-                ) : messages.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full opacity-40 mt-20">
-                    <MessageSquare size={40} className="mb-3 text-gray-400" />
-                    <p className="font-mono text-[10px] uppercase font-black tracking-widest">Start the conversation.</p>
+              {/* Messages Scroll Thread */}
+              <div ref={scrollContainerRef} className="flex-1 p-6 overflow-y-auto space-y-4 bg-slate-50/50">
+                {loadingMsgs ? (
+                  <div className="p-12 text-center text-xs text-slate-400">
+                    <Loader2 className="animate-spin mx-auto mb-2 text-[#00FFFF]" size={24} />
+                    Loading message thread...
                   </div>
                 ) : (
-                  messages.map((msg) => {
-                    const isMine = msg.sender_id === user.id;
-                    const isEditing = editingId === msg.id;
+                  messages.map((m) => {
+                    const isMe = m.sender_id === user?.id;
+                    const meta = m.metadata || {};
+                    const uploadName = meta.file_name || "Uploaded file";
+                    const isPreviewable = Boolean(m.image_url && (meta.file_mime?.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(uploadName)));
+
                     return (
-                      <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"} relative`}>
-                        {!isMine && (
-                          <div className="w-8 h-8 bg-[#1A1A1A] flex items-center justify-center shrink-0 mr-3 mt-auto">
-                            <Store size={13} className="text-[#00FFFF]" />
-                          </div>
-                        )}
-
-                        {/* moved More (three-dot) button outside the bubble on the left */}
-                        {isMine && (
-                          <div className="relative flex flex-col items-center mr-3">
-                            <button
-                              type="button"
-                              onClick={() => setMenuMessageId((prev) => (prev === msg.id ? null : msg.id))}
-                              className="w-8 h-8 bg-[#00FFFF] flex items-center justify-center border-2 border-[#1A1A1A] text-[#1A1A1A]"
-                              aria-label="More actions"
-                            >
-                              <MoreVertical size={14} />
-                            </button>
-
-                            {menuMessageId === msg.id && (
-                              <div className="absolute left-0 bottom-full mb-2 z-30 w-40 rounded-lg bg-[#2a2a2a] text-white shadow-lg">
-                                <div className="absolute -bottom-2 left-5 w-3 h-3 bg-[#2a2a2a] rotate-45 shadow-sm" />
-                                <div className="flex flex-col py-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => startEditMessage(msg)}
-                                    className="flex w-full items-center gap-3 px-4 py-3 text-left font-mono text-sm font-black uppercase hover:bg-white/10"
-                                  >
-                                    <Pencil size={14} className="text-white" />
-                                    <span>Edit</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => deleteMessage(msg)}
-                                    className="flex w-full items-center gap-3 px-4 py-3 text-left font-mono text-sm font-black uppercase hover:bg-white/10"
-                                  >
-                                    <Trash2 size={14} className="text-white" />
-                                    <span>Delete</span>
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        <div className={`relative max-w-[65%] px-5 py-4 border-2 ${
-                          isMine
-                            ? "bg-[#1A1A1A] text-white border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(0,255,255,1)]"
-                            : "bg-white text-[#1A1A1A] border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(236,0,140,0.3)]"
+                      <div key={m.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                        <div className={`max-w-md p-4 rounded-2xl text-xs leading-relaxed ${
+                          isMe 
+                            ? "bg-slate-900 text-white rounded-br-none shadow-sm" 
+                            : "bg-white border border-slate-200 text-slate-900 rounded-bl-none shadow-sm"
                         }`}>
-                          {msg.image_url && (
-                            <a href={msg.image_url} target="_blank" rel="noopener noreferrer">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={msg.image_url}
-                                alt="Chat upload"
-                                className="mb-3 max-h-64 w-auto rounded border-2 border-black/20"
-                              />
-                            </a>
-                          )}
-
-                          {isEditing ? (
-                            <div className="space-y-2">
-                              <input
-                                value={editingText}
-                                onChange={(e) => setEditingText(e.target.value)}
-                                className="w-full px-3 py-2 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A] font-mono text-sm"
-                              />
-                              <div className="flex gap-2 justify-end">
-                                <button type="button" onClick={() => saveEditMessage(msg.id)} className="p-1 border-2 border-[#1A1A1A] bg-[#00FFFF] text-[#1A1A1A]"><Check size={12} /></button>
-                                <button type="button" onClick={() => { setEditingId(null); setEditingText(""); }} className="p-1 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A]"><X size={12} /></button>
-                              </div>
-                            </div>
-                          ) : msg.content === "[VIDEO_CALL_REQUEST]" ? (
-                            <div className="flex flex-col items-center p-3 text-center w-48">
-                              <Video size={28} className={`mb-2 ${isMine ? "text-[#00FFFF]" : "text-[#EC008C]"}`} />
-                              <p className="font-black uppercase text-xs whitespace-normal">Video Call Requested</p>
-                              <p className="font-mono text-[9px] uppercase mt-1 opacity-70">Awaiting owner's invite</p>
-                            </div>
-                          ) : msg.content.startsWith("[VIDEO_CALL_INVITE:") ? (
-                            (() => {
-                              const timeStr = msg.content.replace("[VIDEO_CALL_INVITE:", "").replace("]", "");
-                              const schedTime = new Date(timeStr);
-                              // We can update the state to re-render, but usually polling/realtime makes changing components remount enough.
-                              // Check if time is past, or at least if it's within 15 minutes before the time
-                              const isExpired = Date.now() - schedTime.getTime() > (30 * 60 * 1000);
-                              const joinable = !isExpired && (schedTime.getTime() - Date.now()) <= (15 * 60 * 1000);
-                              return (
-                                <div className="flex flex-col items-center p-3 text-center border-t-4 border-[#00FFFF] bg-white/5 w-56">
-                                  <Calendar size={28} className={`mb-2 ${isMine ? "text-[#00FFFF]" : "text-[#EC008C]"}`} />
-                                  <p className="font-black uppercase text-xs text-[#00FFFF]">Video Call Scheduled</p>
-                                  <p className="font-mono text-[10px] uppercase font-bold mt-1 opacity-90">{schedTime.toLocaleString()}</p>
-                                  {isExpired ? (
-                                    <button disabled className="mt-3 px-4 py-2 w-full bg-[#1A1A1A]/50 text-white/50 font-black uppercase text-xs border border-[#1A1A1A]/50 cursor-not-allowed">
-                                      Link Expired
-                                    </button>
-                                  ) : joinable ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => setJitsiRoom(`print-app-call-${activeConv.id}`)}
-                                      className="mt-3 px-4 py-2 w-full bg-[#EC008C] hover:bg-[#FFF200] hover:text-[#1A1A1A] text-white font-black uppercase text-xs border border-transparent hover:border-[#1A1A1A] transition-all"
-                                    >
-                                      Join Call
-                                    </button>
-                                  ) : (
-                                    <button disabled className="mt-3 px-4 py-2 w-full bg-[#1A1A1A]/50 text-white/50 font-black uppercase text-xs border border-[#1A1A1A]/50 cursor-not-allowed">
-                                      Not yet available
-                                    </button>
-                                  )}
-                                </div>
-                              );
-                            })()
-                          ) : msg.message_type === 'quote' ? (
-                            <div className="flex flex-col p-4 border-2 border-[#FFF200] bg-[#1A1A1A] text-white min-w-[200px]">
-                              <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#FFF200] mb-2">Official Quote</p>
-                              <p className="text-3xl font-black italic text-[#00FFFF] mb-4">₱{Number(msg.metadata?.quote_amount).toFixed(2)}</p>
-                              {msg.content && <p className="text-sm font-bold leading-relaxed mb-4">{msg.content}</p>}
-                              {msg.metadata?.is_checkout_completed ? (
-                                <button
-                                  type="button"
-                                  disabled
-                                  className="w-full bg-[#1A1A1A] text-white/50 font-black uppercase italic text-sm py-3 border-2 border-[#1A1A1A] cursor-not-allowed"
-                                >
-                                  Order Placed
-                                </button>
+                          {m.image_url && (
+                            <div className="mb-3">
+                              {isPreviewable ? (
+                                <a href={m.image_url} target="_blank" rel="noopener noreferrer">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img src={m.image_url} alt={uploadName} className="max-h-80 w-auto rounded-lg border border-slate-200" />
+                                </a>
                               ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    // Determine if there are previous designs
-                                    const previousDesigns = messages.filter(m => m.message_type === 'design_version' && m.created_at <= msg.created_at);
-                                    if (previousDesigns.length > 0) {
-                                      setQuoteCheckoutPending(msg);
-                                    } else {
-                                      const checkoutUrl = `/business/${activeConv.business_id}?checkout_service=${msg.metadata?.service_id || ''}&quote=${msg.metadata?.quote_amount}&quote_id=${msg.id}`;
-                                      router.push(checkoutUrl);
-                                    }
-                                  }}
-                                  className="w-full bg-[#00FFFF] text-[#1A1A1A] font-black uppercase italic text-sm py-3 hover:bg-[#FFF200] transition-colors border-2 border-[#00FFFF]"
-                                >
-                                  Finalize & Checkout
-                                </button>
-                              )}
-                            </div>
-                          ) : msg.message_type === 'design_version' ? (
-                            <div className="flex flex-col">
-                              <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#FFF200] mb-2 px-2 py-1 bg-[#1A1A1A] self-start">
-                                Version {msg.metadata?.version || "1"}
-                              </span>
-                              {msg.content && msg.content !== "[image]" && (
-                                <p className="text-sm font-bold leading-relaxed mb-3">{msg.content}</p>
-                              )}
-                            </div>
-                          ) : msg.message_type === 'service_inquiry' ? (
-                            <div className="flex flex-col p-3 border-l-4 border-[#00FFFF] bg-white/5">
-                              <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF] mb-1">Service Inquiry</p>
-                              {msg.metadata?.service_name && (
-                                <p className="font-black uppercase text-sm mb-1">{msg.metadata.service_name}</p>
-                              )}
-                              <p className="text-sm font-bold italic opacity-80">{msg.content}</p>
-                            </div>
-                          ) : msg.message_type === 'refund_dispute' ? (
-                            <div className="flex flex-col p-4 border-2 border-[#EC008C] bg-[#EC008C]/10 min-w-[220px]">
-                              <div className="flex items-center gap-2 mb-2">
-                                <div className="w-2 h-2 bg-[#EC008C] rounded-full animate-pulse" />
-                                <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#EC008C]">Refund Dispute Sent</p>
-                              </div>
-                              <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap mb-3">{msg.content}</p>
-                              <div className="flex flex-col gap-1 border-t border-[#EC008C]/30 pt-2">
-                                {msg.metadata?.receipt_url && (
-                                  <button onClick={() => setViewImagePopup({ url: msg.metadata.receipt_url, label: 'Payment Receipt' })} className="font-mono text-[9px] uppercase font-black text-[#EC008C] flex items-center gap-1 hover:underline text-left">
-                                    📄 View Payment Receipt
-                                  </button>
-                                )}
-                                {msg.metadata?.refund_receipt_url && (
-                                  <button onClick={() => setViewImagePopup({ url: msg.metadata.refund_receipt_url, label: "Seller's Refund Proof" })} className="font-mono text-[9px] uppercase font-black text-[#EC008C] flex items-center gap-1 hover:underline text-left">
-                                    🧾 View Seller's Refund Proof
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ) : msg.message_type === 'location_pin' ? (
-                            <div className="flex flex-col p-3 border-2 border-[#00FFFF] bg-[#00FFFF]/5 min-w-[220px]">
-                              <div className="flex items-center gap-2 mb-2">
-                                <MapPin size={14} className="text-[#00FFFF]" />
-                                <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF]">Shop Location</p>
-                              </div>
-                              <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap mb-3">{msg.content}</p>
-                              {msg.metadata?.lat && msg.metadata?.lng && (
-                                <a 
-                                  href={`https://maps.google.com/?q=${msg.metadata.lat},${msg.metadata.lng}`} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer" 
-                                  className="font-mono text-[9px] uppercase font-black text-[#1A1A1A] bg-[#00FFFF] px-3 py-2 text-center hover:bg-white transition-colors"
-                                >
-                                  Open in Google Maps
+                                <a href={m.image_url} target="_blank" rel="noopener noreferrer" className={`flex items-center gap-3 rounded-lg border p-3 ${isMe ? "border-white/30" : "border-slate-200"} hover:bg-slate-100/40`}>
+                                  <FileText size={24} className="shrink-0" />
+                                  <span className="break-all font-semibold">{uploadName}</span>
                                 </a>
                               )}
                             </div>
-                          ) : msg.message_type === 'category_list' ? (
-                            <div className="flex flex-col min-w-[200px]">
-                              {msg.content && <p className="text-sm font-bold leading-relaxed mb-3">{msg.content}</p>}
-                              {msg.metadata?.categories && msg.metadata.categories.length > 0 && (
-                                <div className="flex flex-col gap-2">
-                                  {msg.metadata.categories.map((cat, i) => (
-                                    <button
-                                      key={i}
-                                      onClick={() => sendCategoryInquiry(cat)}
-                                      disabled={sending}
-                                      className="text-left px-3 py-2 border-2 border-[#1A1A1A] bg-[#FFF200] text-[#1A1A1A] hover:bg-[#EC008C] hover:text-white font-mono text-[10px] font-black uppercase tracking-widest transition-colors disabled:opacity-50"
-                                    >
-                                      {cat}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            msg.content !== "[image]" && <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap word-break break-words">{msg.content}</p>
                           )}
 
-                          
-
-                          <p className={`font-mono text-[8px] uppercase mt-2 font-black tracking-wider ${isMine ? "opacity-40 text-right" : "opacity-40"}`}>
-                            {new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                            {msg.edited_at ? " • edited" : ""}
-                          </p>
+                          {m.content === "[VIDEO_CALL_REQUEST]" ? (
+                            <div className="text-center">
+                              <Video size={26} className="mx-auto mb-2 text-[#EC008C]" />
+                              <p className="font-bold">Video call requested</p>
+                              <p className="mt-1 text-[11px] opacity-70">Camera, microphone, screen share, chat, raise hand, tile view, quality controls.</p>
+                            </div>
+                          ) : m.content?.startsWith("[VIDEO_CALL_INVITE:") ? (
+                            (() => {
+                              const timeStr = m.content.replace("[VIDEO_CALL_INVITE:", "").replace("]", "");
+                              const schedTime = new Date(timeStr);
+                              const isExpired = Date.now() - schedTime.getTime() > (30 * 60 * 1000);
+                              const joinable = !isExpired && (schedTime.getTime() - Date.now()) <= (15 * 60 * 1000);
+                              return (
+                                <div className="text-center">
+                                  <Calendar size={26} className="mx-auto mb-2 text-[#00FFFF]" />
+                                  <p className="font-bold">Video call scheduled</p>
+                                  <p className="mt-1 text-[11px] opacity-80">{schedTime.toLocaleString()}</p>
+                                  <p className="mt-1 text-[11px] opacity-60">Includes camera, microphone, screen share, chat, raise hand, tile view, quality controls, and whiteboard.</p>
+                                  <button
+                                    type="button"
+                                    onClick={() => setJitsiRoom(`print-app-call-${activeConv.id}`)}
+                                    disabled={!joinable}
+                                    className="mt-3 rounded-lg bg-slate-900 px-4 py-2 text-[11px] font-bold text-white disabled:opacity-40"
+                                  >
+                                    {isExpired ? "Link expired" : joinable ? "Join call" : "Available 15 minutes before"}
+                                  </button>
+                                </div>
+                              );
+                            })()
+                          ) : m.message_type === "quote" ? (
+                            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-slate-900">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Formal quotation</p>
+                              <p className="mt-1 text-2xl font-extrabold">PHP {Number(meta.total_cost || meta.quote_amount || 0).toFixed(2)}</p>
+                              <div className="mt-2 grid grid-cols-2 gap-1 text-[11px]">
+                                <span className="text-slate-500">Subtotal</span><span className="text-right font-semibold">PHP {Number(meta.subtotal || meta.quote_amount || 0).toFixed(2)}</span>
+                                <span className="text-slate-500">Tax/VAT</span><span className="text-right font-semibold">PHP {Number(meta.taxes || 0).toFixed(2)}</span>
+                                <span className="text-slate-500">Valid until</span><span className="text-right font-semibold">{meta.valid_until ? new Date(meta.valid_until).toLocaleDateString() : "14 days"}</span>
+                                <span className="text-slate-500">Proof version</span><span className="text-right font-semibold">{meta.proof_version || "Not locked"}</span>
+                              </div>
+                              {m.content && <p className="mt-3 whitespace-pre-wrap">{m.content}</p>}
+                            </div>
+                          ) : m.message_type === "design_version" ? (
+                            <div>
+                              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-slate-900">
+                                <div className="flex items-center justify-between gap-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-wider text-[#EC008C]">Proof version {meta.version || "1"}</p>
+                                  <span className="rounded bg-slate-900 px-2 py-1 text-[9px] font-bold uppercase text-white">{meta.proof_status || "PENDING"}</span>
+                                </div>
+                                <div className="mt-2 grid grid-cols-2 gap-1 text-[11px]">
+                                  <span>Type: {meta.file_type || "Design proof"}</span>
+                                  <span>Format: {(meta.file_format || "file").toUpperCase()}</span>
+                                  <span>Size: {formatBytes(meta.file_size_bytes)}</span>
+                                  <span>Quality: print-ready review</span>
+                                </div>
+                                {meta.quality_notes && <p className="mt-2 text-[11px] text-slate-500">{meta.quality_notes}</p>}
+                                {!meta.is_locked && (
+                                  <div className="mt-3 flex gap-2">
+                                    <button type="button" onClick={() => updateProofStatus(m, "APPROVED")} disabled={sending || meta.proof_status === "APPROVED"} className="rounded-lg bg-emerald-600 px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40">Approve</button>
+                                    <button type="button" onClick={() => updateProofStatus(m, "NEEDS_CHANGES")} disabled={sending} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-[11px] font-bold text-slate-800 disabled:opacity-40">Request changes</button>
+                                  </div>
+                                )}
+                              </div>
+                              {m.content && m.content !== "[image]" && <p className="mt-2 whitespace-pre-wrap">{m.content}</p>}
+                            </div>
+                          ) : m.message_type === "proof_status" ? (
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-wider opacity-60">Proof update</p>
+                              <p className="whitespace-pre-wrap">{m.content}</p>
+                            </div>
+                          ) : m.message_type === "generated_guidance" ? (
+                            <div className="rounded-xl border border-cyan-100 bg-cyan-50 p-3 text-slate-900">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-cyan-700">Suggested print guidance</p>
+                              <p className="mt-1 whitespace-pre-wrap">{m.content}</p>
+                            </div>
+                          ) : (
+                            m.content !== "[image]" && <p className="whitespace-pre-wrap">{m.content}</p>
+                          )}
+                          <span className={`block text-[10px] mt-2 text-right opacity-60`}>
+                            {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
                         </div>
-                        {isMine && (
-                          <div className="w-8 h-8 bg-[#00FFFF] flex items-center justify-center shrink-0 ml-3 mt-auto">
-                            <User size={13} className="text-[#1A1A1A]" />
-                          </div>
-                        )}
                       </div>
                     );
                   })
@@ -1116,173 +671,102 @@ function MessagesInner() {
                 <div ref={bottomRef} />
               </div>
 
-              {/* Quick Replies */}
-              {showQuickReplies && (
-                <div className="flex flex-col gap-2 p-3 bg-[#F9F9F7] border-t-4 border-[#1A1A1A] shrink-0">
-                  <p className="font-mono text-[9px] uppercase tracking-widest font-black opacity-50">Quick Replies — what do you want to ask?</p>
-                  <div className="flex gap-2 overflow-x-auto no-scrollbar">
+              {/* Quick Reply Suggestions */}
+              <div className="px-4 pt-2.5 bg-white border-t border-slate-100 flex items-center gap-2 overflow-x-auto text-[11px] font-semibold text-slate-600 no-scrollbar">
+                <span className="shrink-0 text-slate-400 font-bold">Quick Inquiries:</span>
+                {GENERATED_PRINT_QUESTIONS.slice(0, 5).map((question) => (
                   <button
-                    onClick={() => sendQuickReply("hi")}
-                    className="whitespace-nowrap px-4 py-2 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A] font-mono text-[10px] font-black uppercase hover:bg-[#00FFFF] transition-colors"
+                    key={question.key}
+                    type="button"
+                    onClick={() => sendQuickReply(question.key)}
+                    className="px-2.5 py-1 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 shrink-0 transition-colors"
                   >
-                    Hi
+                    {question.label}
                   </button>
-                  <button
-                    onClick={() => sendQuickReply("offer")}
-                    className="whitespace-nowrap px-4 py-2 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A] font-mono text-[10px] font-black uppercase hover:bg-[#FFF200] transition-colors"
-                  >
-                    What do you offer?
-                  </button>
-                  <button
-                    onClick={() => sendQuickReply("location")}
-                    className="whitespace-nowrap px-4 py-2 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A] font-mono text-[10px] font-black uppercase hover:bg-[#EC008C] hover:text-white transition-colors"
-                  >
-                    Where are you located?
-                  </button>
-                  <button
-                    onClick={() => sendQuickReply("categories")}
-                    className="whitespace-nowrap px-4 py-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] text-white font-mono text-[10px] font-black uppercase hover:bg-[#FFF200] hover:text-[#1A1A1A] transition-colors"
-                  >
-                    What are the categories you are working in?
-                  </button>
-                  <button
-                    onClick={() => setShowQuickReplies(false)}
-                    className="whitespace-nowrap px-2 py-2 ml-auto text-gray-500 hover:text-[#1A1A1A] transition-colors shrink-0"
-                    title="Dismiss"
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
-                </div>
-              )}
+                ))}
+              </div>
 
-              {/* Input */}
-              <form onSubmit={sendMessage} className="flex gap-3 p-5 border-t-4 border-[#1A1A1A] bg-white shrink-0">
+              {/* Input Form */}
+              <form onSubmit={handleSendMessage} className="p-4 bg-white border-t border-slate-100 flex items-center gap-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={DESIGN_FILE_ACCEPT}
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) sendDesignUpload(file);
+                    e.target.value = "";
+                  }}
+                />
                 <input
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Tab") {
-                      e.preventDefault();
-                    }
-                  }}
-                  placeholder="Type a message..."
-                  className="flex-1 px-5 py-4 border-2 border-[#1A1A1A] font-mono text-sm bg-[#F9F9F7] focus:outline-none focus:bg-white focus:ring-4 ring-[#00FFFF]/40 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
-                />
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) sendImageMessage(file);
-                    e.target.value = "";
-                  }}
+                  placeholder="Type a message or inquiry..."
+                  className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#EC008C]"
                 />
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={sendingImage}
-                  className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#FFF200] transition-all disabled:opacity-40 shrink-0"
-                  title="Attach Image"
+                  disabled={sending}
+                  title="Upload design file for proofing"
+                  className="p-3 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-100 transition-colors disabled:opacity-50"
                 >
-                  {sendingImage ? <Loader2 size={20} className="animate-spin" /> : <ImagePlus size={20} />}
+                  <FileText size={18} />
                 </button>
                 <button
                   type="button"
-                  onClick={sendVideoCallRequest}
+                  onClick={requestVideoCall}
                   disabled={sending}
-                  className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#00FFFF] transition-all disabled:opacity-40 shrink-0"
-                  title="Request Video Call"
+                  title="Request video consultation"
+                  className="p-3 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-100 transition-colors disabled:opacity-50"
                 >
-                  <Video size={20} />
+                  <Video size={18} />
                 </button>
                 <button
                   type="submit"
                   disabled={!input.trim() || sending}
-                  className="w-14 h-14 bg-[#1A1A1A] text-[#00FFFF] flex items-center justify-center hover:bg-[#EC008C] hover:text-white transition-all disabled:opacity-40 shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] hover:shadow-[4px_4px_0px_0px_rgba(236,0,140,0.5)] shrink-0"
+                  className="p-3 bg-slate-900 text-white rounded-xl hover:bg-[#EC008C] transition-colors disabled:opacity-50"
                 >
-                  {sending ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
+                  {sending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
                 </button>
               </form>
             </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-slate-400">
+              <MessageSquare size={48} className="mb-3 opacity-30" />
+              <p className="text-sm font-semibold text-slate-600">Select a Conversation</p>
+              <p className="text-xs text-slate-400 mt-1 max-w-xs">Choose a print shop from the sidebar to view chat history and design proofs.</p>
+            </div>
           )}
-        </div>
-      </div>
-      {/* ── Image Popup Modal ── */}
-      {viewImagePopup && (
-        <div className="fixed inset-0 z-[998] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)]">
-            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
-              <div className="flex items-center gap-3">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 bg-[#00FFFF]" />
-                  <div className="w-2 h-2 bg-[#EC008C]" />
-                  <div className="w-2 h-2 bg-[#FFF200]" />
-                </div>
-                <span className="font-black uppercase italic tracking-widest">{viewImagePopup.label}</span>
-              </div>
-              <button onClick={() => setViewImagePopup(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6 bg-gray-100 flex items-center justify-center min-h-[300px]">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={viewImagePopup.url} alt={viewImagePopup.label} className="max-w-full max-h-[70vh] object-contain border-4 border-[#1A1A1A]" />
-            </div>
-            <div className="p-4 border-t-4 border-[#1A1A1A] flex justify-end">
-              <button onClick={() => setViewImagePopup(null)} className="bg-[#1A1A1A] text-white px-6 py-3 font-black uppercase text-[10px] hover:bg-[#EC008C] transition-all shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] active:shadow-none">
-                CLOSE
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+        </section>
 
-      {/* ── Jitsi In-App Modal ── */}
+      </div>
       {jitsiRoom && (
-        <div className="fixed inset-0 z-[999] flex flex-col bg-[#1A1A1A]">
-          <div className="flex items-center justify-between px-6 py-3 border-b-4 border-[#00FFFF] bg-[#1A1A1A] shrink-0">
+        <div className="fixed inset-0 z-[999] flex flex-col bg-slate-950">
+          <div className="flex items-center justify-between border-b border-cyan-400 bg-slate-950 px-5 py-3 text-white">
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <span className="font-black text-lg uppercase italic tracking-tighter leading-none text-white">
-                  Press <span className="text-[#00FFFF]">&amp;</span> Present
-                </span>
-                <div className="flex gap-1 ml-1">
-                  <div className="w-2 h-2 bg-[#00FFFF]" />
-                  <div className="w-2 h-2 bg-[#EC008C]" />
-                  <div className="w-2 h-2 bg-[#FFF200]" />
-                </div>
+              <Video size={18} className="text-cyan-300" />
+              <div>
+                <p className="text-sm font-extrabold uppercase">Live video proofing call</p>
+                <p className="text-[11px] text-slate-400">Camera, microphone, screen share, chat, raise hand, tile view, quality controls, and whiteboard.</p>
               </div>
-              <div className="w-px h-5 bg-white/20" />
-              <Video size={16} className="text-[#00FFFF]" />
-              <p className="font-mono text-[10px] uppercase tracking-widest text-[#00FFFF] font-black">Live_Call</p>
-              <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
             </div>
-            <button
-              type="button"
-              onClick={() => setJitsiRoom(null)}
-              className="flex items-center gap-2 px-4 py-2 bg-[#EC008C] text-white font-black uppercase text-[10px] border-2 border-[#EC008C] hover:bg-[#FFF200] hover:text-[#1A1A1A] hover:border-[#1A1A1A] transition-all"
-            >
-              <X size={14} /> End &amp; Close
+            <button type="button" onClick={() => setJitsiRoom(null)} className="rounded-lg bg-[#EC008C] px-4 py-2 text-xs font-bold text-white">
+              End & Close
             </button>
           </div>
           <div id="jitsi-container-customer" className="flex-1 w-full" />
         </div>
       )}
-    </div>
+    </main>
   );
 }
 
 export default function MessagesPage() {
   return (
-    <Suspense fallback={
-      <div className="flex items-center justify-center min-h-[calc(100vh-80px)] bg-[#1A1A1A] text-[#00FFFF] font-mono">
-        <Loader2 className="animate-spin" size={48} />
-      </div>
-    }>
+    <Suspense fallback={<div className="p-12 text-center text-xs font-semibold">Loading messages...</div>}>
       <MessagesInner />
     </Suspense>
   );

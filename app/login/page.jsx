@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { Loader2, ArrowRight, ShieldCheck, Activity, Mail, Eye, EyeOff } from "lucide-react";
+import { Loader2, ArrowRight, ShieldCheck, Mail, Eye, EyeOff, Lock, CheckCircle2 } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -21,9 +21,9 @@ export default function LoginPage() {
   const getReadableError = (err) => {
     const message = err?.message?.toLowerCase() || "";
     if (message.includes("invalid login credentials")) {
-      return "ACCESS_DENIED: INVALID_CREDENTIALS";
+      return "Invalid email or password. Please check your credentials.";
     }
-    return err.message || "SYSTEM_ERROR: UNEXPECTED_PROTOCOL_FAILURE";
+    return err.message || "An unexpected error occurred. Please try again.";
   };
 
   const handleSendResetOtp = async (e) => {
@@ -38,10 +38,10 @@ export default function LoginPage() {
         body: JSON.stringify({ email: formData.email.trim().toLowerCase(), type: "reset" })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to dispatch recovery code.");
+      if (!res.ok) throw new Error(data.error || "Failed to send recovery code.");
       setResetSent(true);
     } catch (err) {
-      setError(err.message || "Failed to dispatch recovery link.");
+      setError(err.message || "Failed to send recovery code.");
     } finally {
       setLoading(false);
     }
@@ -63,9 +63,8 @@ export default function LoginPage() {
         })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Reset failed.");
+      if (!res.ok) throw new Error(data.error || "Password reset failed.");
       
-      // Success! Reset states and tell user to log in.
       setIsResetMode(false);
       setResetSent(false);
       setResetOtp("");
@@ -118,198 +117,185 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="relative min-h-screen bg-[#FDFDFD] text-[#1A1A1A] font-sans overflow-hidden">
-      <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
-      <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
-      <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
-      <div className="flex min-h-screen w-full flex-col lg:flex-row border-x-4 border-[#1A1A1A]">
+    <main className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-md w-full mx-auto space-y-8">
 
-      {/* Sidebar Branding - Abstract/Industrial */}
-      <div className="lg:w-5/12 bg-[#1A1A1A] p-12 flex flex-col justify-between text-[#F4F4F1] relative border-b-8 lg:border-b-0 lg:border-r-8 border-[#1A1A1A]">
-        {/* Background Decorative Grid - Cyan Dots */}
-        <div className="absolute inset-0 opacity-10 pointer-events-none"
-          style={{ backgroundImage: 'radial-gradient(#00FFFF 1px, transparent 1px)', backgroundSize: '30px 30px' }} />
+        {/* Card Container */}
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+          
+          {/* Top CMYK Signature Bar */}
+          <div className="cmyk-bar" />
 
-        <div className="relative z-10">
-          <div className="flex items-start gap-4 mb-16">
-            <div className="relative">
-              <div className="w-16 h-16 border-4 border-[#00FFFF] flex items-center justify-center shadow-[4px_4px_0px_0px_rgba(0,255,255,0.3)]">
-                <div className="w-8 h-8 bg-[#00FFFF] rotate-45 animate-pulse" />
-              </div>
-            </div>
-            <div className="font-mono text-[10px] tracking-[0.3em] leading-tight opacity-40">
-              AUTH_PROTOCOL: SECURE_LOGIN<br />
-              NODE_ENCRYPTION: ENABLED<br />
-              PORTAL_V: 2.0.6
-            </div>
-          </div>
-
-          <h1 className="text-8xl font-black leading-[0.85] tracking-tighter uppercase italic mb-8">
-            ACCESS<br />
-            <span className="text-[#00FFFF]">_</span>HUB
-          </h1>
-
-          <div className="flex gap-4 items-center">
-            <div className="h-[2px] w-20 bg-[#EC008C]" /> {/* Magenta Accent */}
-            <span className="font-mono text-xs tracking-widest uppercase opacity-60 italic font-bold">Encrypted Session</span>
-          </div>
-        </div>
-
-        <div className="relative z-10 grid grid-cols-2 gap-4">
-          <div className="border border-white/20 p-4 font-mono">
-            <Mail size={18} className="text-[#00FFFF] mb-2" />
-            <p className="text-[9px] uppercase opacity-40">Auth_Method</p>
-            <p className="text-[11px] font-bold tracking-widest uppercase">Email_Identity</p>
-          </div>
-          <div className="border border-white/20 p-4 font-mono">
-            <Activity size={18} className="text-[#FFF200] mb-2" /> {/* Yellow Accent */}
-            <p className="text-[9px] uppercase opacity-40">Server_Load</p>
-            <p className="text-[11px] font-bold tracking-widest">MINIMAL_0.02</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Form Section */}
-      <div className="flex-1 flex items-center justify-center p-8 md:p-16 relative bg-[#FDFDFD]">
-        {/* Decorative corner brackets */}
-        <div className="absolute top-10 left-10 w-10 h-10 border-t-2 border-l-2 border-[#00FFFF]/20" />
-        <div className="absolute bottom-10 right-10 w-10 h-10 border-b-2 border-r-2 border-[#EC008C]/20" />
-
-        <div className="w-full max-w-md relative z-10">
-          <div className="inline-flex items-center gap-3 border-4 border-[#1A1A1A] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest shadow-[6px_6px_0px_0px_rgba(236,0,140,1)] mb-8">
-            <span className="flex gap-1">
-              <span className="w-2 h-2 bg-[#00FFFF]" />
-              <span className="w-2 h-2 bg-[#EC008C]" />
-              <span className="w-2 h-2 bg-[#FFF200]" />
-            </span>
-            Access_Gateway // Auth_Node
-          </div>
-          <div className="mb-12">
-            <div className="flex items-center gap-2 mb-2">
-              <ShieldCheck className="text-[#00FFFF]" size={16} />
-              <span className="font-mono text-[10px] font-bold uppercase tracking-[0.4em]">Validation_Required</span>
-            </div>
-            <h2 className="text-5xl md:text-6xl font-black tracking-tighter uppercase italic leading-none">Welcome_<span className="bg-[#1A1A1A] px-2 py-1 text-white not-italic">Back</span></h2>
-          </div>
-
-          {error && (
-            <div className="mb-8 p-4 bg-[#EC008C] text-white font-mono text-xs uppercase flex items-center gap-3 border-4 border-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
-              <span className="font-black">[FATAL_ERR]</span> {error}
-            </div>
-          )}
-
-          {resetSent ? (
-            <div className="p-8 border-4 border-[#1A1A1A] bg-white text-center shadow-[12px_12px_0px_0px_rgba(26,26,26,1)]">
-              <ShieldCheck className="w-16 h-16 text-[#00FFFF] mx-auto mb-6" />
-              <h2 className="text-3xl font-black uppercase tracking-tighter mb-4">ENTER_CODE</h2>
-              <p className="font-mono text-[10px] uppercase opacity-60 mb-6 leading-relaxed">
-                A 6-digit recovery code has been dispatched to <span className="font-bold text-black border-b-2 border-[#00FFFF]">{formData.email}</span>.
+          <div className="p-8 sm:p-10">
+            {/* Header */}
+            <div className="text-center mb-8">
+              <Link href="/" className="inline-flex items-center gap-2.5 group mb-4">
+                <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center text-white font-black text-base shadow-md">
+                  <span className="text-[#00FFFF]">P</span>
+                  <span className="text-[#EC008C]">-</span>
+                  <span className="text-[#FFF200]">P</span>
+                </div>
+                <span className="text-2xl font-extrabold text-slate-900 tracking-tight">
+                  Press <span className="text-[#EC008C]">&</span> Present
+                </span>
+              </Link>
+              
+              <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
+                {isResetMode ? "Reset your password" : "Welcome back"}
+              </h1>
+              <p className="mt-1 text-xs text-slate-500">
+                {isResetMode ? "Enter your email to receive a password reset code" : "Sign in to access your print orders and messages"}
               </p>
-              <form onSubmit={handleVerifyReset} className="space-y-6 text-left">
-                <div>
-                  <label className="block font-mono text-[10px] uppercase tracking-[0.2em] mb-1 font-bold">6-Digit Code</label>
-                  <input type="text" required maxLength={6} value={resetOtp} onChange={(e) => setResetOtp(e.target.value.replace(/\D/g, ''))}
-                    className="w-full bg-transparent border-b-4 border-[#1A1A1A]/10 py-3 text-center text-3xl font-black tracking-[0.5em] outline-none focus:border-[#00FFFF] transition-colors" 
-                    placeholder="000000" />
-                </div>
-                <div>
-                  <label className="block font-mono text-[10px] uppercase tracking-[0.2em] mb-1 font-bold">New Password</label>
-                  <input type="password" required value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
-                    className="w-full bg-transparent border-b-4 border-[#1A1A1A]/10 py-3 text-xl font-black outline-none focus:border-[#00FFFF] transition-all"
-                    placeholder="••••••••" />
-                </div>
-                <button type="submit" disabled={loading || resetOtp.length !== 6 || newPassword.length < 8}
-                  className="w-full bg-[#1A1A1A] text-white py-4 font-black text-xs uppercase tracking-widest hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-colors disabled:opacity-50">
-                  {loading ? <Loader2 className="w-5 h-5 mx-auto animate-spin" /> : "VERIFY AND RESET"}
-                </button>
-              </form>
-              <button onClick={() => { setResetSent(false); setResetOtp(""); setNewPassword(""); }}
-                className="mt-6 text-[9px] font-mono uppercase underline opacity-50 hover:opacity-100">
-                Cancel
-              </button>
             </div>
-          ) : (
-            <form onSubmit={isResetMode ? handleSendResetOtp : handleSubmit} className="space-y-8">
-              <div className="group">
-                <label className="block font-mono text-[10px] uppercase tracking-[0.2em] mb-1 text-gray-400 font-bold flex justify-between">
-                  <span>Email</span>
-                  {isResetMode && <span className="text-[#EC008C]">Required for reset</span>}
-                </label>
-                <input
-                  name="email"
-                  type="email"
-                  required
-                  value={formData.email}
-                  onChange={handleChange}
-                  className="w-full bg-transparent border-b-4 border-[#1A1A1A]/10 py-3 text-2xl font-black outline-none focus:border-[#00FFFF] transition-all placeholder:text-black/10"
-                  placeholder="johndoe@gmail.com"
-                />
-              </div>
 
-              {!isResetMode && (
-                <div className="group relative animate-in fade-in slide-in-from-top-4">
-                  <label className="block font-mono text-[10px] uppercase tracking-[0.2em] mb-1 text-gray-400 font-bold">Password</label>
+            {/* Error Banner */}
+            {error && (
+              <div className="mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-start gap-3">
+                <span className="font-bold shrink-0">Error:</span>
+                <span>{error}</span>
+              </div>
+            )}
+
+            {/* Reset Sent Form View */}
+            {resetSent ? (
+              <div className="space-y-6 text-center">
+                <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+                  <CheckCircle2 size={24} />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">Code Sent</h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    A 6-digit recovery code was sent to <strong className="text-slate-900">{formData.email}</strong>.
+                  </p>
+                </div>
+
+                <form onSubmit={handleVerifyReset} className="space-y-4 text-left">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">6-Digit Code</label>
+                    <input 
+                      type="text" 
+                      required 
+                      maxLength={6} 
+                      value={resetOtp} 
+                      onChange={(e) => setResetOtp(e.target.value.replace(/\D/g, ''))}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-center text-2xl font-bold tracking-[0.4em] outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all" 
+                      placeholder="000000" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">New Password</label>
+                    <input 
+                      type="password" 
+                      required 
+                      value={newPassword} 
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all"
+                      placeholder="••••••••" 
+                    />
+                  </div>
+                  <button 
+                    type="submit" 
+                    disabled={loading || resetOtp.length !== 6 || newPassword.length < 8}
+                    className="w-full bg-slate-900 text-white py-3 rounded-xl font-semibold text-xs hover:bg-slate-800 transition-all shadow-md disabled:opacity-50 flex items-center justify-center"
+                  >
+                    {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify & Reset Password"}
+                  </button>
+                </form>
+
+                <button 
+                  onClick={() => { setResetSent(false); setResetOtp(""); setNewPassword(""); }}
+                  className="text-xs text-slate-500 hover:text-slate-900 underline"
+                >
+                  Cancel and start over
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={isResetMode ? handleSendResetOtp : handleSubmit} className="space-y-5">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Email address</label>
                   <div className="relative">
                     <input
-                      name="password"
-                      type={showPassword ? "text" : "password"}
+                      name="email"
+                      type="email"
                       required
-                      value={formData.password}
+                      value={formData.email}
                       onChange={handleChange}
-                      className="w-full bg-transparent border-b-4 border-[#1A1A1A]/10 py-3 pr-10 text-2xl font-black outline-none focus:border-[#00FFFF] transition-all placeholder:text-black/10"
-                      placeholder="••••••••"
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all"
+                      placeholder="name@example.com"
                     />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#00FFFF] transition-colors"
-                    >
-                      {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                    </button>
-                  </div>
-                  <div className="flex justify-end mt-2">
-                    <button
-                      type="button"
-                      onClick={() => { setIsResetMode(true); setError(null); }}
-                      className="text-[9px] font-mono uppercase font-black tracking-tighter text-gray-400 hover:text-[#EC008C] transition-colors"
-                    >
-                      FORGOT PASSWORD?
-                    </button>
                   </div>
                 </div>
-              )}
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-[#1A1A1A] text-white py-6 px-8 font-black text-xl flex items-center justify-center gap-4 hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all disabled:opacity-50 active:scale-[0.98] shadow-[8px_8px_0px_0px_rgba(0,255,255,1)] active:shadow-none active:translate-x-1 active:translate-y-1"
-              >
-                {loading ? <Loader2 className="w-8 h-8 animate-spin" /> : (
-                  <> 
-                    {isResetMode ? "DISPATCH RECOVERY LINK" : "LOGIN"} 
-                    <ArrowRight className="w-6 h-6" /> 
-                  </>
+                {!isResetMode && (
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="block text-xs font-semibold text-slate-700">Password</label>
+                      <button
+                        type="button"
+                        onClick={() => { setIsResetMode(true); setError(null); }}
+                        className="text-xs font-medium text-[#EC008C] hover:underline"
+                      >
+                        Forgot password?
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <input
+                        name="password"
+                        type={showPassword ? "text" : "password"}
+                        required
+                        value={formData.password}
+                        onChange={handleChange}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all pr-10"
+                        placeholder="••••••••"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                      >
+                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </div>
                 )}
-              </button>
 
-              {isResetMode && (
-                <div className="text-center font-mono text-[10px] uppercase tracking-widest animate-in slide-in-from-bottom-2">
-                  <button type="button" onClick={() => { setIsResetMode(false); setError(null); }} className="text-gray-400 hover:text-black hover:border-b-2 hover:border-[#1A1A1A] transition-all border-b-2 border-transparent pb-1">
-                    ABORT RECOVERY
-                  </button>
-                </div>
-              )}
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-slate-900 text-white py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-[#EC008C] transition-all shadow-md disabled:opacity-50"
+                >
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
+                    <>
+                      {isResetMode ? "Send Recovery Code" : "Sign In"}
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
 
-              <div className="mt-16 flex justify-between items-center border-t-2 border-dashed border-gray-300 pt-8">
-                <p className="text-[10px] font-mono text-gray-400 uppercase tracking-widest font-bold">© 2026 | Press & Present</p>
-                <Link href="/signup" className="text-[10px] font-black uppercase tracking-[0.2em] bg-white border-2 border-[#1A1A1A] px-6 py-2 shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] hover:shadow-none hover:translate-x-1 hover:translate-y-1 transition-all">
-                  Register
-                </Link>
-              </div>
-            </form>
-          )}
+                {isResetMode && (
+                  <div className="text-center pt-2">
+                    <button 
+                      type="button" 
+                      onClick={() => { setIsResetMode(false); setError(null); }} 
+                      className="text-xs text-slate-500 hover:text-slate-900 font-medium"
+                    >
+                      Return to Sign In
+                    </button>
+                  </div>
+                )}
+              </form>
+            )}
+
+            {/* Footer Prompt */}
+            <div className="mt-8 pt-6 border-t border-slate-100 text-center text-xs text-slate-500">
+              Don't have an account yet?{" "}
+              <Link href="/signup" className="font-bold text-slate-900 hover:text-[#EC008C] transition-colors">
+                Create an account
+              </Link>
+            </div>
+          </div>
         </div>
-      </div>
+
       </div>
     </main>
   );

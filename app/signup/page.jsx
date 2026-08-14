@@ -5,35 +5,26 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
-  Loader2, ArrowRight, Mail, Scan, Cpu,
-  Eye, EyeOff, Upload, FileText, CheckCircle,
-  AlertCircle, Hash
+  Loader2, ArrowRight, Mail, Eye, EyeOff, CheckCircle2,
+  AlertCircle, ShieldCheck, UserCheck, Store
 } from "lucide-react";
+import { normalizePhilippinePhone } from "@/lib/phone";
 
 const Requirement = ({ label, met }) => (
-  <div className={`flex items-center gap-2 font-mono text-[9px] uppercase tracking-tighter transition-colors ${met ? "text-[#EC008C]" : "text-gray-400"}`}>
-    <div className={`w-2 h-2 border ${met ? "bg-[#EC008C] border-[#EC008C]" : "border-gray-400"}`} />
-    <span className={met ? "font-bold text-[#1A1A1A]" : ""}>{label}</span>
+  <div className={`flex items-center gap-1.5 text-xs transition-colors ${met ? "text-emerald-600 font-medium" : "text-slate-400"}`}>
+    <CheckCircle2 size={13} className={met ? "text-emerald-500" : "text-slate-300"} />
+    <span>{label}</span>
   </div>
 );
 
-const DOC_TYPES = [
-  { key: "DTI",           label: "DTI Certificate",   desc: "Dept. of Trade & Industry registration", color: "#00FFFF",  textColor: "#1A1A1A", type: "file" },
-  { key: "MAYORS_PERMIT", label: "Mayor's Permit",     desc: "Local government business permit",        color: "#EC008C",  textColor: "#ffffff", type: "file" },
-  { key: "BIR",           label: "BIR Certificate",    desc: "Bureau of Internal Revenue registration", color: "#FFF200",  textColor: "#1A1A1A", type: "file" },
-  { key: "VALID_ID",      label: "Valid ID (Owner)",   desc: "Government-issued ID of business owner",  color: "#1A1A1A",  textColor: "#ffffff", type: "file" },
-];
-
 export default function SignUpPage() {
   const router = useRouter();
-  const [step, setStep] = useState(1);
   const [role, setRole] = useState("CUSTOMER");
 
-  // Step 1
-  const [formData, setFormData] = useState({ firstName: "", lastName: "", email: "", password: "", confirmPassword: "", businessName: "" });
+  // Step 1 Form Data
+  const [formData, setFormData] = useState({ firstName: "", lastName: "", phone: "", email: "", password: "", confirmPassword: "", businessName: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
@@ -44,7 +35,7 @@ export default function SignUpPage() {
   const [otpLoading, setOtpLoading] = useState(false);
 
   // Live Email Validation State
-  const [emailStatus, setEmailStatus] = useState(null); // 'checking', 'taken', 'available', null
+  const [emailStatus, setEmailStatus] = useState(null); // 'taken', 'available', 'unknown', null
   const [emailCheckLoading, setEmailCheckLoading] = useState(false);
 
   useEffect(() => {
@@ -59,17 +50,19 @@ export default function SignUpPage() {
       try {
         const res = await fetch(`/api/auth/check-email?email=${encodeURIComponent(email)}`);
         const data = await res.json();
-        if (data.exists) {
+        if (!res.ok || data.checkUnavailable) {
+          setEmailStatus("unknown");
+        } else if (data.exists) {
           setEmailStatus("taken");
         } else {
           setEmailStatus("available");
         }
       } catch (err) {
-        setEmailStatus(null);
+        setEmailStatus("unknown");
       } finally {
         setEmailCheckLoading(false);
       }
-    }, 600); // 600ms debounce
+    }, 600);
 
     return () => clearTimeout(timeoutId);
   }, [formData.email]);
@@ -84,16 +77,23 @@ export default function SignUpPage() {
 
   const handleChange = (e) => setFormData((p) => ({ ...p, [e.target.name]: e.target.value }));
 
-  /* ── STEP 1 SUBMIT (SEND OTP) ── */
+  /* STEP 1 SUBMIT (SEND OTP) */
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (emailStatus === "taken") return; // Prevent submission if email is taken
+    if (emailStatus === "taken") return;
     
     setLoading(true);
     setError(null);
 
     if (!isPasswordValid || !passwordsMatch) {
-      setError("Security validation failed. Check password requirements.");
+      setError("Please ensure all password requirements are satisfied.");
+      setLoading(false);
+      return;
+    }
+
+    const normalizedPhone = normalizePhilippinePhone(formData.phone);
+    if (!normalizedPhone) {
+      setError("Enter a valid Philippine mobile number. Example: 09171234567 or +639171234567.");
       setLoading(false);
       return;
     }
@@ -110,24 +110,31 @@ export default function SignUpPage() {
       });
       
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to send code.");
+      if (!res.ok) throw new Error(data.error || "Failed to send verification code.");
 
       setShowOtp(true);
     } catch (err) {
-      setError(err.message || "Protocol Error.");
+      setError(err.message || "Failed to initiate verification.");
     } finally {
       setLoading(false);
     }
   };
 
-  /* ── VERIFY OTP & REGISTER ── */
+  /* VERIFY OTP & REGISTER */
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
     setOtpLoading(true);
     setOtpError(null);
 
     try {
-      const userData = { full_name: `${formData.firstName.trim()} ${formData.lastName.trim()}`.trim(), role };
+      const normalizedPhone = normalizePhilippinePhone(formData.phone);
+      if (!normalizedPhone) throw new Error("Enter a valid Philippine mobile number.");
+
+      const userData = {
+        full_name: `${formData.firstName.trim()} ${formData.lastName.trim()}`.trim(),
+        phone: normalizedPhone,
+        role
+      };
       if (role === "BUSINESS_OWNER") userData.business_name = formData.businessName;
 
       const res = await fetch("/api/auth/verify-otp", {
@@ -145,7 +152,6 @@ export default function SignUpPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Verification failed.");
 
-      // Automatically sign them in now that they exist
       const { data: authData, error: signInError } = await supabase.auth.signInWithPassword({
         email: formData.email.trim().toLowerCase(),
         password: formData.password,
@@ -153,7 +159,6 @@ export default function SignUpPage() {
 
       if (signInError) throw signInError;
 
-      // Redirect based on role
       if (role === "BUSINESS_OWNER") {
         router.push("/owner/documents");
       } else {
@@ -161,239 +166,308 @@ export default function SignUpPage() {
       }
 
     } catch (err) {
-      setOtpError(err.message || "Invalid code.");
+      setOtpError(err.message || "Invalid code. Please try again.");
     } finally {
       setOtpLoading(false);
     }
   };
 
-  /* ── OTP SCREEN ── */
+  /* OTP SCREEN */
   if (showOtp) {
     return (
-      <main className="min-h-screen bg-[#FDFDFD] text-[#1A1A1A] font-sans flex items-center justify-center p-8">
-        <div className="w-full max-w-lg p-10 border-8 border-[#1A1A1A] bg-white shadow-[20px_20px_0px_0px_rgba(0,255,255,1)]">
-          <div className="w-16 h-16 bg-[#1A1A1A] mb-8 flex items-center justify-center">
-            <Mail className="text-[#00FFFF] w-8 h-8" />
-          </div>
-          <div className="w-12 h-1 mb-6 flex gap-1">
-            <div className="flex-1 bg-[#00FFFF]" /><div className="flex-1 bg-[#EC008C]" /><div className="flex-1 bg-[#FFF200]" />
-          </div>
-          <h2 className="text-5xl font-black uppercase tracking-tighter mb-4 leading-none">
-            ENTER_CODE
-          </h2>
-          <p className="font-mono text-[11px] uppercase mb-10 leading-relaxed text-gray-500">
-            A 6-digit verification code has been dispatched to:{" "}
-            <span className="text-[#1A1A1A] font-bold border-b-2 border-[#EC008C]">{formData.email}</span>
-          </p>
-
-          <form onSubmit={handleVerifyOtp} className="space-y-6">
-            <div>
-              <input type="text" required maxLength={6} value={otpCode} onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                className="w-full bg-transparent border-b-4 border-[#1A1A1A] py-4 text-center text-4xl font-black tracking-[0.5em] outline-none focus:border-[#EC008C] transition-colors" 
-                placeholder="000000" />
-            </div>
-
-            {otpError && (
-              <div className="p-4 border-2 border-[#EC008C] font-mono text-[10px] text-[#EC008C] uppercase font-bold flex items-center gap-2">
-                <AlertCircle size={14} /> {otpError}
-              </div>
-            )}
-
-            <button type="submit" disabled={otpLoading || otpCode.length !== 6}
-              className="w-full bg-[#1A1A1A] text-white py-5 font-black text-lg flex items-center justify-center gap-4 hover:bg-[#00FFFF] hover:text-black transition-all disabled:opacity-50 shadow-[8px_8px_0px_0px_rgba(26,26,26,1)] active:translate-x-1 active:translate-y-1 active:shadow-none">
-              {otpLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : (
-                <>VERIFY CODE <ArrowRight className="w-6 h-6" /></>
-              )}
-            </button>
+      <main className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-md w-full mx-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden p-8 sm:p-10">
+            <div className="cmyk-bar -mt-8 -mx-8 sm:-mx-10 mb-8" />
             
-            <div className="text-center mt-6">
-              <button type="button" onClick={() => setShowOtp(false)} className="font-mono text-[10px] uppercase underline opacity-50 hover:opacity-100">
-                Wrong email? Go back
-              </button>
+            <div className="w-12 h-12 rounded-2xl bg-cyan-50 text-[#00E5FF] border border-cyan-200 flex items-center justify-center mx-auto mb-6">
+              <Mail size={24} />
             </div>
-          </form>
+
+            <div className="text-center mb-6">
+              <h2 className="text-xl font-bold text-slate-900">Verify your email</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                A 6-digit verification code was sent to:{" "}
+                <strong className="text-slate-900">{formData.email}</strong>
+              </p>
+            </div>
+
+            <form onSubmit={handleVerifyOtp} className="space-y-5">
+              <div>
+                <input 
+                  type="text" 
+                  required 
+                  maxLength={6} 
+                  value={otpCode} 
+                  onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                  className="w-full px-4 py-3.5 bg-slate-50 border border-slate-200 rounded-xl text-center text-3xl font-bold tracking-[0.4em] outline-none focus:ring-2 focus:ring-[#EC008C] focus:border-slate-400 transition-all" 
+                  placeholder="000000" 
+                />
+              </div>
+
+              {otpError && (
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2">
+                  <AlertCircle size={16} /> {otpError}
+                </div>
+              )}
+
+              <button 
+                type="submit" 
+                disabled={otpLoading || otpCode.length !== 6}
+                className="w-full bg-slate-900 text-white py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider hover:bg-[#EC008C] transition-all shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {otpLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
+                  <>Verify Code <ArrowRight size={16} /></>
+                )}
+              </button>
+              
+              <div className="text-center pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setShowOtp(false)} 
+                  className="text-xs text-slate-500 hover:text-slate-900 font-medium"
+                >
+                  Incorrect email? Go back
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="relative min-h-screen bg-[#FDFDFD] text-[#1A1A1A] font-sans overflow-hidden">
-      <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
-      <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
-      <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
-      <div className="flex min-h-screen w-full flex-col lg:flex-row border-x-4 border-[#1A1A1A]">
+    <main className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-xl w-full mx-auto space-y-8">
 
-      {/* ── VISUAL SIDEBAR ── */}
-      <div className="lg:w-5/12 bg-[#1A1A1A] p-12 flex flex-col justify-between text-[#F4F4F1] relative overflow-hidden border-b-8 lg:border-b-0 lg:border-r-8 border-[#1A1A1A]">
-        <div className="absolute inset-0 opacity-10 pointer-events-none"
-          style={{ backgroundImage: "radial-gradient(#EC008C 1px, transparent 1px)", backgroundSize: "30px 30px" }} />
+        {/* Form Container */}
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+          <div className="cmyk-bar" />
 
-        <div className="relative z-10">
-          <div className="flex items-start gap-4 mb-16">
-            <div className="relative">
-              <div className="w-16 h-16 border-4 border-[#EC008C] flex items-center justify-center">
-                <div className="w-8 h-8 bg-[#EC008C] rotate-45" />
-              </div>
-              <div className="absolute -bottom-2 -right-2 w-6 h-6 bg-[#00FFFF] mix-blend-screen opacity-50" />
-            </div>
-            <div className="font-mono text-[10px] tracking-[0.3em] leading-tight opacity-40">
-              SYSTEM_TYPE: CREATIVE_CONSOLE<br />ENCRYPTION: AES_256<br />STATUS: ACTIVE
-            </div>
-          </div>
-
-          <h1 className="text-8xl font-black leading-[0.85] tracking-tighter uppercase italic mb-8">
-            CREATE<br /><span className="text-[#EC008C]">_</span>USER
-          </h1>
-
-          <div className="flex gap-4 items-center mt-10">
-            <div className="h-[2px] w-20 bg-[#00FFFF]" />
-            <span className="font-mono text-xs tracking-widest uppercase opacity-60">Identity Management</span>
-          </div>
-        </div>
-
-        <div className="relative z-10 grid grid-cols-2 gap-4">
-          <div className="border border-white/20 p-4 font-mono">
-            <Scan size={18} className="text-[#EC008C] mb-2" />
-            <p className="text-[9px] uppercase opacity-40">Identity_Protocol</p>
-            <p className="text-[11px] font-bold">EMAIL_AUTH_ACTIVE</p>
-          </div>
-          <div className="border border-white/20 p-4 font-mono">
-            <Cpu size={18} className="text-[#00FFFF] mb-2" />
-            <p className="text-[9px] uppercase opacity-40">Processing_Core</p>
-            <p className="text-[11px] font-bold">STABLE_V2.4</p>
-          </div>
-        </div>
-      </div>
-
-      {/* ── FORM SECTION ── */}
-      <div className="flex-1 flex items-start justify-center p-8 md:p-16 relative bg-[#FDFDFD] overflow-y-auto min-h-screen">
-        <div className="absolute top-0 right-0 w-32 h-32 border-t-8 border-r-8 border-[#1A1A1A] opacity-5 pointer-events-none" />
-
-        <div className="w-full max-w-md relative z-10 my-8">
-          <div className="inline-flex items-center gap-3 border-4 border-[#1A1A1A] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest shadow-[6px_6px_0px_0px_rgba(0,255,255,1)] mb-8">
-            <span className="flex gap-1">
-              <span className="w-2 h-2 bg-[#00FFFF]" />
-              <span className="w-2 h-2 bg-[#EC008C]" />
-              <span className="w-2 h-2 bg-[#FFF200]" />
-            </span>
-            Registration // Identity_Setup
-          </div>
-
-          {/* ══ CREDENTIALS ══ */}
-          <div className="mb-12">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-3 h-3 bg-[#EC008C]" />
-                  <span className="font-mono text-[10px] font-bold uppercase tracking-[0.4em]">Initialize_Profile</span>
+          <div className="p-8 sm:p-10">
+            {/* Header */}
+            <div className="text-center mb-8">
+              <Link href="/" className="inline-flex items-center gap-2.5 group mb-4">
+                <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center text-white font-black text-base shadow-md">
+                  <span className="text-[#00FFFF]">P</span>
+                  <span className="text-[#EC008C]">-</span>
+                  <span className="text-[#FFF200]">P</span>
                 </div>
-                <h2 className="text-5xl md:text-6xl font-black tracking-tighter uppercase italic leading-none">Join_<span className="bg-[#1A1A1A] px-2 py-1 text-white not-italic">Us</span></h2>
-              </div>
+                <span className="text-2xl font-extrabold text-slate-900 tracking-tight">
+                  Press <span className="text-[#EC008C]">&</span> Present
+                </span>
+              </Link>
+              
+              <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
+                Create your account
+              </h1>
+              <p className="mt-1 text-xs text-slate-500">
+                Join Press & Present as a customer or register your local print shop
+              </p>
+            </div>
 
-              {/* Role Selector */}
-              <div className="flex gap-2 mb-10">
-                <button type="button" onClick={() => setRole("CUSTOMER")}
-                  className={`flex-1 py-4 border-2 border-[#1A1A1A] font-mono text-[10px] uppercase font-black transition-all ${role === "CUSTOMER" ? "bg-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(236,0,140,1)]" : "bg-white text-[#1A1A1A] hover:bg-gray-100"}`}>
-                  [ Customer ]
-                </button>
-                <button type="button" onClick={() => setRole("BUSINESS_OWNER")}
-                  className={`flex-1 py-4 border-2 border-[#1A1A1A] font-mono text-[10px] uppercase font-black transition-all ${role === "BUSINESS_OWNER" ? "bg-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]" : "bg-white text-[#1A1A1A] hover:bg-gray-100"}`}>
-                  [ Business Owner ]
-                </button>
-              </div>
+            {/* Account Role Selector */}
+            <div className="grid grid-cols-2 gap-3 mb-8 p-1.5 bg-slate-100 rounded-xl">
+              <button 
+                type="button" 
+                onClick={() => setRole("CUSTOMER")}
+                className={`py-3 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                  role === "CUSTOMER" 
+                    ? "bg-white text-slate-900 shadow-sm border border-slate-200" 
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <UserCheck size={16} className={role === "CUSTOMER" ? "text-[#EC008C]" : "text-slate-400"} />
+                Customer Account
+              </button>
 
-              <form onSubmit={handleSubmit} className="space-y-6">
-                {role === "BUSINESS_OWNER" && (
-                  <div className="p-6 border-2 border-[#1A1A1A] bg-[#FFF200] shadow-[6px_6px_0px_0px_rgba(26,26,26,1)]">
-                    <label className="block font-mono text-[9px] uppercase font-black mb-2 text-[#1A1A1A]">Business Name</label>
-                    <input name="businessName" type="text" required value={formData.businessName} onChange={handleChange}
-                      className="w-full bg-transparent border-b-2 border-[#1A1A1A] py-1 text-xl font-black outline-none placeholder:text-black/20"
-                      placeholder="Business Name" />
-                  </div>
-                )}
+              <button 
+                type="button" 
+                onClick={() => setRole("BUSINESS_OWNER")}
+                className={`py-3 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                  role === "BUSINESS_OWNER" 
+                    ? "bg-white text-slate-900 shadow-sm border border-slate-200" 
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <Store size={16} className={role === "BUSINESS_OWNER" ? "text-[#00E5FF]" : "text-slate-400"} />
+                Print Shop Owner
+              </button>
+            </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">First Name</label>
-                    <input name="firstName" type="text" required value={formData.firstName} onChange={handleChange}
-                      className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm font-bold outline-none focus:border-[#EC008C]" placeholder="First" />
-                  </div>
-                  <div>
-                    <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">Last Name</label>
-                    <input name="lastName" type="text" required value={formData.lastName} onChange={handleChange}
-                      className="w-full bg-transparent border-b-2 border-gray-200 py-2 text-sm font-bold outline-none focus:border-[#EC008C]" placeholder="Last" />
-                  </div>
+            <form onSubmit={handleSubmit} className="space-y-5">
+              {role === "BUSINESS_OWNER" && (
+                <div className="p-4 rounded-xl bg-amber-50/60 border border-amber-200">
+                  <label className="block text-xs font-bold text-slate-800 mb-1">
+                    Print Shop / Business Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input 
+                    name="businessName" 
+                    type="text" 
+                    required 
+                    value={formData.businessName} 
+                    onChange={handleChange}
+                    className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:ring-2 focus:ring-[#FFF200] focus:border-slate-400 transition-all"
+                    placeholder="e.g. Apex Print Studio" 
+                  />
+                  <p className="mt-1 text-[11px] text-slate-500">After email verification, upload DTI, Mayor's Permit, BIR, and valid ID documents. Admin approval is required before seller tools unlock.</p>
                 </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">First Name</label>
+                  <input 
+                    name="firstName" 
+                    type="text" 
+                    required 
+                    value={formData.firstName} 
+                    onChange={handleChange}
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all" 
+                    placeholder="John" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Last Name</label>
+                  <input 
+                    name="lastName" 
+                    type="text" 
+                    required 
+                    value={formData.lastName} 
+                    onChange={handleChange}
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all" 
+                    placeholder="Doe" 
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Mobile number</label>
+                <input
+                  name="phone"
+                  type="tel"
+                  required
+                  value={formData.phone}
+                  onChange={handleChange}
+                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all"
+                  placeholder="0917 123 4567"
+                />
+                <p className="mt-1 text-[11px] text-slate-500">Saved as +63 format for order SMS updates.</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Email address</label>
                 <div className="relative">
-                  <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">Email</label>
-                  <input name="email" type="email" required value={formData.email} onChange={handleChange}
-                    className={`w-full bg-transparent border-b-2 py-2 text-sm font-bold outline-none lowercase transition-colors ${
-                      emailStatus === "taken" ? "border-red-500 focus:border-red-500 text-red-600" 
-                      : emailStatus === "available" ? "border-green-500 focus:border-green-500" 
-                      : "border-gray-200 focus:border-[#EC008C]"
+                  <input 
+                    name="email" 
+                    type="email" 
+                    required 
+                    value={formData.email} 
+                    onChange={handleChange}
+                    className={`w-full px-4 py-2.5 bg-slate-50 border rounded-xl text-sm outline-none transition-all ${
+                      emailStatus === "taken" 
+                        ? "border-rose-400 focus:ring-2 focus:ring-rose-400" 
+                        : emailStatus === "available" 
+                        ? "border-emerald-400 focus:ring-2 focus:ring-emerald-400" 
+                        : "border-slate-200 focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400"
                     }`} 
-                    placeholder="your@email.com" />
-                  
-                  {/* Live validation feedback */}
-                  <div className="absolute -bottom-5 left-0 font-mono text-[9px] uppercase font-bold tracking-widest">
-                    {emailCheckLoading && <span className="text-gray-400 flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> Checking...</span>}
-                    {emailStatus === "taken" && !emailCheckLoading && <span className="text-red-500">⚠ EMAIL ALREADY IN USE</span>}
-                    {emailStatus === "available" && !emailCheckLoading && <span className="text-green-500">✓ EMAIL AVAILABLE</span>}
+                    placeholder="name@example.com" 
+                  />
+                </div>
+                
+                {/* Live validation feedback */}
+                <div className="mt-1 text-xs">
+                  {emailCheckLoading && <span className="text-slate-400 flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Checking availability...</span>}
+                  {emailStatus === "taken" && !emailCheckLoading && <span className="text-rose-600 font-medium">Email is already registered. Please sign in instead.</span>}
+                  {emailStatus === "available" && !emailCheckLoading && <span className="text-emerald-600 font-medium">Email is available</span>}
+                  {emailStatus === "unknown" && !emailCheckLoading && <span className="text-slate-500 font-medium">Could not check availability now. You can still continue; signup will verify the email before creating the account.</span>}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Password</label>
+                  <div className="relative">
+                    <input 
+                      name="password" 
+                      type={showPassword ? "text" : "password"} 
+                      required 
+                      value={formData.password} 
+                      onChange={handleChange}
+                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#EC008C] focus:border-slate-400 transition-all pr-9" 
+                      placeholder="Enter password" 
+                    />
+                    <button 
+                      type="button" 
+                      onClick={() => setShowPassword(!showPassword)} 
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    >
+                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
                   </div>
                 </div>
 
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">Password</label>
-                    <div className="relative">
-                      <input name="password" type={showPassword ? "text" : "password"} required value={formData.password} onChange={handleChange}
-                        className="w-full bg-transparent border-b-2 border-gray-200 py-2 pr-8 text-sm outline-none focus:border-[#EC008C]" placeholder="••••••••" />
-                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#EC008C]">
-                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block font-mono text-[9px] uppercase tracking-widest mb-1 text-gray-400">Confirm</label>
-                    <div className="relative">
-                      <input name="confirmPassword" type={showConfirmPassword ? "text" : "password"} required value={formData.confirmPassword} onChange={handleChange}
-                        className="w-full bg-transparent border-b-2 border-gray-200 py-2 pr-8 text-sm outline-none focus:border-[#00FFFF]" placeholder="••••••••" />
-                      <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#00FFFF]">
-                        {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
-                    </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Confirm Password</label>
+                  <div className="relative">
+                    <input 
+                      name="confirmPassword" 
+                      type={showConfirmPassword ? "text" : "password"} 
+                      required 
+                      value={formData.confirmPassword} 
+                      onChange={handleChange}
+                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all pr-9" 
+                      placeholder="Enter password" 
+                    />
+                    <button 
+                      type="button" 
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)} 
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    >
+                      {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
                   </div>
                 </div>
+              </div>
 
-                <div className="p-4 border border-[#1A1A1A]/10 bg-[#F9F9F7] grid grid-cols-2 gap-y-2">
-                  <Requirement label="08+ CHARS"  met={passwordRequirements.length} />
-                  <Requirement label="CAPS_LOCK"  met={passwordRequirements.capital} />
-                  <Requirement label="SYMBOL_!@#" met={passwordRequirements.symbol} />
-                  <Requirement label="SYNC_MATCH" met={passwordsMatch} />
+              {/* Password Requirements Checklist */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-2 gap-2">
+                <Requirement label="At least 8 characters" met={passwordRequirements.length} />
+                <Requirement label="Uppercase letter (A-Z)" met={passwordRequirements.capital} />
+                <Requirement label="Special symbol (!@#$)" met={passwordRequirements.symbol} />
+                <Requirement label="Passwords match" met={passwordsMatch} />
+              </div>
+
+              {error && (
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2">
+                  <AlertCircle size={16} /> {error}
                 </div>
+              )}
 
-                {error && (
-                  <div className="p-4 border-2 border-[#EC008C] font-mono text-[10px] text-[#EC008C] uppercase font-bold flex items-center gap-2">
-                    <AlertCircle size={14} /> {error}
-                  </div>
+              <button 
+                type="submit" 
+                disabled={loading || emailStatus === "taken"}
+                className="w-full bg-slate-900 text-white py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-[#EC008C] transition-all shadow-md disabled:opacity-50"
+              >
+                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
+                  <>
+                    Create Account
+                    <ArrowRight className="w-4 h-4" />
+                  </>
                 )}
+              </button>
 
-                <button type="submit" disabled={loading || emailStatus === "taken"}
-                  className="w-full bg-[#1A1A1A] text-white py-5 font-black text-lg flex items-center justify-center gap-4 hover:bg-[#EC008C] transition-all disabled:opacity-50 shadow-[8px_8px_0px_0px_rgba(236,0,140,1)] active:translate-x-1 active:translate-y-1 active:shadow-none">
-                  {loading ? <Loader2 className="w-6 h-6 animate-spin" /> : (
-                    <>REGISTER <ArrowRight className="w-6 h-6" /></>
-                  )}
-                </button>
-
-                <div className="mt-8 pt-8 border-t border-dashed border-[#1A1A1A]/20 flex justify-between items-center">
-                  <span className="font-mono text-[10px] opacity-30">© 2026 | Press & Present</span>
-                  <Link href="/login" className="text-[10px] font-black uppercase tracking-widest border-2 border-[#1A1A1A] px-4 py-2 hover:bg-[#EC008C] hover:text-white transition-colors">
-                    Return to Login
-                  </Link>
-                </div>
-              </form>
+              <div className="mt-6 pt-6 border-t border-slate-100 text-center text-xs text-slate-500">
+                Already have an account?{" "}
+                <Link href="/login" className="font-bold text-slate-900 hover:text-[#EC008C] transition-colors">
+                  Sign in
+                </Link>
+              </div>
+            </form>
+          </div>
         </div>
-      </div>
+
       </div>
     </main>
   );

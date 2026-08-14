@@ -1,8 +1,9 @@
-import { X, Printer } from "lucide-react";
-import { useEffect } from "react";
+import { X, Printer, FileText, CheckCircle2 } from "lucide-react";
+import { useEffect, useState } from "react";
 
-export default function ReceiptModal({ order, onClose, isOwner }) {
-  // Prevent body scroll when open
+export default function ReceiptModal({ order, onClose, isOwner, initialDocType = "RECEIPT" }) {
+  const [docType, setDocType] = useState(initialDocType); // 'RECEIPT', 'QUOTATION', 'DELIVERY', 'INVOICE'
+
   useEffect(() => {
     document.body.style.overflow = "hidden";
     return () => {
@@ -13,11 +14,17 @@ export default function ReceiptModal({ order, onClose, isOwner }) {
   if (!order) return null;
 
   const bInfo = order.businesses || {};
-  const dateStr = new Date(order.created_at).toLocaleString();
+  const dateStr = new Date(order.created_at).toLocaleDateString();
+  const subtotal = order.total_amount || 0;
+  const taxAmount = Number(order.tax_amount || 0);
+  const discountAmount = Number(order.discount_amount || 0);
+  const grandTotal = Math.max(0, subtotal + taxAmount - discountAmount);
+  const downpayment = order.downpayment_amount || (order.total_amount ? order.total_amount * 0.5 : 0);
+  const balance = grandTotal - downpayment;
+  const quoteValidUntil = new Date(Date.now() + 14 * 86400000).toLocaleDateString();
 
   return (
     <>
-      {/* Print Styles injected locally */}
       <style>{`
         @media print {
           body * {
@@ -42,140 +49,229 @@ export default function ReceiptModal({ order, onClose, isOwner }) {
         }
       `}</style>
 
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 no-print">
-        <div className="bg-white border-4 border-black w-full max-w-sm flex flex-col max-h-[90vh]">
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 no-print">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md flex flex-col max-h-[92vh] overflow-hidden">
+          
           {/* Header */}
-          <div className="flex justify-between items-center bg-black text-white px-4 py-3">
-            <h3 className="font-mono text-sm uppercase tracking-widest font-black">Receipt_Viewer</h3>
-            <button onClick={onClose} className="hover:text-[#EC008C]"><X size={18} /></button>
+          <div className="flex justify-between items-center bg-slate-900 text-white px-5 py-3.5">
+            <h3 className="font-bold text-xs uppercase tracking-wider flex items-center gap-2">
+              <FileText size={16} className="text-[#00FFFF]" /> Print Document Generator
+            </h3>
+            <button onClick={onClose} className="hover:text-[#EC008C] transition-colors"><X size={18} /></button>
+          </div>
+
+          {/* Document Type Switcher Tabs */}
+          <div className="flex border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-600 overflow-x-auto">
+            <button
+              type="button"
+              onClick={() => setDocType("RECEIPT")}
+              className={`flex-1 py-2.5 px-3 text-center border-b-2 transition-all ${
+                docType === "RECEIPT" ? "border-[#EC008C] text-[#EC008C] bg-white font-extrabold" : "border-transparent hover:text-slate-900"
+              }`}
+            >
+              Official Receipt
+            </button>
+            <button
+              type="button"
+              onClick={() => setDocType("QUOTATION")}
+              className={`flex-1 py-2.5 px-3 text-center border-b-2 transition-all ${
+                docType === "QUOTATION" ? "border-[#EC008C] text-[#EC008C] bg-white font-extrabold" : "border-transparent hover:text-slate-900"
+              }`}
+            >
+              Formal Quotation
+            </button>
+            <button
+              type="button"
+              onClick={() => setDocType("DELIVERY")}
+              className={`flex-1 py-2.5 px-3 text-center border-b-2 transition-all ${
+                docType === "DELIVERY" ? "border-[#EC008C] text-[#EC008C] bg-white font-extrabold" : "border-transparent hover:text-slate-900"
+              }`}
+            >
+              Delivery Receipt
+            </button>
+            <button
+              type="button"
+              onClick={() => setDocType("INVOICE")}
+              className={`flex-1 py-2.5 px-3 text-center border-b-2 transition-all ${
+                docType === "INVOICE" ? "border-[#EC008C] text-[#EC008C] bg-white font-extrabold" : "border-transparent hover:text-slate-900"
+              }`}
+            >
+              Sales Invoice
+            </button>
           </div>
 
           {/* Receipt Scroll Area */}
-          <div className="p-6 overflow-y-auto bg-gray-100 flex justify-center">
-            {/* THIS IS THE ACTUAL RECEIPT */}
-            <div className="printable-receipt bg-white w-[300px] font-mono text-[11px] p-6 shadow-xl border border-gray-300 text-black mx-auto">
-              {/* Receipt Header */}
-              <div className="text-center mb-4">
-                <h2 className="font-black text-base uppercase mb-1">{bInfo.name || "Business Name"}</h2>
-                <p className="opacity-70 leading-tight">{bInfo.address || "Address Unavailable"}</p>
-                {bInfo.phone && <p className="opacity-70 leading-tight mt-1">TEL: {bInfo.phone}</p>}
-                <p className="opacity-70 leading-tight mt-2 text-[9px]">VAT REG TIN: 000-000-000-000</p>
-              </div>
-
-              <div className="border-b-2 border-dashed border-gray-400 my-3" />
-
-              <div className="mb-3 space-y-1">
-                <div className="flex justify-between gap-4">
-                  <span>ORDER#</span>
-                  <span className="truncate">{order.id.split('-')[0].toUpperCase()}</span>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <span>DATE</span>
-                  <span className="truncate">{dateStr}</span>
-                </div>
-                <div className="flex justify-between gap-4 mt-2">
-                  <span>PAYMENT</span>
-                  <span className="truncate">{order.payment_method}</span>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <span>TYPE</span>
-                  <span className="truncate">{order.delivery_type}</span>
+          <div className="p-6 overflow-y-auto bg-slate-100 flex justify-center flex-1">
+            <div className="printable-receipt bg-white w-[340px] font-mono text-[11px] p-6 shadow-md border border-slate-200 text-slate-900 rounded-xl space-y-4">
+              
+              <div className="text-center pb-3 border-b border-dashed border-slate-300">
+                <h2 className="font-extrabold text-sm uppercase text-slate-900 mb-1">{bInfo.name || "Press & Present Shop"}</h2>
+                <p className="text-slate-500 leading-tight text-[10px]">{bInfo.address || "Address Unavailable"}</p>
+                {bInfo.phone && <p className="text-slate-500 leading-tight text-[10px] mt-0.5">Tel: {bInfo.phone}</p>}
+                
+                <div className="mt-3 inline-block px-3 py-1 bg-slate-900 text-white rounded-md text-[10px] font-bold uppercase tracking-wider">
+                  {docType === "RECEIPT" ? "OFFICIAL RECEIPT" :
+                   docType === "QUOTATION" ? "FORMAL PRINT QUOTATION" :
+                   docType === "DELIVERY" ? "DELIVERY RECEIPT" : "SALES INVOICE"}
                 </div>
               </div>
 
-              <div className="border-b-2 border-dashed border-gray-400 my-3" />
+              <div className="space-y-1 text-slate-700 text-[10px]">
+                <div className="flex justify-between">
+                  <span>DOC NO:</span>
+                  <span className="font-bold">#PNP-{docType.slice(0, 3)}-{order.id.split('-')[0].toUpperCase()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>DATE ISSUED:</span>
+                  <span>{dateStr}</span>
+                </div>
+                {docType === "QUOTATION" && (
+                  <div className="flex justify-between text-amber-700 font-semibold">
+                    <span>VALID UNTIL:</span>
+                    <span>{quoteValidUntil}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span>FULFILLMENT:</span>
+                  <span className="font-semibold">{order.delivery_type}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>PAYMENT METHOD:</span>
+                  <span className="font-semibold">{order.payment_method}</span>
+                </div>
+              </div>
 
-              {/* Delivery / Pick Up Info */}
-              <div className="mb-3">
-                {order.delivery_type === 'DELIVERY' ? (
-                  <>
-                    <p className="font-bold mb-1">DELIVER TO:</p>
-                    <p className="text-[10px] leading-tight opacity-90">{order.delivery_address || 'Address not provided'}</p>
-                    {order.delivery_coordinates?.lat && (
-                      <p className="text-[9px] mt-1 opacity-70 font-mono">
-                        GPS: {Number(order.delivery_coordinates.lat).toFixed(6)}, {Number(order.delivery_coordinates.lng).toFixed(6)}
-                      </p>
-                    )}
-                  </>
+              <div className="border-b border-dashed border-slate-300" />
+
+              <div>
+                <p className="font-bold mb-1 text-slate-900 text-[10px]">
+                  {order.delivery_type === 'DELIVERY' ? 'DELIVER TO:' : 'CUSTOMER / PICKUP:'}
+                </p>
+                <p className="text-[10px] leading-tight text-slate-600">
+                  {order.delivery_type === 'DELIVERY' ? (order.delivery_address || 'Address provided on profile') : 'Customer Store Pickup'}
+                </p>
+              </div>
+
+              <div className="border-b border-dashed border-slate-300" />
+
+              {/* Items List */}
+              <div className="space-y-2">
+                <div className="flex justify-between text-[10px] font-bold text-slate-800 border-b border-slate-200 pb-1">
+                  <span>ITEM / SPECS</span>
+                  <span>{docType === "QUOTATION" ? "QTY / TOTAL" : "AMOUNT"}</span>
+                </div>
+
+                {order.items && order.items.length > 0 ? (
+                  order.items.map((item, idx) => (
+                    <div key={idx} className="flex justify-between text-[10px] gap-2 pb-1 border-b border-slate-100 last:border-0">
+                      <div className="flex-1">
+                        <span className="font-semibold text-slate-900 block">{item.name || item.title}</span>
+                        {item.selected_specs && (
+                          <span className="text-[9px] text-slate-600 block leading-tight">
+                            {[
+                              item.selected_specs.size && `Size: ${item.selected_specs.size}`,
+                              item.selected_specs.material && `Mat: ${item.selected_specs.material}`,
+                              item.selected_specs.quality && `Qual: ${item.selected_specs.quality}`
+                            ].filter(Boolean).join(" | ")}
+                          </span>
+                        )}
+                        {item.selected_specs?.notes && (
+                          <span className="text-[9px] text-amber-800 italic block">"Notes: {item.selected_specs.notes}"</span>
+                        )}
+                        <span className="text-[9px] text-slate-500 block">
+                          {item.quantity || 1}x @ ₱{item.price?.toFixed(2)}
+                        </span>
+                      </div>
+                      <span className="font-bold text-slate-900 text-right shrink-0">
+                        ₱{((item.quantity || 1) * (item.price || 0)).toFixed(2)}
+                      </span>
+                    </div>
+                  ))
                 ) : (
-                  <>
-                    <p className="font-bold mb-1">PICK UP AT:</p>
-                    <p className="text-[10px] leading-tight opacity-90">{bInfo.address || 'Shop address not provided'}</p>
-                  </>
+                  <div className="flex justify-between text-[10px]">
+                    <span className="font-semibold text-slate-900">Custom Print Service Job</span>
+                    <span className="font-bold text-slate-900">₱{subtotal.toFixed(2)}</span>
+                  </div>
                 )}
               </div>
 
-              <div className="border-b-2 border-dashed border-gray-400 my-3" />
+              <div className="border-b border-dashed border-slate-300" />
 
-              {/* Items */}
-              <div className="mb-3">
-                <div className="flex justify-between font-bold mb-2">
-                  <span>QTY ITEM</span>
-                  <span>AMOUNT</span>
+              {/* Financial Totals */}
+              <div className="space-y-1.5 text-[11px] pt-1">
+                <div className="flex justify-between">
+                  <span>SUBTOTAL:</span>
+                  <span>₱{subtotal.toFixed(2)}</span>
                 </div>
-                {order.items?.map((it, idx) => (
-                  <div key={idx} className="flex justify-between items-start mb-1 leading-tight">
-                    <span className="w-6 mr-1">{it.quantity || 1}</span>
-                    <span className="flex-1 pr-2 truncate uppercase">{it.name}</span>
-                    <span className="text-right">{(Number(it.price) * (it.quantity || 1)).toFixed(2)}</span>
+                {docType === "QUOTATION" && (
+                  <>
+                    <div className="flex justify-between text-slate-600">
+                      <span>DISCOUNT:</span>
+                      <span>-PHP {discountAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>TAX / VAT:</span>
+                      <span>PHP {taxAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-900 font-extrabold">
+                      <span>QUOTED TOTAL:</span>
+                      <span>PHP {grandTotal.toFixed(2)}</span>
+                    </div>
+                  </>
+                )}
+                <div className="flex justify-between text-slate-600">
+                  <span>DOWNPAYMENT PAID:</span>
+                  <span className="font-bold text-emerald-700">₱{downpayment.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-slate-900 font-extrabold text-xs pt-1 border-t border-slate-200">
+                  <span>BALANCE DUE:</span>
+                  <span className="text-[#EC008C]">₱{Math.max(0, balance).toFixed(2)}</span>
+                </div>
+              </div>
+
+              <div className="border-b border-dashed border-slate-300" />
+
+              {docType === "QUOTATION" && (
+                <>
+                  <div className="text-[9px] text-slate-600 leading-tight space-y-1">
+                    <p className="font-bold text-slate-900 uppercase">Quotation Terms</p>
+                    <p>Pricing is valid until {quoteValidUntil} and may change after material, quantity, finishing, or artwork revisions.</p>
+                    <p>Production starts after final design proof approval, cost lock, and required payment confirmation.</p>
+                    <p>Uploaded files must match the agreed type, format, size, and print quality requirements.</p>
                   </div>
-                ))}
+                  <div className="grid grid-cols-2 gap-4 pt-3 text-center text-[9px] text-slate-500">
+                    <div className="border-t border-slate-300 pt-1">Prepared By</div>
+                    <div className="border-t border-slate-300 pt-1">Customer Approval</div>
+                  </div>
+                  <div className="border-b border-dashed border-slate-300" />
+                </>
+              )}
+
+              <div className="text-center text-[9px] text-slate-500 leading-tight space-y-1 pt-1">
+                <p>Thank you for choosing {bInfo.name || "Press & Present"}!</p>
+                <p>For custom quotes or order inquiries, visit Press & Present.</p>
               </div>
 
-              <div className="border-b-2 border-dashed border-gray-400 my-3" />
-
-              {/* Totals */}
-              <div className="space-y-1 mb-4">
-                <div className="flex justify-between">
-                  <span>SUBTOTAL</span>
-                  <span>{Number(order.total).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-[9px] opacity-70">
-                  <span>DISCOUNT</span>
-                  <span>0.00</span>
-                </div>
-                <div className="flex justify-between font-black text-sm mt-2 pt-2 border-t border-dotted border-gray-300">
-                  <span>TOTAL</span>
-                  <span>₱{Number(order.total).toFixed(2)}</span>
-                </div>
-              </div>
-
-              <div className="border-b-2 border-dashed border-gray-400 my-3" />
-
-              <div className="space-y-1 mb-6">
-                <div className="flex justify-between">
-                  <span>DP PAID</span>
-                  <span>{Number(order.downpayment_amount || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>BALANCE</span>
-                  <span>{Number(order.balance_amount || 0).toFixed(2)}</span>
-                </div>
-              </div>
-
-              {/* Footer */}
-              <div className="text-center font-bold">
-                <p className="mb-1 text-sm">THANK YOU!</p>
-                <p className="text-[9px] opacity-60">THIS DOCUMENT IS NOT VALID FOR CLAIM OF INPUT TAX</p>
-                <p className="text-[8px] opacity-40 mt-4">System generated by PrintExpress</p>
-              </div>
             </div>
           </div>
 
           {/* Action Buttons */}
-          <div className="p-4 border-t-4 border-black flex gap-3 bg-white">
-            <button onClick={onClose} className="flex-1 border-2 border-black py-2 font-black uppercase text-xs hover:bg-gray-100">
+          <div className="p-4 bg-white border-t border-slate-200 flex justify-between gap-3 no-print">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50"
+            >
               Close
             </button>
-            {isOwner && (
-              <button 
-                onClick={() => window.print()}
-                className="flex-1 bg-[#EC008C] text-white border-2 border-black py-2 font-black uppercase text-xs flex items-center justify-center gap-2 hover:bg-black transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:shadow-none"
-              >
-                <Printer size={16} /> Print
-              </button>
-            )}
+
+            <button
+              onClick={() => window.print()}
+              className="px-5 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-[#EC008C] transition-colors flex items-center gap-2"
+            >
+              <Printer size={15} /> Print {docType.toLowerCase()}
+            </button>
           </div>
+
         </div>
       </div>
     </>

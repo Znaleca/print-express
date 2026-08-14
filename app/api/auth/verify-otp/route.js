@@ -46,6 +46,55 @@ export async function POST(request) {
         return NextResponse.json({ error: createUserError.message }, { status: 400 });
       }
 
+      const createdUser = user?.user;
+      if (!createdUser?.id) {
+        return NextResponse.json({ error: "User was created, but the account id was not returned." }, { status: 500 });
+      }
+
+      const role = userData?.role || "CUSTOMER";
+      const fullName = userData?.full_name || "";
+      const phone = userData?.phone || "";
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .upsert({
+          id: createdUser.id,
+          email,
+          full_name: fullName,
+          phone,
+          role,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "id" });
+
+      if (profileError) {
+        console.error("Create profile error:", profileError);
+        return NextResponse.json({ error: profileError.message }, { status: 400 });
+      }
+
+      if (role === "BUSINESS_OWNER") {
+        const businessName = (userData?.business_name || `${fullName}'s Business`).trim();
+        const { data: existingBusiness } = await supabase
+          .from("businesses")
+          .select("id")
+          .eq("owner_id", createdUser.id)
+          .limit(1)
+          .maybeSingle();
+
+        if (!existingBusiness) {
+          const { error: businessError } = await supabase
+            .from("businesses")
+            .insert({
+              owner_id: createdUser.id,
+              name: businessName || "Pending Business",
+              status: "PENDING",
+            });
+
+          if (businessError) {
+            console.error("Create business error:", businessError);
+            return NextResponse.json({ error: businessError.message }, { status: 400 });
+          }
+        }
+      }
+
       return NextResponse.json({ success: true, message: "User registered securely." });
 
     } else if (type === "reset") {

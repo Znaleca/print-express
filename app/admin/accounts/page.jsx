@@ -6,47 +6,59 @@ import {
   Fingerprint, Mail, Shield, Loader2, X,
   CheckCircle, XCircle, Clock, ChevronDown, ChevronUp,
   FileText, Hash, Eye, MessageSquare, RefreshCcw,
-  ShieldCheck, AlertCircle, Users, Building2
+  ShieldCheck, AlertCircle, Users, Building2, CheckCircle2, Tag
 } from "lucide-react";
 
 const REQUIRED_DOC_TYPES = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID"];
 
 const DOC_META = {
-  DTI:           { label: "DTI Certificate",  color: "#00FFFF", textColor: "#1A1A1A" },
-  MAYORS_PERMIT: { label: "Mayor's Permit",    color: "#EC008C", textColor: "#ffffff" },
-  BIR:           { label: "BIR Certificate",   color: "#FFF200", textColor: "#1A1A1A" },
-  VALID_ID:      { label: "Valid ID",          color: "#1A1A1A", textColor: "#ffffff" },
+  DTI:           { label: "DTI Certificate" },
+  MAYORS_PERMIT: { label: "Mayor's Permit" },
+  BIR:           { label: "BIR Certificate" },
+  VALID_ID:      { label: "Valid ID" },
 };
 
 export default function AdminAccounts() {
-  const [activeTab, setActiveTab]         = useState("verifications");
-  // Verifications tab
-  const [businesses, setBusinesses]       = useState([]);
-  const [loadingBiz, setLoadingBiz]       = useState(true);
-  const [expandedId, setExpandedId]       = useState(null);
-  const [adminComments, setAdminComments] = useState({}); // { docId: commentText }
-  const [actionLoading, setActionLoading] = useState({}); // { docId: true/false }
-  const [toast, setToast]                 = useState(null);
-  const [rejectPrompt, setRejectPrompt]   = useState({ open: false, message: "" });
+  const [activeTab, setActiveTab] = useState("verifications");
+  const [businesses, setBusinesses] = useState([]);
+  const [loadingBiz, setLoadingBiz] = useState(true);
+  const [expandedId, setExpandedId] = useState(null);
+  const [adminComments, setAdminComments] = useState({});
+  const [actionLoading, setActionLoading] = useState({});
+  const [toast, setToast] = useState(null);
   const [previewDocUrl, setPreviewDocUrl] = useState(null);
-  // Accounts tab
-  const [users, setUsers]                 = useState([]);
-  const [loadingUsers, setLoadingUsers]   = useState(false);
+  const [users, setUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [categoryRequests, setCategoryRequests] = useState([]);
 
-  /* ── TOAST ── */
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
   };
 
-  /* ── FETCH BUSINESSES + DOCS ── */
+  const formatFileSize = (bytes) => bytes ? `${(bytes / (1024 * 1024)).toFixed(2)} MB` : "Size not stored";
+  const getFileName = (doc) => {
+    if (doc?.file_name) return doc.file_name;
+    if (!doc?.file_url) return "Uploaded document";
+    try {
+      return decodeURIComponent(doc.file_url.split("/").pop() || "Uploaded document");
+    } catch {
+      return "Uploaded document";
+    }
+  };
+  const getFileFormat = (doc) => {
+    if (doc?.file_format) return doc.file_format;
+    const source = doc?.file_name || doc?.file_url || "";
+    return source.includes(".") ? source.split(".").pop().toUpperCase() : "Unknown";
+  };
+
   const fetchVerifications = useCallback(async () => {
     setLoadingBiz(true);
     try {
       const { data: bizList } = await supabase
         .from("businesses")
         .select(`id, name, status, created_at, owner_id,
-          business_documents (id, doc_type, file_url, tin_number, status, admin_comment, owner_comment, updated_at)`)
+          business_documents (*)`)
         .order("created_at", { ascending: false });
 
       if (!bizList) return;
@@ -59,12 +71,17 @@ export default function AdminAccounts() {
 
       const profileMap = Object.fromEntries((profiles || []).map((p) => [p.id, p]));
       setBusinesses(bizList.map((b) => ({ ...b, owner: profileMap[b.owner_id] || null })));
+
+      const { data: requests } = await supabase
+        .from("category_approval_requests")
+        .select("id, business_id, category_name, reason, status, created_at, businesses(id, name, owner_id)")
+        .order("created_at", { ascending: false });
+      setCategoryRequests(requests || []);
     } finally {
       setLoadingBiz(false);
     }
   }, []);
 
-  /* ── FETCH USERS (Accounts tab) ── */
   const fetchUsers = useCallback(async () => {
     setLoadingUsers(true);
     try {
@@ -88,8 +105,7 @@ export default function AdminAccounts() {
     if (users.length === 0) fetchUsers();
   }, [activeTab, users.length, fetchUsers]);
 
-  /* ── AUTO-APPROVE BUSINESS when all docs approved ── */
-  const autoApproveBusiness = async (businessId, updatedDocs, business) => {
+  const autoApproveBusiness = async (businessId, updatedDocs) => {
     const allApproved = REQUIRED_DOC_TYPES.every((type) => {
       const d = updatedDocs.find((d) => d.doc_type === type);
       return d?.status === "APPROVED";
@@ -99,505 +115,324 @@ export default function AdminAccounts() {
       setBusinesses((prev) =>
         prev.map((b) => b.id === businessId ? { ...b, status: "APPROVED" } : b)
       );
-      showToast("All docs approved — business is now VERIFIED! 🎉");
-
-      // Send approval email to owner
-      let ownerEmail = business?.owner?.email;
-      if (!ownerEmail) {
-        // Fallback: look up the true auth email from the admin users array
-        const adminUser = users.find(u => u.id === business?.owner_id);
-        if (adminUser) ownerEmail = adminUser.email;
-      }
-
-      const ownerName  = business?.owner?.full_name;
-      const bizName    = business?.name;
-      if (ownerEmail) {
-        try {
-          const res = await fetch("/api/admin/notify-approved", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ownerEmail, ownerName, businessName: bizName }),
-          });
-          const result = await res.json();
-          if (!res.ok) {
-            console.error("Email API Error:", result);
-            showToast(`Email error: ${result.error}`, "error");
-          } else {
-            showToast("Approval email sent successfully! 📧");
-          }
-        } catch (emailErr) {
-          console.error("Failed to send approval email:", emailErr);
-          showToast("Failed to send approval email.", "error");
-        }
-      } else {
-        showToast("Warning: Could not find owner email to send notification.", "error");
-      }
+      showToast("All documents verified! Business is now Approved.");
     }
   };
 
-  /* ── APPROVE DOC ── */
-  const approveDoc = async (doc, businessId, allDocs, business) => {
-    setActionLoading((p) => ({ ...p, [doc.id]: true }));
+  const handleDocAction = async (docId, newStatus, businessId) => {
+    setActionLoading((prev) => ({ ...prev, [docId]: true }));
     try {
-      await supabase.from("business_documents")
-        .update({ status: "APPROVED", admin_comment: null })
-        .eq("id", doc.id);
+      const comment = adminComments[docId] || "";
+      const { error } = await supabase
+        .from("business_documents")
+        .update({
+          status: newStatus,
+          admin_comment: comment,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", docId);
 
-      const updatedDocs = allDocs.map((d) => d.id === doc.id ? { ...d, status: "APPROVED", admin_comment: null } : d);
-      setBusinesses((prev) =>
-        prev.map((b) => b.id === businessId
-          ? { ...b, business_documents: updatedDocs }
-          : b)
-      );
-      showToast(`${DOC_META[doc.doc_type]?.label} approved ✓`);
-      await autoApproveBusiness(businessId, updatedDocs, business);
-    } finally {
-      setActionLoading((p) => ({ ...p, [doc.id]: false }));
-    }
-  };
-
-  /* ── REJECT DOC ── */
-  const rejectDoc = async (doc, businessId, allDocs) => {
-    const comment = adminComments[doc.id] || "";
-    if (!comment.trim()) {
-      setRejectPrompt({
-        open: true,
-        message: `Please add a comment explaining the rejection for ${DOC_META[doc.doc_type]?.label || "this document"}.`,
-      });
-      return;
-    }
-
-    setActionLoading((p) => ({ ...p, [doc.id]: true }));
-    try {
-      await supabase.from("business_documents")
-        .update({ status: "REJECTED", admin_comment: comment.trim() })
-        .eq("id", doc.id);
-
-      // Reset business status back to PENDING if it was APPROVED
-      await supabase.from("businesses").update({ status: "PENDING" }).eq("id", businessId);
-
-      const updatedDocs = allDocs.map((d) => d.id === doc.id ? { ...d, status: "REJECTED", admin_comment: comment.trim() } : d);
-      setBusinesses((prev) =>
-        prev.map((b) => b.id === businessId
-          ? { ...b, status: "PENDING", business_documents: updatedDocs }
-          : b)
-      );
-      showToast(`${DOC_META[doc.doc_type]?.label} rejected — owner notified.`, "error");
-    } finally {
-      setActionLoading((p) => ({ ...p, [doc.id]: false }));
-    }
-  };
-
-  /* ── REVOKE APPROVED DOC -> PENDING ── */
-  const revokeDocToPending = async (doc, businessId, allDocs) => {
-    setActionLoading((p) => ({ ...p, [doc.id]: true }));
-    try {
-      await supabase.from("business_documents")
-        .update({ status: "PENDING", admin_comment: null })
-        .eq("id", doc.id);
-
-      await supabase.from("businesses").update({ status: "PENDING" }).eq("id", businessId);
-
-      const updatedDocs = allDocs.map((d) =>
-        d.id === doc.id ? { ...d, status: "PENDING", admin_comment: null } : d
-      );
+      if (error) throw error;
 
       setBusinesses((prev) =>
-        prev.map((b) =>
-          b.id === businessId
-            ? { ...b, status: "PENDING", business_documents: updatedDocs }
-            : b
-        )
+        prev.map((b) => {
+          if (b.id !== businessId) return b;
+          const updatedDocs = (b.business_documents || []).map((d) =>
+            d.id === docId ? { ...d, status: newStatus, admin_comment: comment } : d
+          );
+          autoApproveBusiness(businessId, updatedDocs);
+          return { ...b, business_documents: updatedDocs };
+        })
       );
-
-      showToast(`${DOC_META[doc.doc_type]?.label} moved back to pending review.`);
+      showToast(`Document ${newStatus.toLowerCase()}.`);
+    } catch (err) {
+      showToast(err.message || "Failed to update document status.", "error");
     } finally {
-      setActionLoading((p) => ({ ...p, [doc.id]: false }));
+      setActionLoading((prev) => ({ ...prev, [docId]: false }));
     }
   };
 
-  /* ── STATUS BADGE ── */
-  const StatusBadge = ({ status }) => {
-    const config = {
-      APPROVED: { icon: CheckCircle, bg: "bg-[#00FFFF]", text: "text-[#1A1A1A]" },
-      REJECTED: { icon: XCircle,     bg: "bg-[#EC008C]", text: "text-white"     },
-      PENDING:  { icon: Clock,       bg: "bg-[#FFF200]", text: "text-[#1A1A1A]" },
-    }[status] || { icon: AlertCircle, bg: "bg-gray-200", text: "text-gray-600" };
-    const Icon = config.icon;
+  const handleCategoryAction = async (requestId, newStatus) => {
+    setActionLoading((prev) => ({ ...prev, [requestId]: true }));
+    try {
+      const { error } = await supabase
+        .from("category_approval_requests")
+        .update({ status: newStatus })
+        .eq("id", requestId);
+      if (error) throw error;
+      setCategoryRequests((prev) => prev.map((request) => (
+        request.id === requestId ? { ...request, status: newStatus } : request
+      )));
+      showToast(`Category request ${newStatus.toLowerCase()}.`);
+    } catch (err) {
+      showToast(err.message || "Failed to update category request.", "error");
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [requestId]: false }));
+    }
+  };
+
+  if (loadingBiz) {
     return (
-      <span className={`inline-flex items-center gap-1 px-3 py-1 font-mono text-[9px] font-black uppercase tracking-widest border-2 border-black ${config.bg} ${config.text}`}>
-        <Icon size={10} />{status}
-      </span>
+      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={36} className="animate-spin text-[#EC008C]" />
+          <p className="text-xs font-semibold uppercase tracking-wider">Loading verification portal...</p>
+        </div>
+      </main>
     );
-  };
-
-  /* ── SCORE SUMMARY for a business ── */
-  const getDocScore = (docs) => {
-    const approved = docs.filter((d) => d.status === "APPROVED").length;
-    const rejected = docs.filter((d) => d.status === "REJECTED").length;
-    const pending  = docs.filter((d) => d.status === "PENDING").length;
-    return { approved, rejected, pending, total: REQUIRED_DOC_TYPES.length };
-  };
+  }
 
   return (
-    <main className="bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden font-sans">
+    <>
       {previewDocUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6">
-          <div className="relative w-full max-w-4xl h-[85vh] border-4 border-black bg-white p-3 shadow-[10px_10px_0px_0px_rgba(0,255,255,1)] flex flex-col">
-            <div className="flex justify-between items-center mb-3 px-1">
-              <h3 className="font-black uppercase tracking-tighter text-xl">Document Preview</h3>
-              <button 
-                onClick={() => setPreviewDocUrl(null)}
-                className="bg-[#EC008C] text-white p-1 border-2 border-black hover:bg-black transition-all"
-              >
-                <X size={24} />
-              </button>
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm" onClick={() => setPreviewDocUrl(null)}>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-2xl w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-sm text-slate-900">Document Reviewer</h3>
+              <button onClick={() => setPreviewDocUrl(null)} className="p-1 text-slate-400 hover:text-slate-800"><X size={18} /></button>
             </div>
-            <div className="flex-1 border-4 border-black overflow-hidden bg-gray-100">
-              <iframe src={previewDocUrl} className="w-full h-full border-none" />
-            </div>
+            {previewDocUrl.match(/\.(jpeg|jpg|png|webp|gif|svg)$/i) ? (
+              <img src={previewDocUrl} alt="Doc preview" className="w-full h-auto rounded-xl max-h-[70vh] object-contain border border-slate-200" />
+            ) : (
+              <iframe src={previewDocUrl} title="Doc" className="w-full h-[70vh] rounded-xl border border-slate-200" />
+            )}
           </div>
         </div>
       )}
 
-      {rejectPrompt.open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
-          <div className="w-full max-w-md border-4 border-black bg-white p-6 shadow-[10px_10px_0px_0px_rgba(236,0,140,1)]">
-            <div className="mb-4 flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center bg-[#EC008C] text-white border-2 border-black">
-                <AlertCircle size={18} />
-              </div>
-              <h3 className="text-lg font-black uppercase tracking-tighter">Comment Required</h3>
-            </div>
-
-            <p className="font-mono text-[10px] uppercase leading-relaxed text-gray-600">
-              {rejectPrompt.message}
-            </p>
-
-            <div className="mt-6 flex justify-end gap-2">
-              <button
-                onClick={() => setRejectPrompt({ open: false, message: "" })}
-                className="border-2 border-black bg-[#1A1A1A] px-4 py-2 font-black text-[10px] uppercase tracking-widest text-white hover:bg-[#EC008C] transition-colors"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <section className="relative border-b-8 border-[#1A1A1A] px-6 py-12 md:px-10 md:py-14">
-        <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
-        <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
-        <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
-
-        <div className="relative mx-auto w-full max-w-[1920px]">
-          <div className="inline-flex items-center gap-3 border-4 border-[#1A1A1A] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
-            <span className="flex gap-1">
-              <span className="h-2 w-2 bg-[#00FFFF]" />
-              <span className="h-2 w-2 bg-[#EC008C]" />
-              <span className="h-2 w-2 bg-[#FFF200]" />
-            </span>
-            Account_Intel // Verification_Grid
-          </div>
-
-          <div className="mt-8 grid gap-8 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
+      <main className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+        
+        {/* Header */}
+        <section className="bg-white border-b border-slate-200 py-8 px-4 sm:px-6 lg:px-8 relative shadow-sm">
+          <div className="cmyk-bar absolute top-0 left-0 right-0" />
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <h1 className="text-5xl font-black uppercase italic tracking-tighter leading-[0.95] md:text-7xl">
-                Admin_<span className="bg-[#1A1A1A] px-4 py-1 text-white not-italic">Accounts</span>
-              </h1>
-              <p className="mt-4 max-w-3xl font-mono text-[11px] uppercase tracking-[0.2em] leading-relaxed text-gray-600 md:text-sm">
-                Review business verification files, approve valid submissions, and audit user identities from one control surface.
-              </p>
+              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Verifications & Accounts</h1>
+              <p className="mt-1 text-xs text-slate-500">Review business document uploads, grant verification badges, and browse platform user accounts.</p>
             </div>
 
-            <div className="border-4 border-[#1A1A1A] bg-white p-5 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="font-mono text-[9px] uppercase tracking-[0.35em] text-gray-500">Active Tab</p>
-                  <p className="mt-1 text-lg font-black uppercase tracking-tighter">
-                    {activeTab === "verifications" ? "Document Verifications" : "All Accounts"}
-                  </p>
-                </div>
-                <div className="flex h-12 w-12 items-center justify-center bg-[#1A1A1A] text-white">
-                  {activeTab === "verifications" ? <ShieldCheck className="h-6 w-6 text-[#00FFFF]" /> : <Users className="h-6 w-6 text-[#FFF200]" />}
-                </div>
-              </div>
-              <div className="mt-4 flex gap-1">
-                <div className="h-1 flex-1 bg-[#00FFFF]" />
-                <div className="h-1 flex-1 bg-[#EC008C]" />
-                <div className="h-1 flex-1 bg-[#FFF200]" />
-              </div>
+            <div className="flex gap-2 border-b border-slate-200">
+              <button
+                onClick={() => setActiveTab("verifications")}
+                className={`pb-3 text-xs font-bold transition-all relative ${
+                  activeTab === "verifications" ? "text-slate-900 border-b-2 border-[#EC008C]" : "text-slate-500 hover:text-slate-900"
+                }`}
+              >
+                Verification Requests ({businesses.length})
+              </button>
+              <button
+                onClick={() => setActiveTab("categories")}
+                className={`pb-3 text-xs font-bold transition-all relative ${
+                  activeTab === "categories" ? "text-slate-900 border-b-2 border-[#EC008C]" : "text-slate-500 hover:text-slate-900"
+                }`}
+              >
+                Category Approvals ({categoryRequests.filter((request) => request.status === "PENDING").length})
+              </button>
+              <button
+                onClick={() => setActiveTab("accounts")}
+                className={`pb-3 text-xs font-bold transition-all relative ${
+                  activeTab === "accounts" ? "text-slate-900 border-b-2 border-[#EC008C]" : "text-slate-500 hover:text-slate-900"
+                }`}
+              >
+                User Accounts Directory ({users.length})
+              </button>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <div className="border-b-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
-        <div className="mx-auto flex w-full max-w-[1920px] items-center gap-6 px-6 font-mono text-[10px] font-black uppercase tracking-[0.35em] md:px-10">
-          <span className="text-[#00FFFF]">Cyan</span>
-          <span className="text-[#EC008C]">Magenta</span>
-          <span className="text-[#FFF200]">Yellow</span>
-          <span className="text-white">Black</span>
-        </div>
-      </div>
-
-      <section className="mx-auto w-full max-w-[1920px] px-6 py-10 md:px-10 md:py-14">
-
-      {/* ── HEADER ── */}
-      <header className="mb-8 border-b-4 border-black pb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
-        <div>
-          <h1 className="text-4xl font-black uppercase italic tracking-tighter leading-none mb-2">Account_Directory</h1>
-          <p className="font-mono text-[10px] uppercase tracking-widest opacity-50">Global Identity Registry // Access_Level: 00</p>
-        </div>
         {toast && (
-          <div className={`px-4 py-2 font-mono text-[10px] font-black uppercase border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex items-center gap-2 ${
-            toast.type === "error" ? "bg-[#EC008C] text-white" : "bg-[#FFF200] text-black"
-          }`}>
-            {toast.type === "error" ? <AlertCircle size={12} /> : <CheckCircle size={12} />}
+          <div className="fixed bottom-6 right-6 z-[200] px-4 py-3 bg-slate-900 text-white rounded-xl text-xs font-bold shadow-lg">
             {toast.msg}
           </div>
         )}
-      </header>
 
-      {/* ── TABS ── */}
-      <div className="flex gap-0 mb-8 border-4 border-black w-fit shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-        {[
-          { id: "verifications", label: "Document Verifications", icon: ShieldCheck },
-          { id: "accounts",      label: "All Accounts",           icon: Users },
-        ].map(({ id, label, icon: Icon }) => (
-          <button key={id} onClick={() => setActiveTab(id)}
-            className={`px-6 py-3 font-mono text-[10px] font-black uppercase tracking-widest flex items-center gap-2 transition-all border-r-2 border-black last:border-r-0 ${
-              activeTab === id ? "bg-[#1A1A1A] text-white" : "bg-white text-black hover:bg-[#F4F4F1]"
-            }`}>
-            <Icon size={14} />{label}
-          </button>
-        ))}
-      </div>
+        {/* Content Tabs */}
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
+          
+          {activeTab === "verifications" ? (
+            <div className="space-y-4">
+              {businesses.map((b) => {
+                const docs = b.business_documents || [];
+                const approvedDocs = docs.filter(d => d.status === "APPROVED").length;
+                const isExpanded = expandedId === b.id;
 
-      {/* ══ TAB: VERIFICATIONS ══ */}
-      {activeTab === "verifications" && (
-        <div className="space-y-4">
-          {loadingBiz ? (
-            <div className="p-16 text-center font-mono uppercase">
-              <Loader2 size={32} className="animate-spin mx-auto mb-4" />
-              Loading business verifications...
-            </div>
-          ) : businesses.length === 0 ? (
-            <div className="p-16 text-center border-4 border-dashed border-black/20 font-mono uppercase opacity-30">
-              <Building2 size={48} className="mx-auto mb-4 opacity-30" />
-              No businesses registered yet.
-            </div>
-          ) : businesses.map((biz) => {
-            const { approved, rejected, pending, total } = getDocScore(biz.business_documents || []);
-            const isExpanded = expandedId === biz.id;
-            const docMap = Object.fromEntries((biz.business_documents || []).map((d) => [d.doc_type, d]));
+                return (
+                  <div key={b.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+                    <div className="flex items-center justify-between gap-4 cursor-pointer" onClick={() => setExpandedId(isExpanded ? null : b.id)}>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-base text-slate-900">{b.name}</h3>
+                          <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                            b.status === "APPROVED" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+                          }`}>
+                            {b.status === "APPROVED" ? "Verified Partner" : "Verification Pending"}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-0.5">Owner: {b.owner?.full_name || "Unknown"} ({b.owner?.email}) • {approvedDocs} of 4 docs approved</p>
+                      </div>
 
-            return (
-              <div key={biz.id} className="bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] overflow-hidden">
-                {/* Business Row Header */}
-                <button onClick={() => setExpandedId(isExpanded ? null : biz.id)}
-                  className="w-full flex items-center gap-4 p-5 hover:bg-[#F4F4F1] transition-colors text-left">
-                  <div className="w-10 h-10 bg-[#1A1A1A] flex-shrink-0 flex items-center justify-center border-2 border-black">
-                    <Building2 size={18} className="text-[#00FFFF]" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-3 mb-1">
-                      <p className="font-black uppercase italic text-lg tracking-tighter">{biz.name}</p>
-                      <StatusBadge status={biz.status} />
+                      <button className="p-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200">
+                        {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      </button>
                     </div>
-                    <p className="font-mono text-[10px] uppercase opacity-50 truncate">
-                      Owner: {biz.owner?.full_name || "Unknown"} — Registered {new Date(biz.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                  {/* Doc progress */}
-                  <div className="flex-shrink-0 text-right mr-4 hidden md:block">
-                    <div className="flex gap-2 justify-end mb-1">
-                      <span className="font-mono text-[9px] bg-[#00FFFF] text-black px-2 py-0.5 font-black">{approved} APPROVED</span>
-                      {rejected > 0 && <span className="font-mono text-[9px] bg-[#EC008C] text-white px-2 py-0.5 font-black">{rejected} REJECTED</span>}
-                      {pending  > 0 && <span className="font-mono text-[9px] bg-[#FFF200] text-black px-2 py-0.5 font-black">{pending} PENDING</span>}
-                    </div>
-                    <div className="w-32 h-1.5 bg-gray-200 rounded overflow-hidden ml-auto">
-                      <div className="h-full bg-[#00FFFF] transition-all" style={{ width: `${(approved / total) * 100}%` }} />
-                    </div>
-                  </div>
-                  {isExpanded ? <ChevronUp size={20} className="flex-shrink-0" /> : <ChevronDown size={20} className="flex-shrink-0" />}
-                </button>
 
-                {/* Expanded Doc Review Panel */}
-                {isExpanded && (
-                  <div className="border-t-4 border-black bg-[#F4F4F1] p-6">
-                    <div className="grid gap-4">
-                      {REQUIRED_DOC_TYPES.map((docType) => {
-                        const doc  = docMap[docType];
-                        const meta = DOC_META[docType];
+                    {isExpanded && (
+                      <div className="pt-4 border-t border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {REQUIRED_DOC_TYPES.map((type) => {
+                          const doc = docs.find(d => d.doc_type === type);
+                          const meta = DOC_META[type] || { label: type };
 
-                        return (
-                          <div key={docType} className="bg-white border-2 border-black overflow-hidden">
-                            {/* Doc Header */}
-                            <div className="flex items-center gap-3 px-4 py-3 border-b-2 border-black"
-                              style={{ backgroundColor: meta.color }}>
-                              <FileText size={14} style={{ color: meta.textColor }} />
-                              <p className="font-black text-[11px] uppercase tracking-widest flex-1" style={{ color: meta.textColor }}>{meta.label}</p>
-                              {doc ? <StatusBadge status={doc.status} /> : (
-                                <span className="font-mono text-[9px] font-black uppercase opacity-60 px-2 py-1 border border-current" style={{ color: meta.textColor }}>NOT SUBMITTED</span>
-                              )}
-                            </div>
+                          return (
+                            <div key={type} className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-xs text-slate-900">{meta.label}</span>
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  doc?.status === "APPROVED" ? "bg-emerald-100 text-emerald-800" :
+                                  doc?.status === "REJECTED" ? "bg-rose-100 text-rose-800" :
+                                  doc ? "bg-amber-100 text-amber-800" : "bg-slate-200 text-slate-600"
+                                }`}>
+                                  {doc?.status || "Not Uploaded"}
+                                </span>
+                              </div>
 
-                            {doc ? (
-                              <div className="p-4 space-y-4">
-                                {/* File link */}
-                                {doc.file_url && (
-                                  <button onClick={() => setPreviewDocUrl(doc.file_url)}
-                                    className="inline-flex items-center gap-2 bg-[#1A1A1A] text-white px-3 py-2 font-mono text-[10px] font-black uppercase hover:bg-[#00FFFF] hover:text-black transition-all">
-                                    <Eye size={12} /> VIEW DOCUMENT
+                              {doc?.file_url ? (
+                                <div className="space-y-2">
+                                  <button
+                                    onClick={() => setPreviewDocUrl(doc.file_url)}
+                                    className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                                  >
+                                    <Eye size={14} /> Review File
                                   </button>
-                                )}
 
-                                {/* Owner comment */}
-                                {doc.owner_comment && (
-                                  <div className="flex items-start gap-2 bg-blue-50 border-2 border-blue-200 p-3">
-                                    <MessageSquare size={12} className="text-blue-500 flex-shrink-0 mt-0.5" />
-                                    <div>
-                                      <p className="font-mono text-[8px] uppercase text-blue-500 mb-1">Owner Note:</p>
-                                      <p className="font-mono text-[10px] text-blue-700">{doc.owner_comment}</p>
+                                  <div className="rounded-lg bg-white border border-slate-200 p-3 text-[11px] text-slate-600 space-y-1">
+                                    <p className="font-semibold text-slate-900 truncate">{getFileName(doc)}</p>
+                                    <div className="grid grid-cols-2 gap-1">
+                                      <span><strong>Type:</strong> Verification file</span>
+                                      <span><strong>Format:</strong> {getFileFormat(doc)}</span>
+                                      <span><strong>Size:</strong> {formatFileSize(doc.file_size_bytes)}</span>
+                                      <span><strong>Quality:</strong> {doc.quality_requirement || "Clear scan"}</span>
                                     </div>
                                   </div>
-                                )}
 
-                                {/* Previous admin comment */}
-                                {doc.admin_comment && (
-                                  <div className="flex items-start gap-2 bg-red-50 border-2 border-[#EC008C]/30 p-3">
-                                    <AlertCircle size={12} className="text-[#EC008C] flex-shrink-0 mt-0.5" />
-                                    <div>
-                                      <p className="font-mono text-[8px] uppercase text-[#EC008C] mb-1">Previous Rejection Reason:</p>
-                                      <p className="font-mono text-[10px] text-[#EC008C]">{doc.admin_comment}</p>
-                                    </div>
-                                  </div>
-                                )}
+                                  <input
+                                    type="text"
+                                    placeholder="Add feedback comment for owner..."
+                                    value={adminComments[doc.id] || doc.admin_comment || ""}
+                                    onChange={(e) => setAdminComments({ ...adminComments, [doc.id]: e.target.value })}
+                                    className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs outline-none"
+                                  />
 
-                                {/* Action area — show if not already approved */}
-                                {doc.status !== "APPROVED" && (
-                                  <div className="flex flex-col sm:flex-row gap-3 pt-2 border-t-2 border-black/10">
-                                    <textarea
-                                      value={adminComments[doc.id] || ""}
-                                      onChange={(e) => setAdminComments((p) => ({ ...p, [doc.id]: e.target.value }))}
-                                      placeholder="Rejection reason (required to reject)..."
-                                      rows={2}
-                                      className="flex-1 bg-white border-2 border-black p-3 font-mono text-[10px] uppercase resize-none focus:outline-none focus:ring-2 ring-[#EC008C]/30" />
-                                    <div className="flex sm:flex-col gap-2">
-                                      <button
-                                        onClick={() => approveDoc(doc, biz.id, biz.business_documents, biz)}
-                                        disabled={actionLoading[doc.id]}
-                                        className="flex-1 sm:flex-none bg-[#00FFFF] text-black border-2 border-black px-4 py-2 font-black text-[10px] uppercase hover:bg-black hover:text-[#00FFFF] transition-all disabled:opacity-50 flex items-center justify-center gap-1 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
-                                        {actionLoading[doc.id] ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-                                        APPROVE
-                                      </button>
-                                      <button
-                                        onClick={() => rejectDoc(doc, biz.id, biz.business_documents)}
-                                        disabled={actionLoading[doc.id]}
-                                        className="flex-1 sm:flex-none bg-[#EC008C] text-white border-2 border-black px-4 py-2 font-black text-[10px] uppercase hover:bg-black hover:text-[#EC008C] transition-all disabled:opacity-50 flex items-center justify-center gap-1 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
-                                        {actionLoading[doc.id] ? <Loader2 size={12} className="animate-spin" /> : <XCircle size={12} />}
-                                        REJECT
-                                      </button>
-                                    </div>
-                                  </div>
-                                )}
-
-                                {/* If already approved, option to revoke */}
-                                {doc.status === "APPROVED" && (
-                                  <div className="flex items-center justify-between pt-2 border-t-2 border-black/10">
-                                    <span className="font-mono text-[9px] uppercase text-green-600 font-black flex items-center gap-1">
-                                      <CheckCircle size={10} /> Approved on {new Date(doc.updated_at).toLocaleDateString()}
-                                    </span>
+                                  <div className="flex gap-2">
                                     <button
-                                      onClick={() => revokeDocToPending(doc, biz.id, biz.business_documents)}
+                                      onClick={() => handleDocAction(doc.id, "APPROVED", b.id)}
                                       disabled={actionLoading[doc.id]}
-                                      className="font-mono text-[8px] uppercase text-[#EC008C] hover:underline font-black flex items-center gap-1">
-                                      <RefreshCcw size={10} /> Revoke
+                                      className="flex-1 py-1.5 bg-emerald-600 text-white rounded-lg font-bold text-xs hover:bg-emerald-700"
+                                    >
+                                      Approve
+                                    </button>
+                                    <button
+                                      onClick={() => handleDocAction(doc.id, "REJECTED", b.id)}
+                                      disabled={actionLoading[doc.id]}
+                                      className="flex-1 py-1.5 bg-rose-600 text-white rounded-lg font-bold text-xs hover:bg-rose-700"
+                                    >
+                                      Reject
                                     </button>
                                   </div>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="p-4 font-mono text-[10px] uppercase opacity-30 italic">
-                                No document submitted for this slot yet.
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
+                                </div>
+                              ) : (
+                                <p className="text-[11px] text-slate-400 italic">No document file uploaded by shop owner yet.</p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* ══ TAB: ACCOUNTS ══ */}
-      {activeTab === "accounts" && (
-        <>
-          <div className="flex items-center gap-3 mb-6 bg-black text-white px-4 py-2 w-fit italic">
-            <Fingerprint size={20} className="text-[#00FFFF]" />
-            <h2 className="font-black uppercase text-sm tracking-widest">Master_Profile_Registry</h2>
-          </div>
-
-          <div className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse min-w-[800px]">
+                );
+              })}
+            </div>
+          ) : activeTab === "categories" ? (
+            <div className="space-y-4">
+              {categoryRequests.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center text-xs text-slate-500">
+                  No category approval requests found.
+                </div>
+              ) : categoryRequests.map((request) => (
+                <div key={request.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Tag size={16} className="text-[#EC008C]" />
+                      <h3 className="font-bold text-sm text-slate-900">{request.category_name}</h3>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        request.status === "APPROVED" ? "bg-emerald-100 text-emerald-800" :
+                        request.status === "REJECTED" ? "bg-rose-100 text-rose-800" :
+                        "bg-amber-100 text-amber-800"
+                      }`}>
+                        {request.status || "PENDING"}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Shop: {request.businesses?.name || "Unknown shop"} | Requested {new Date(request.created_at || Date.now()).toLocaleDateString()}
+                    </p>
+                    {request.reason && (
+                      <p className="mt-2 text-xs text-slate-700 bg-slate-50 border border-slate-100 rounded-xl p-3">
+                        {request.reason}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    <button
+                      onClick={() => handleCategoryAction(request.id, "APPROVED")}
+                      disabled={actionLoading[request.id] || request.status === "APPROVED"}
+                      className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      Approve
+                    </button>
+                    <button
+                      onClick={() => handleCategoryAction(request.id, "REJECTED")}
+                      disabled={actionLoading[request.id] || request.status === "REJECTED"}
+                      className="px-4 py-2 bg-rose-600 text-white rounded-xl font-bold text-xs hover:bg-rose-700 disabled:opacity-50"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <table className="w-full text-left text-xs">
                 <thead>
-                  <tr className="bg-[#EBEBE8] border-b-4 border-black font-mono text-[10px] uppercase tracking-widest text-black">
-                    <th className="p-4 border-r-2 border-black">Full Name</th>
-                    <th className="p-4 border-r-2 border-black">Email</th>
-                    <th className="p-4 border-r-2 border-black">Role</th>
-                    <th className="p-4 text-center border-r-2 border-black">Created</th>
-                    <th className="p-4 text-center">System ID</th>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-500 font-semibold">
+                    <th className="py-3 px-4">Full Name</th>
+                    <th className="py-3 px-4">Email Address</th>
+                    <th className="py-3 px-4">Role</th>
+                    <th className="py-3 px-4 text-right">Joined Date</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y-2 divide-black">
-                  {loadingUsers ? (
-                    <tr><td colSpan="5" className="p-12 text-center font-mono uppercase">
-                      <Loader2 size={32} className="animate-spin mx-auto mb-4" />Scanning profiles...
-                    </td></tr>
-                  ) : users.length === 0 ? (
-                    <tr><td colSpan="5" className="p-12 text-center font-mono uppercase opacity-30">No records found.</td></tr>
-                  ) : users.map((profile) => (
-                    <tr key={profile.id} className="hover:bg-[#00FFFF]/10 transition-colors">
-                      <td className="p-4 border-r-2 border-black font-black uppercase text-sm italic">
-                        <div className="flex items-center gap-3">
-                          <div className="w-2 h-2 bg-black rotate-45 flex-shrink-0" />
-                          {profile.full_name || "NULL_IDENTITY"}
-                        </div>
-                      </td>
-                      <td className="p-4 border-r-2 border-black font-mono text-[11px] text-zinc-600">
-                        <div className="flex items-center gap-2"><Mail size={12} className="opacity-40" />{profile.email}</div>
-                      </td>
-                      <td className="p-4 border-r-2 border-black">
-                        <span className={`inline-flex items-center gap-2 px-3 py-1 text-[10px] font-bold border-2 border-black uppercase tracking-tighter ${
-                          profile.role === "ADMIN"          ? "bg-[#FF3E00] text-white" :
-                          profile.role === "BUSINESS_OWNER" ? "bg-[#00FFFF] text-black" :
-                                                              "bg-white text-black"
-                        }`}>
-                          <Shield size={10} />{profile.role}
+                <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+                  {users.map((u) => (
+                    <tr key={u.id} className="hover:bg-slate-50">
+                      <td className="py-3 px-4 font-bold text-slate-900">{u.full_name || "User Account"}</td>
+                      <td className="py-3 px-4 text-slate-500">{u.email}</td>
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[10px] font-bold">
+                          {u.role || "CUSTOMER"}
                         </span>
                       </td>
-                      <td className="p-4 border-r-2 border-black text-center font-mono text-[10px]">
-                        {profile.created_at ? new Date(profile.created_at).toLocaleDateString() : "N/A"}
-                      </td>
-                      <td className="p-4 text-center font-mono text-[9px] opacity-40">
-                        {profile.id.split("-")[0]}...
+                      <td className="py-3 px-4 text-right text-slate-400">
+                        {new Date(u.created_at || Date.now()).toLocaleDateString()}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          </div>
-        </>
-      )}
-      </section>
-    </main>
+          )}
+
+        </section>
+
+      </main>
+    </>
   );
 }

@@ -127,7 +127,7 @@ export default function AdminLayout({ children }) {
         onToggle={() => setSidebarOpen((current) => !current)}
       />
       <main className="flex-1 min-w-0 w-full">
-        <div className="w-full max-w-none min-h-[calc(100vh-80px)] p-6 md:p-8">
+        <div className="w-full max-w-none min-h-[calc(100vh-88px)] p-4 sm:p-6 lg:p-8">
           {children}
         </div>
       </main>

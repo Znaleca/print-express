@@ -5,17 +5,20 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { 
   ArrowRight, CreditCard, Loader2, Power, AlertTriangle, CheckCircle2,
-  Package, MapPin, Truck, Clock, Banknote, X
+  Package, MapPin, Truck, Clock, Banknote, X, QrCode, ShieldCheck
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import { normalizePhilippinePhone } from "@/lib/phone";
 
-// Dynamic import for LocationPicker to avoid SSR issues
 const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker"), {
   ssr: false,
-  loading: () => <div className="h-[300px] w-full animate-pulse bg-gray-200 border-2 border-dashed border-[#1A1A1A] flex items-center justify-center font-mono text-[10px] uppercase font-black tracking-widest text-[#1A1A1A]/40">Loading Map...</div>
+  loading: () => (
+    <div className="h-[300px] w-full rounded-xl bg-slate-100 flex items-center justify-center text-xs font-semibold text-slate-400">
+      Loading Location Map...
+    </div>
+  )
 });
 
-// Manila timezone utilities
 const MANILA_TIME_ZONE = "Asia/Manila";
 
 function getManilaDateObj() {
@@ -83,12 +86,13 @@ export default function CheckoutPage({ params }) {
   const [loading, setLoading] = useState(true);
 
   // Fulfillment State
-  const [deliveryType, setDeliveryType] = useState("PICKUP"); // PICKUP, DELIVERY
+  const [deliveryType, setDeliveryType] = useState("PICKUP");
   const [deliveryAddress, setDeliveryAddress] = useState("");
-  const [deliveryCoordinates, setDeliveryCoordinates] = useState(null); // { lat, lng }
+  const [deliveryCoordinates, setDeliveryCoordinates] = useState(null);
   const [deliveryLocationLoading, setDeliveryLocationLoading] = useState(false);
-  const [fulfillmentMode, setFulfillmentMode] = useState("NEED_NOW"); // NEED_NOW, ADVANCE
+  const [fulfillmentMode, setFulfillmentMode] = useState("NEED_NOW");
   const [expectedFulfillmentAt, setExpectedFulfillmentAt] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
 
   // Payment State
   const [paymentMethod, setPaymentMethod] = useState("COD");
@@ -109,6 +113,12 @@ export default function CheckoutPage({ params }) {
       if (user) {
         setUserId(user.id);
         setIsCustomer(user.user_metadata?.role === "CUSTOMER" || user.user_metadata?.role === "customer");
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("phone")
+          .eq("id", user.id)
+          .maybeSingle();
+        setCustomerPhone(profile?.phone || user.user_metadata?.phone || "");
       }
 
       const { data: bizData, error: bizError } = await supabase
@@ -130,17 +140,12 @@ export default function CheckoutPage({ params }) {
       setBusiness(bizData);
       setIsClosed(checkBusinessClosed(bizData));
       
-      // Minimum downpayment from DB
       setMinimumDownpaymentPercent(bizData.min_downpayment_percent ?? 50);
 
-      // Load cart from localStorage
       const cartKey = `cart_${businessId}`;
       const savedCart = localStorage.getItem(cartKey);
       if (savedCart) {
         setSelectedServices(JSON.parse(savedCart));
-      } else {
-        // Empty cart, maybe redirect back?
-        // router.push(`/business/${businessId}`);
       }
 
     } catch (error) {
@@ -168,7 +173,6 @@ export default function CheckoutPage({ params }) {
       let lat, lng;
       const addressToSearch = deliveryAddress.trim();
 
-      // Check for Plus Code (e.g. "MGX8+3Q Abucay, Bataan")
       const parts = addressToSearch.split(/[\s,]+/);
       const potentialCode = parts[0];
 
@@ -181,7 +185,6 @@ export default function CheckoutPage({ params }) {
           lat = decoded.latitudeCenter;
           lng = decoded.longitudeCenter;
         } else if (olc.isShort(potentialCode) && parts.length > 1) {
-          // If short, geocode the reference location first
           const referenceLoc = addressToSearch.replace(potentialCode, "").trim();
           const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(referenceLoc)}`, { headers: { 'User-Agent': 'print-app-v1' }});
           const data = await res.json();
@@ -197,7 +200,6 @@ export default function CheckoutPage({ params }) {
         }
       }
 
-      // Standard geocoding fallback
       if (!lat || !lng) {
         const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressToSearch)}`, { headers: { 'User-Agent': 'print-app-v1' }});
         const data = await res.json();
@@ -210,11 +212,11 @@ export default function CheckoutPage({ params }) {
       if (lat && lng) {
         setDeliveryCoordinates({ lat, lng });
       } else {
-        alert("Could not find location coordinates for this address. Please try being more specific or pin it manually.");
+        alert("Could not find coordinates for this address. Please adjust or pin on map.");
       }
     } catch (err) {
       console.error("Geocoding error:", err);
-      alert("Error finding location.");
+      alert("Error locating address.");
     } finally {
       setDeliveryLocationLoading(false);
     }
@@ -258,16 +260,15 @@ export default function CheckoutPage({ params }) {
 
   const handleExecuteOrder = async () => {
     if (!isCustomer) return alert("Only registered customers can order.");
-    if (isClosed) return alert("Shop is closed.");
+    if (isClosed) return alert("Shop is currently closed.");
     if (deliveryType === "DELIVERY" && !deliveryAddress) return alert("Please provide a delivery address.");
-    if (fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt) return alert("Please specify an expected date and time for your advance order.");
-    if (selectedServices.length === 0) return alert("Cart is empty.");
-    if (!receiptFile) return alert("Please upload your downpayment proof before executing the order.");
+    if (fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt) return alert("Please specify an expected date and time.");
+    if (selectedServices.length === 0) return alert("Your cart is empty.");
+    if (!receiptFile) return alert("Please upload your payment proof before placing the order.");
 
     setIsProcessing(true);
 
     try {
-      // Ensure a chat conversation exists
       const { data: existingConv } = await supabase
         .from("chat_conversations")
         .select("id")
@@ -289,7 +290,6 @@ export default function CheckoutPage({ params }) {
         convId = newConv.id;
       }
 
-      // Upload receipt if provided
       let receiptUrl = null;
       if (receiptFile) {
         const fileExt = receiptFile.name.split('.').pop();
@@ -297,7 +297,7 @@ export default function CheckoutPage({ params }) {
         const { error: uploadError } = await supabase.storage
           .from('chat-images')
           .upload(filePath, receiptFile);
-        if (uploadError) throw new Error("Failed to upload receipt: " + uploadError.message);
+        if (uploadError) throw new Error("Failed to upload payment proof: " + uploadError.message);
         const { data: { publicUrl } } = supabase.storage.from('chat-images').getPublicUrl(filePath);
         receiptUrl = publicUrl;
       }
@@ -306,8 +306,11 @@ export default function CheckoutPage({ params }) {
       const effectiveDownpaymentPercent = userSelectedDownpaymentPercent !== null ? userSelectedDownpaymentPercent : minimumDownpaymentPercent;
       const downpaymentAmt = total * (effectiveDownpaymentPercent / 100);
       const balanceAmt = total - downpaymentAmt;
+      const normalizedPhone = normalizePhilippinePhone(customerPhone);
+      if (!normalizedPhone) {
+        throw new Error("Enter a valid Philippine mobile number for SMS updates. Example: 09171234567 or +639171234567.");
+      }
 
-      // Verify stock for products BEFORE inserting the order
       for (const item of selectedServices) {
         if (item.item_type === 'product') {
           const { data: productData } = await supabase
@@ -321,7 +324,6 @@ export default function CheckoutPage({ params }) {
         }
       }
 
-      // Build items jsonb (stored inline — no separate order_items table)
       const itemsPayload = selectedServices.map(item => ({
         id: item.id,
         name: item.name,
@@ -330,9 +332,9 @@ export default function CheckoutPage({ params }) {
         price: Number(item.price),
         design_url: item.designUrl || null,
         design_version: item.designVersion || null,
+        selected_specs: item.selected_specs || null,
       }));
 
-      // Insert Order with correct column names
       const { data: order, error: orderError } = await supabase
         .from("orders")
         .insert({
@@ -348,6 +350,11 @@ export default function CheckoutPage({ params }) {
           delivery_coordinates: deliveryType === "DELIVERY" ? deliveryCoordinates : null,
           fulfillment_mode: fulfillmentMode,
           expected_fulfillment_at: fulfillmentMode === "ADVANCE" ? formatManilaDateTimeForDB(expectedFulfillmentAt) : null,
+          customer_phone: normalizedPhone,
+          quotation_valid_until: new Date(Date.now() + 14 * 86400000).toISOString(),
+          quotation_terms: "Production starts after customization approval, final proof approval, and required payment confirmation.",
+          tax_amount: 0,
+          discount_amount: 0,
           downpayment_amount: downpaymentAmt,
           balance_amount: balanceAmt,
         })
@@ -356,20 +363,29 @@ export default function CheckoutPage({ params }) {
 
       if (orderError) throw new Error("Order failed: " + orderError.message);
 
-      // Decrement stock for products
       for (const item of selectedServices) {
         if (item.item_type === 'product') {
           const { data: productData } = await supabase
             .from('services').select('stock_qty').eq('id', item.id).single();
           if (productData) {
+            const orderedQty = item.quantity || 1;
+            const newStockQty = productData.stock_qty - orderedQty;
             await supabase.from('services')
-              .update({ stock_qty: productData.stock_qty - (item.quantity || 1) })
+              .update({ stock_qty: newStockQty })
               .eq('id', item.id);
+            await supabase.from('inventory_movements').insert({
+              business_id: businessId,
+              service_id: item.id,
+              qty_change: -orderedQty,
+              new_stock_qty: newStockQty,
+              reason: 'ORDER_DEDUCTION',
+              note: `Order ${order.id}`,
+              created_by: userId,
+            });
           }
         }
       }
 
-      // Mark quoted messages as ordered
       const quotedItems = selectedServices.filter(s => s.isQuotedCheckout && s.sourceMessageId);
       for (const qi of quotedItems) {
         const { data: msg } = await supabase.from('chat_messages').select('metadata').eq('id', qi.sourceMessageId).single();
@@ -380,14 +396,13 @@ export default function CheckoutPage({ params }) {
         }
       }
 
-      // Clear cart and redirect to track
       localStorage.removeItem(`cart_${businessId}`);
-      alert("Order successfully placed!");
+      alert("Order placed successfully!");
       router.push(`/track`);
 
     } catch (error) {
       console.error("Checkout execution error:", error);
-      alert(error.message || "Failed to execute order. Please try again.");
+      alert(error.message || "Failed to place order. Please try again.");
     } finally {
       setIsProcessing(false);
     }
@@ -395,10 +410,10 @@ export default function CheckoutPage({ params }) {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-[#FDFDFD] flex items-center justify-center font-sans text-[#1A1A1A]">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 size={48} className="animate-spin text-[#00FFFF]" />
-          <p className="font-mono text-xs font-black uppercase tracking-widest">INITIALIZING_CHECKOUT</p>
+      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={36} className="animate-spin text-[#EC008C]" />
+          <p className="text-xs font-semibold uppercase tracking-wider">Preparing checkout...</p>
         </div>
       </main>
     );
@@ -406,11 +421,13 @@ export default function CheckoutPage({ params }) {
 
   if (!business) {
     return (
-      <main className="min-h-screen bg-[#FDFDFD] flex items-center justify-center font-sans text-[#1A1A1A]">
-        <div className="text-center">
-          <p className="font-mono text-xs font-black uppercase tracking-widest text-[#EC008C]">ERROR 404</p>
-          <h1 className="text-4xl font-black uppercase italic mt-2">Shop Not Found</h1>
-          <button onClick={() => router.push('/')} className="mt-8 border-4 border-[#1A1A1A] bg-[#00FFFF] px-6 py-3 font-mono text-xs font-black uppercase shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] hover:translate-y-1 hover:shadow-none transition-all">Go Home</button>
+      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-900 p-6">
+        <div className="text-center bg-white border border-slate-200 rounded-2xl p-10 shadow-xl max-w-sm">
+          <h1 className="text-xl font-bold">Print Shop Not Found</h1>
+          <p className="text-xs text-slate-500 mt-1 mb-6">The shop details could not be loaded.</p>
+          <button onClick={() => router.push('/')} className="px-5 py-2.5 bg-slate-900 text-white font-semibold text-xs rounded-xl hover:bg-[#EC008C] transition-colors">
+            Return Home
+          </button>
         </div>
       </main>
     );
@@ -424,15 +441,11 @@ export default function CheckoutPage({ params }) {
     selectedServices.length > 0 &&
     isCustomer &&
     !isClosed &&
+    Boolean(normalizePhilippinePhone(customerPhone)) &&
     !(deliveryType === "DELIVERY" && !deliveryAddress) &&
     !(fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt) &&
     !!receiptFile;
 
-  const setDownpaymentPercent = (val) => {
-    setUserSelectedDownpaymentPercent(val);
-  };
-
-  const todayInManila = manilaDateString();
   const minAdvanceDateTime = manilaStartOfTomorrow();
 
   return (
@@ -440,125 +453,170 @@ export default function CheckoutPage({ params }) {
       {/* QR PAYMENT MODAL */}
       {showQrModal && business.qr_url && (
         <div
-          className="fixed inset-0 z-[200] flex items-center justify-center bg-[#1A1A1A]/80 backdrop-blur-sm p-6"
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
           onClick={() => setShowQrModal(false)}
         >
           <div
-            className="relative bg-white border-4 border-[#1A1A1A] shadow-[16px_16px_0px_0px_rgba(255,242,0,1)] max-w-sm w-full"
+            className="relative bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-sm w-full overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Modal Header */}
-            <div className="bg-[#1A1A1A] text-white px-6 py-5 flex items-center justify-between border-b-4 border-[#FFF200]">
-              <div>
-                <h2 className="font-black uppercase italic tracking-widest text-base">QR_Payment</h2>
-                <p className="font-mono text-[9px] uppercase tracking-widest text-[#FFF200]/70 mt-0.5">Scan to pay your downpayment</p>
+            <div className="cmyk-bar" />
+            <div className="p-6 text-center space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
+                  <QrCode size={16} className="text-[#EC008C]" /> Payment QR Code
+                </h2>
+                <button
+                  onClick={() => setShowQrModal(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                >
+                  <X size={18} />
+                </button>
               </div>
-              <button
-                onClick={() => setShowQrModal(false)}
-                className="inline-flex h-9 w-9 items-center justify-center border-2 border-white/30 text-white hover:bg-white hover:text-[#1A1A1A] transition-colors"
-              >
-                <X size={16} />
-              </button>
-            </div>
 
-            {/* QR Image */}
-            <div className="p-8 flex flex-col items-center gap-6">
-              <div className="border-4 border-[#1A1A1A] overflow-hidden shadow-[6px_6px_0px_0px_rgba(26,26,26,1)]" style={{ width: "220px", aspectRatio: "9/16" }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={business.qr_url} alt="Payment QR" className="w-full h-full object-cover" />
-              </div>
-              <div className="w-full bg-[#FFF200] border-2 border-[#1A1A1A] px-4 py-3 text-center">
-                <p className="font-mono text-[10px] font-black uppercase tracking-[0.2em] text-[#1A1A1A]">GCash / Maya / Bank Transfer</p>
-                <p className="font-black italic text-2xl text-[#1A1A1A] mt-1">₱{downpaymentAmount.toFixed(2)} <span className="text-sm opacity-60">due now</span></p>
+              <img src={business.qr_url} alt="Payment QR" className="mx-auto w-44 h-auto rounded-xl border border-slate-200" />
+              
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100">
+                <p className="text-xs text-slate-500 font-medium">GCash / Maya / Bank Transfer</p>
+                <p className="text-xl font-extrabold text-slate-900 mt-0.5">₱{downpaymentAmount.toFixed(2)} <span className="text-xs font-normal text-slate-500">downpayment</span></p>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      <main className="min-h-screen bg-[#FDFDFD] font-sans text-[#1A1A1A] selection:bg-[#00FFFF] selection:text-[#1A1A1A]">
-        {/* STICKY HEADER */}
-        <div className="sticky top-0 z-40 bg-[#1A1A1A] border-b-4 border-[#00FFFF] px-4 md:px-8 py-4 flex items-center justify-between">
+      <main className="min-h-screen bg-slate-50 font-sans text-slate-900">
+        
+        {/* Sticky Header */}
+        <div className="sticky top-0 z-40 bg-white border-b border-slate-200 px-4 md:px-8 py-3.5 flex items-center justify-between shadow-sm">
           <button
             onClick={() => router.push(`/business/${business.id}`)}
-            className="flex items-center gap-2 font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF] hover:text-[#FFF200] transition-colors"
+            className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900"
           >
-            <ArrowRight size={14} className="rotate-180" /> Back to Shop
+            <ArrowRight size={14} className="rotate-180 text-slate-400" /> Back to Shop
           </button>
-          <h1 className="font-black uppercase italic tracking-widest text-white text-sm md:text-base">Checkout_Portal</h1>
-          <div className="font-mono text-[10px] font-black uppercase tracking-widest text-white/40">{business.name}</div>
+          <h1 className="font-bold text-slate-900 text-sm md:text-base">Order Checkout</h1>
+          <span className="text-xs text-slate-500 truncate max-w-[140px] sm:max-w-none">{business.name}</span>
         </div>
 
-        <section className="mx-auto max-w-7xl px-4 md:px-8 py-12">
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_420px] gap-10 items-start">
+        <section className="mx-auto max-w-[1600px] px-4 md:px-8 py-6">
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-8 items-start">
 
-            {/* ── LEFT: CHECKOUT FORM ── */}
-            <div className="space-y-8 pb-32">
+            {/* LEFT: CHECKOUT STEPS */}
+            <div className="space-y-6">
+
+              {/* STEP 0: ORDER REVIEW */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-3">
+                  <span className="w-6 h-6 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">0</span>
+                  <div>
+                    <h2 className="font-bold text-sm text-slate-900">Review Customization & Cost Estimate</h2>
+                    <p className="text-[11px] text-slate-500">Ordering starts after your size, material, quality, and quantity estimate is confirmed.</p>
+                  </div>
+                </div>
+                <div className="p-6 space-y-3">
+                  {selectedServices.map((s, idx) => {
+                    const qty = s.quantity || 1;
+                    const unit = Number(s.price || 0);
+                    return (
+                      <div key={s.cart_item_id || `${s.id}-${idx}`} className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs">
+                        <div className="flex justify-between gap-4">
+                          <div>
+                            <p className="font-bold text-slate-900">{s.name}</p>
+                            <p className="mt-1 text-[11px] text-slate-500">
+                              Baseline: {s.selected_specs?.size || "Default size"} / {s.selected_specs?.material || "Default material"} / {s.selected_specs?.quality || "Standard quality"}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-bold text-slate-900">Qty {qty}</p>
+                            <p className="text-[11px] text-slate-500">Unit PHP {unit.toFixed(2)}</p>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex justify-between border-t border-slate-200 pt-2 font-bold text-slate-900">
+                          <span>Estimated line total</span>
+                          <span>PHP {(unit * qty).toFixed(2)}</span>
+                        </div>
+                        {s.selected_specs?.notes && <p className="mt-2 text-[11px] italic text-amber-700">Customization notes: {s.selected_specs.notes}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
 
               {/* STEP 1: FULFILLMENT TYPE */}
-              <div className="bg-white border-4 border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(0,255,255,1)]">
-                <div className="bg-[#1A1A1A] px-6 py-4 flex items-center gap-3">
-                  <span className="font-mono text-[9px] font-black bg-[#00FFFF] text-[#1A1A1A] px-2 py-1">01</span>
-                  <p className="font-black uppercase italic text-sm tracking-widest text-white">Fulfillment_Type</p>
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-3">
+                  <span className="w-6 h-6 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">1</span>
+                  <h2 className="font-bold text-sm text-slate-900">Select Fulfillment Method</h2>
                 </div>
                 <div className="p-6 space-y-4">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-700 mb-1.5 block">Customer Mobile Number for SMS Updates</label>
+                    <input
+                      type="tel"
+                      value={customerPhone}
+                      onChange={(e) => setCustomerPhone(e.target.value)}
+                      placeholder="e.g. 09XXXXXXXXX or +639XXXXXXXXX"
+                      className="w-full border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-medium rounded-xl outline-none focus:ring-2 focus:ring-[#00FFFF]"
+                    />
+                    <p className="mt-1 text-[11px] text-slate-500">SMS will be sent when your order is preparing, ready, and completed.</p>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-3">
                     <button
                       onClick={() => setDeliveryType("PICKUP")}
-                      className={`py-5 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${
+                      className={`py-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
                         deliveryType === 'PICKUP'
-                          ? 'bg-[#00FFFF] border-[#1A1A1A] text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]'
-                          : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'
+                          ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                       }`}
                     >
-                      <Package size={18} /> Pick_Up
+                      <Package size={16} /> Store Pickup
                     </button>
                     <button
                       onClick={() => setDeliveryType("DELIVERY")}
-                      className={`py-5 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${
+                      className={`py-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
                         deliveryType === 'DELIVERY'
-                          ? 'bg-[#EC008C] border-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]'
-                          : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'
+                          ? 'bg-[#EC008C] text-white border-[#EC008C] shadow-sm'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                       }`}
                     >
-                      <Truck size={18} /> Delivery
+                      <Truck size={16} /> Local Delivery
                     </button>
                   </div>
 
                   {deliveryType === "DELIVERY" && (
-                    <div className="mt-2 p-5 bg-[#F9F9F7] border-4 border-[#1A1A1A] space-y-5">
+                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-4">
                       <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="font-mono text-[10px] font-black uppercase tracking-widest opacity-80">Delivery Address</p>
-                          <button type="button" onClick={getCurrentLocation} className="flex items-center gap-1 font-mono text-[9px] font-black uppercase tracking-widest text-[#EC008C] hover:text-[#00FFFF] transition-colors">
-                            <MapPin size={10} /> Use My Location
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-semibold text-slate-700">Delivery Address</label>
+                          <button type="button" onClick={getCurrentLocation} className="text-xs font-medium text-[#EC008C] flex items-center gap-1 hover:underline">
+                            <MapPin size={12} /> Use My Location
                           </button>
                         </div>
                         <div className="flex gap-2">
                           <input
                             type="text"
-                            className="flex-1 border-2 border-[#1A1A1A] p-3 text-xs font-mono uppercase bg-white focus:outline-none focus:ring-2 focus:ring-[#00FFFF]"
-                            placeholder="Address or Plus Code (e.g. MGX8+3Q)"
+                            className="flex-1 border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-medium bg-white focus:outline-none focus:ring-2 focus:ring-[#00FFFF]"
+                            placeholder="Full address or Plus Code"
                             value={deliveryAddress}
                             onChange={(e) => setDeliveryAddress(e.target.value)}
                           />
-                          <button type="button" onClick={geocodeAddress} disabled={deliveryLocationLoading} className="inline-flex items-center justify-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] px-4 py-2 font-mono text-[10px] font-black uppercase text-white hover:bg-[#00FFFF] hover:text-[#1A1A1A] disabled:opacity-50 transition-colors">
-                            {deliveryLocationLoading ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />} Pin
+                          <button type="button" onClick={geocodeAddress} disabled={deliveryLocationLoading} className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-xl hover:bg-slate-800 transition-colors shrink-0">
+                            {deliveryLocationLoading ? <Loader2 size={14} className="animate-spin" /> : "Pin Address"}
                           </button>
                         </div>
                       </div>
+                      
                       <div>
-                        <p className="font-mono text-[10px] font-black uppercase tracking-widest mb-2 opacity-80 flex gap-2 items-center"><MapPin size={12} /> Pin on Map</p>
-                      <div className="h-[300px] border-4 border-[#1A1A1A] overflow-hidden relative">
-                        <LocationPicker
-                          lat={deliveryCoordinates?.lat}
-                          lng={deliveryCoordinates?.lng}
-                          onChange={(lat, lng) => { setDeliveryCoordinates({ lat, lng }); reverseGeocode(lat, lng); }}
-                        />
-                      </div>
-                        {deliveryLocationLoading && (
-                          <p className="mt-2 font-mono text-[9px] font-black uppercase tracking-widest text-[#EC008C] flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> Detecting location...</p>
-                        )}
+                        <label className="text-xs font-semibold text-slate-700 mb-1.5 block">Pin Location on Map</label>
+                        <div className="h-[280px] rounded-xl border border-slate-200 overflow-hidden relative">
+                          <LocationPicker
+                            lat={deliveryCoordinates?.lat}
+                            lng={deliveryCoordinates?.lng}
+                            onChange={(lat, lng) => { setDeliveryCoordinates({ lat, lng }); reverseGeocode(lat, lng); }}
+                          />
+                        </div>
                       </div>
                     </div>
                   )}
@@ -566,38 +624,42 @@ export default function CheckoutPage({ params }) {
               </div>
 
               {/* STEP 2: ORDER TIMING */}
-              <div className="bg-white border-4 border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
-                <div className="bg-[#1A1A1A] px-6 py-4 flex items-center gap-3">
-                  <span className="font-mono text-[9px] font-black bg-[#EC008C] text-white px-2 py-1">02</span>
-                  <p className="font-black uppercase italic text-sm tracking-widest text-white">Order_Timing</p>
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-3">
+                  <span className="w-6 h-6 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">2</span>
+                  <h2 className="font-bold text-sm text-slate-900">Fulfillment Schedule</h2>
                 </div>
                 <div className="p-6 space-y-4">
                   <div className="grid grid-cols-2 gap-3">
                     <button type="button" onClick={() => { setFulfillmentMode("NEED_NOW"); setExpectedFulfillmentAt(""); }}
-                      className={`py-5 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${
+                      className={`py-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
                         fulfillmentMode === 'NEED_NOW'
-                          ? 'bg-[#00FFFF] border-[#1A1A1A] text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]'
-                          : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'
+                          ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                       }`}>
-                      <Clock size={18} /> Need_Now
+                      <Clock size={16} /> As Soon As Possible
                     </button>
                     <button type="button" onClick={() => setFulfillmentMode("ADVANCE")}
-                      className={`py-5 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${
+                      className={`py-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
                         fulfillmentMode === 'ADVANCE'
-                          ? 'bg-[#EC008C] border-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]'
-                          : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'
+                          ? 'bg-[#EC008C] text-white border-[#EC008C] shadow-sm'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                       }`}>
-                      <Clock size={18} /> Advance
+                      <Clock size={16} /> Scheduled Date & Time
                     </button>
                   </div>
+
                   {fulfillmentMode === "ADVANCE" && (
-                    <div className="border-4 border-[#1A1A1A] bg-[#F9F9F7] p-4">
-                      <p className="mb-2 font-mono text-[10px] font-black uppercase tracking-widest opacity-70">
-                        Expected {deliveryType === "DELIVERY" ? "Delivery" : "Pick Up"} Date & Time
-                      </p>
-                      <input type="datetime-local" value={expectedFulfillmentAt} min={minAdvanceDateTime}
+                    <div className="border border-slate-200 bg-slate-50 p-4 rounded-xl">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                        Expected {deliveryType === "DELIVERY" ? "Delivery" : "Pickup"} Date & Time
+                      </label>
+                      <input 
+                        type="datetime-local" 
+                        value={expectedFulfillmentAt} 
+                        min={minAdvanceDateTime}
                         onChange={(e) => setExpectedFulfillmentAt(e.target.value)}
-                        className="w-full border-2 border-[#1A1A1A] bg-white px-3 py-3 font-mono text-xs font-black uppercase tracking-wider outline-none focus:border-[#00FFFF]"
+                        className="w-full border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-medium rounded-xl outline-none focus:ring-2 focus:ring-[#00FFFF]"
                       />
                     </div>
                   )}
@@ -605,86 +667,83 @@ export default function CheckoutPage({ params }) {
               </div>
 
               {/* STEP 3: PAYMENT METHOD */}
-              <div className="bg-white border-4 border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(255,242,0,1)]">
-                <div className="bg-[#1A1A1A] px-6 py-4 flex items-center gap-3">
-                  <span className="font-mono text-[9px] font-black bg-[#FFF200] text-[#1A1A1A] px-2 py-1">03</span>
-                  <p className="font-black uppercase italic text-sm tracking-widest text-white">Balance_Payment_Method</p>
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-3">
+                  <span className="w-6 h-6 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">3</span>
+                  <h2 className="font-bold text-sm text-slate-900">Remaining Balance Payment Method</h2>
                 </div>
-                <div className="p-6">
-                  <p className="font-mono text-[10px] opacity-50 uppercase font-bold mb-4">Balance after downpayment: <span className="text-[#EC008C]">{balanceAmount > 0 ? `₱${balanceAmount.toFixed(2)}` : 'FULLY PAID'}</span></p>
+                <div className="p-6 space-y-3">
+                  <p className="text-xs text-slate-500">
+                    Remaining balance after downpayment: <strong className="text-slate-900">₱{balanceAmount > 0 ? balanceAmount.toFixed(2) : '0.00'}</strong>
+                  </p>
                   <div className="grid grid-cols-2 gap-3">
                     <button onClick={() => setPaymentMethod("COD")}
-                      className={`py-5 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${
+                      className={`py-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
                         paymentMethod === 'COD'
-                          ? 'bg-[#FFF200] border-[#1A1A1A] text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]'
-                          : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'
+                          ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                       }`}>
-                      <Banknote size={18} /> Cash (COD)
+                      <Banknote size={16} /> Cash (On Pickup / Delivery)
                     </button>
                     <button onClick={() => setPaymentMethod("E-Wallet")}
-                      className={`py-5 border-4 text-xs font-black uppercase flex items-center justify-center gap-2 transition-all ${
+                      className={`py-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
                         paymentMethod === 'E-Wallet'
-                          ? 'bg-[#1A1A1A] border-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]'
-                          : 'bg-white border-[#1A1A1A]/20 text-[#1A1A1A] opacity-60 hover:opacity-100 hover:border-[#1A1A1A]'
+                          ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                       }`}>
-                      <CreditCard size={18} /> E-Wallet
+                      <CreditCard size={16} /> E-Wallet
                     </button>
                   </div>
                 </div>
               </div>
 
               {/* STEP 4: UPLOAD RECEIPT */}
-              <div className="overflow-hidden border-4 border-[#1A1A1A] bg-white shadow-[10px_10px_0px_0px_rgba(236,0,140,1)]">
-                <div className="bg-[#1A1A1A] px-6 py-5 text-white">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <span className="inline-flex items-center justify-center border-2 border-white bg-[#FFF200] px-2 py-1 font-mono text-[9px] font-black uppercase tracking-widest text-[#1A1A1A]">04</span>
-                      <div>
-                        <p className="font-mono text-[9px] font-black uppercase tracking-[0.35em] text-[#FFF200]">Payment_Proof</p>
-                        <p className="font-black uppercase italic text-lg tracking-[0.08em] leading-none">Downpayment or Pay Full</p>
-                      </div>
-                    </div>
-                    <div className="hidden sm:flex items-center gap-2 border-2 border-white/20 px-3 py-2 font-mono text-[9px] font-black uppercase tracking-[0.25em] text-white/70">
-                      <span className="h-2 w-2 bg-[#00FFFF]" /> Secure Upload
-                    </div>
-                  </div>
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-3">
+                  <span className="w-6 h-6 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">4</span>
+                  <h2 className="font-bold text-sm text-slate-900">Upload Payment Proof</h2>
                 </div>
-                <div className="p-6 bg-[#F9F9F7] space-y-4">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div className="border-4 border-[#1A1A1A] bg-white p-4 shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]">
-                      <p className="font-mono text-[9px] font-black uppercase tracking-[0.25em] text-black/40">Downpayment</p>
-                      <p className="mt-1 text-2xl font-black italic leading-none text-[#EC008C]">₱{downpaymentAmount.toFixed(2)}</p>
+
+                <div className="p-6 space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-center">
+                      <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Downpayment Due</span>
+                      <span className="text-xl font-extrabold text-[#EC008C]">₱{downpaymentAmount.toFixed(2)}</span>
                     </div>
-                    <div className="border-4 border-[#1A1A1A] bg-white p-4 shadow-[4px_4px_0px_0px_rgba(255,242,0,1)]">
-                      <p className="font-mono text-[9px] font-black uppercase tracking-[0.25em] text-black/40">Pay Full</p>
-                      <p className="mt-1 text-2xl font-black italic leading-none text-[#1A1A1A]">₱{total.toFixed(2)}</p>
+                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-center">
+                      <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Full Amount</span>
+                      <span className="text-xl font-extrabold text-slate-900">₱{total.toFixed(2)}</span>
                     </div>
                   </div>
 
-                  <p className="font-mono text-[10px] font-black uppercase tracking-widest opacity-60">
-                    Upload your payment proof below to continue.
-                  </p>
                   {business.qr_url && (
                     <button
                       type="button"
                       onClick={() => setShowQrModal(true)}
-                      className="inline-flex items-center justify-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] px-4 py-3 font-mono text-[10px] font-black uppercase text-white hover:bg-[#FFF200] hover:text-[#1A1A1A] transition-colors shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
+                      className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2"
                     >
-                      <Banknote size={14} /> View QR Code to Pay
+                      <QrCode size={16} className="text-[#EC008C]" /> View Payment QR Code
                     </button>
                   )}
-                  <input type="file" accept="image/*" onChange={handleReceiptUpload}
-                    className="text-xs font-mono w-full file:mr-4 file:py-2 file:px-4 file:border-2 file:border-[#1A1A1A] file:text-xs file:font-black file:uppercase file:bg-white hover:file:bg-[#FFF200] cursor-pointer"
-                  />
+
+                  <div className="border-2 border-dashed border-slate-200 rounded-xl p-6 text-center hover:border-slate-300 transition-colors">
+                    <input 
+                      type="file" 
+                      accept="image/*" 
+                      onChange={handleReceiptUpload}
+                      className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-slate-900 file:text-white hover:file:bg-[#EC008C] cursor-pointer"
+                    />
+                  </div>
+
                   {receiptPreview && (
-                    <div className="border-4 border-[#1A1A1A] p-2 bg-white max-w-[220px] shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={receiptPreview} alt="Receipt Preview" className="w-full h-auto object-contain" />
+                    <div className="border border-slate-200 rounded-xl p-2 max-w-[200px]">
+                      <img src={receiptPreview} alt="Receipt Preview" className="w-full h-auto rounded-lg object-contain" />
                     </div>
                   )}
+
                   {receiptFile && (
-                    <div className="flex items-center gap-2 text-[10px] text-[#EC008C] font-black uppercase">
-                      <CheckCircle2 size={14} /> {receiptFile.name}
+                    <div className="flex items-center gap-2 text-xs text-emerald-600 font-semibold">
+                      <CheckCircle2 size={16} /> {receiptFile.name} uploaded
                     </div>
                   )}
                 </div>
@@ -692,128 +751,90 @@ export default function CheckoutPage({ params }) {
 
             </div>
 
-            {/* ── RIGHT: ORDER SUMMARY (STICKY) ── */}
-            <aside className="lg:sticky lg:top-20 h-fit space-y-6">
+            {/* RIGHT: ORDER SUMMARY (STICKY) */}
+            <aside className="lg:sticky lg:top-20 space-y-6">
 
-              {/* ORDER SUMMARY CARD */}
-              <div className="bg-white border-4 border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
-                <div className="bg-[#1A1A1A] text-white px-6 py-5 border-b-4 border-[#00FFFF]">
-                  <h2 className="font-black uppercase italic tracking-widest text-base">Order_Summary</h2>
-                  <p className="font-mono text-[9px] uppercase tracking-widest text-[#00FFFF]/70 mt-1">{business.name}</p>
-                </div>
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-md p-6 relative overflow-hidden">
+                <div className="cmyk-bar absolute top-0 left-0 right-0" />
 
-                {/* Items list */}
-                <div className="divide-y-2 divide-dashed divide-[#1A1A1A]/10">
-                  {selectedServices.length === 0 ? (
-                    <div className="px-6 py-8 text-center">
-                      <p className="font-mono text-[10px] font-black uppercase opacity-30">Cart is empty</p>
-                    </div>
-                  ) : (
-                    selectedServices.map((s) => (
-                      <div key={s.id} className="px-6 py-4 flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <p className="font-black uppercase italic text-sm leading-tight">{s.name}</p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="font-mono text-[9px] uppercase font-bold opacity-40">×{s.quantity || 1}</span>
-                            {s.isQuotedCheckout && s.designVersion && (
-                              <span className="bg-[#1A1A1A] text-white font-mono text-[7px] font-black uppercase tracking-widest px-1.5 py-0.5">v{s.designVersion}</span>
-                            )}
+                <h2 className="font-bold text-base text-slate-900 mb-4 pb-3 border-b border-slate-100">
+                  Order Summary
+                </h2>
+
+                <div className="space-y-3 mb-6">
+                  {selectedServices.map((s, idx) => (
+                    <div key={s.cart_item_id || `${s.id}-${idx}`} className="flex justify-between items-start text-xs pb-3 border-b border-slate-100 last:border-0">
+                      <div className="space-y-0.5 max-w-[70%]">
+                        <p className="font-bold text-slate-900">{s.name}</p>
+                        <p className="text-slate-500 text-[11px]">Quantity: {s.quantity || 1}</p>
+                        
+                        {s.selected_specs && (
+                          <div className="text-[10px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-200 mt-1 space-y-0.5">
+                            {s.selected_specs.size && <div>• Size: <span className="font-semibold text-slate-800">{s.selected_specs.size}</span></div>}
+                            {s.selected_specs.material && <div>• Material: <span className="font-semibold text-slate-800">{s.selected_specs.material}</span></div>}
+                            {s.selected_specs.quality && <div>• Quality: <span className="font-semibold text-slate-800">{s.selected_specs.quality}</span></div>}
+                            {s.selected_specs.notes && <div className="text-amber-800 italic">"Notes: {s.selected_specs.notes}"</div>}
                           </div>
-                          {s.isQuotedCheckout && s.designUrl && (
-                            <div className="mt-2 border-2 border-[#1A1A1A]/20 overflow-hidden" style={{width: '60px', height: '60px'}}>
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img src={s.designUrl} alt="Design" className="w-full h-full object-cover" />
-                            </div>
-                          )}
-                        </div>
-                        <span className="font-mono text-sm font-black text-[#1A1A1A] shrink-0">₱{(Number(s.price) * (s.quantity || 1)).toFixed(2)}</span>
+                        )}
                       </div>
-                    ))
-                  )}
+                      <span className="font-bold text-slate-900 shrink-0">₱{(Number(s.price) * (s.quantity || 1)).toFixed(2)}</span>
+                    </div>
+                  ))}
                 </div>
 
-                {/* Totals */}
-                <div className="border-t-4 border-[#1A1A1A] bg-[#F9F9F7] p-6 space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="font-mono text-[10px] uppercase tracking-[0.2em] font-black opacity-50">Subtotal</span>
-                    <span className="font-mono text-sm font-black">₱{total.toFixed(2)}{selectedServices.some(s => s.item_type !== "product") ? "+" : ""}</span>
+                <div className="pt-4 border-t border-slate-200 space-y-3">
+                  <div className="flex justify-between text-xs text-slate-600 font-medium">
+                    <span>Subtotal</span>
+                    <span>₱{total.toFixed(2)}</span>
                   </div>
 
                   {/* Downpayment Slider */}
-                  <div className="pt-4 border-t-2 border-dashed border-[#1A1A1A]/20">
-                    <div className="flex justify-between items-center mb-3">
-                      <span className="font-mono text-[10px] uppercase tracking-[0.2em] font-black opacity-50">Downpayment</span>
-                      <span className="font-mono text-[11px] font-black text-[#EC008C] bg-white border-2 border-[#EC008C] px-2 py-0.5">{effectiveDownpaymentPercent}%</span>
+                  <div className="pt-3 border-t border-slate-100">
+                    <div className="flex justify-between items-center mb-1.5 text-xs">
+                      <span className="font-semibold text-slate-700">Downpayment Percent</span>
+                      <span className="font-bold text-[#EC008C]">{effectiveDownpaymentPercent}%</span>
                     </div>
-                    <input type="range" min={minimumDownpaymentPercent} max="100" step="5"
+                    <input 
+                      type="range" 
+                      min={minimumDownpaymentPercent} 
+                      max="100" 
+                      step="5"
                       value={effectiveDownpaymentPercent}
-                      onChange={(e) => setDownpaymentPercent(Number(e.target.value))}
-                      className="w-full h-2 bg-[#1A1A1A]/10 appearance-none cursor-pointer accent-[#EC008C]"
+                      onChange={(e) => setUserSelectedDownpaymentPercent(Number(e.target.value))}
+                      className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#EC008C]"
                     />
-                    <p className="font-mono text-[8px] uppercase opacity-40 mt-1">Min: {minimumDownpaymentPercent}% &nbsp;|&nbsp; Max: 100%</p>
                   </div>
 
-                  <div className="flex justify-between items-end pt-3 border-t-2 border-dashed border-[#1A1A1A]/20">
-                    <span className="font-mono text-[10px] uppercase tracking-[0.2em] font-black text-[#EC008C]">Pay Now</span>
-                    <span className="text-3xl font-black italic leading-none text-[#EC008C]">₱{downpaymentAmount.toFixed(2)}</span>
+                  <div className="flex justify-between items-center pt-2">
+                    <span className="text-xs font-semibold text-slate-700">Downpayment Due Now</span>
+                    <span className="text-xl font-extrabold text-[#EC008C]">₱{downpaymentAmount.toFixed(2)}</span>
                   </div>
-                  {business.qr_url && (
-                    <div className="pt-4 mt-2 border-t-2 border-dashed border-[#1A1A1A]/20">
-                      <button
-                        type="button"
-                        onClick={() => setShowQrModal(true)}
-                        className="w-full flex items-center justify-center gap-2 font-mono text-[10px] font-black uppercase tracking-widest text-white bg-[#1A1A1A] border-2 border-[#1A1A1A] px-4 py-3 hover:bg-[#FFF200] hover:text-[#1A1A1A] transition-colors shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:translate-y-1 active:shadow-none"
-                      >
-                        <Banknote size={16} /> View QR Code to Pay
-                      </button>
+
+                  {balanceAmount > 0 && (
+                    <div className="flex justify-between items-center text-xs text-slate-500">
+                      <span>Remaining Balance</span>
+                      <span>₱{balanceAmount.toFixed(2)}</span>
                     </div>
                   )}
-                  {balanceAmount > 0 && (
-                    <div className="flex justify-between items-center mt-2">
-                      <span className="font-mono text-[9px] uppercase tracking-[0.2em] font-black opacity-40">Balance Later</span>
-                      <span className="font-mono text-sm font-black opacity-40">₱{balanceAmount.toFixed(2)}</span>
-                    </div>
+
+                  <button
+                    onClick={handleExecuteOrder}
+                    disabled={isProcessing || !isReadyToExecute}
+                    className="w-full bg-slate-900 text-white py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-[#EC008C] transition-all shadow-md disabled:opacity-50 mt-4"
+                  >
+                    {isProcessing ? (
+                      <><Loader2 size={16} className="animate-spin" /> Processing Order...</>
+                    ) : (
+                      <>Place Order <ArrowRight size={16} /></>
+                    )}
+                  </button>
+
+                  {!isReadyToExecute && (
+                    <p className="text-[11px] text-slate-400 text-center mt-2">
+                      Please complete all required fields and upload payment proof to submit order.
+                    </p>
                   )}
                 </div>
-              </div>
-
-              {/* NOTICE */}
-              <div className="p-4 border-2 border-dashed border-[#1A1A1A]/20 bg-[#F9F9F7]">
-                <p className="font-mono text-[9px] font-bold uppercase leading-relaxed opacity-50">
-                  // By submitting, you agree to version control V1 of uploaded assets. Initial proofing begins within 24 hours.
-                </p>
-              </div>
-
-              {/* EXECUTE ORDER */}
-              <div className="pt-4">
-                {!isCustomer ? (
-                  <div className="bg-white text-[#EC008C] border-4 border-[#EC008C] p-6 font-mono text-[11px] font-bold uppercase tracking-wider text-center flex flex-col gap-3 shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
-                    <AlertTriangle size={32} className="mx-auto" />
-                    Auth Required: Only registered CUSTOMERS can place orders.
-                  </div>
-                ) : isClosed ? (
-                  <div className="bg-[#1A1A1A] text-white border-4 border-[#1A1A1A] p-6 font-mono text-[11px] font-bold uppercase tracking-wider text-center flex flex-col gap-3">
-                    <Power size={32} className="mx-auto opacity-40" />
-                    Shop is currently closed. Orders are disabled.
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <p className="font-mono text-[9px] font-black uppercase tracking-[0.25em] text-black/40 text-center px-2">
-                      Complete all required details to unlock execute order.
-                    </p>
-                    <button
-                      onClick={handleExecuteOrder}
-                      disabled={isProcessing || !isReadyToExecute}
-                      className="w-full bg-[#1A1A1A] text-white py-6 px-6 font-black uppercase italic text-xl flex items-center justify-center gap-3 hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all shadow-[8px_8px_0px_0px_rgba(236,0,140,1)] disabled:opacity-50 disabled:shadow-none translate-y-0 active:translate-y-2 active:shadow-none group"
-                    >
-                      {isProcessing ? (
-                        <><Loader2 size={24} className="animate-spin" /> EXECUTING...</>
-                      ) : (
-                        <>EXECUTE_ORDER <ArrowRight size={24} className="group-hover:translate-x-2 transition-transform" /></>
-                      )}
-                    </button>
-                  </div>
-                )}
               </div>
 
             </aside>

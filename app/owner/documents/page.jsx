@@ -1,20 +1,24 @@
 "use client";
-
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
-  FileText, CheckCircle, XCircle, Clock, Eye, AlertCircle, Loader2, X, Pencil, Trash2, Upload
+  FileText, CheckCircle, XCircle, Clock, Eye, AlertCircle, Loader2, X, Upload, ShieldCheck, File, Info, Image as ImageIcon
 } from "lucide-react";
-
 const REQUIRED_DOCS = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID"];
-
-const DOC_META = {
-  DTI:           { label: "DTI Certificate",  color: "#00FFFF", textColor: "#1A1A1A" },
-  MAYORS_PERMIT: { label: "Mayor's Permit",    color: "#EC008C", textColor: "#ffffff" },
-  BIR:           { label: "BIR Certificate",   color: "#FFF200", textColor: "#1A1A1A" },
-  VALID_ID:      { label: "Valid ID",          color: "#1A1A1A", textColor: "#ffffff" },
+const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const ACCEPTED_FILE_TYPES = {
+  "image/jpeg": "JPG",
+  "image/png": "PNG",
+  "image/webp": "WEBP",
+  "application/pdf": "PDF",
 };
-
+const SCAN_QUALITY_LABEL = "300 DPI clear scan or sharp unedited photo";
+const DOC_META = {
+  DTI:           { label: "DTI Registration Certificate", desc: "Department of Trade and Industry Business Name Registration" },
+  MAYORS_PERMIT: { label: "Mayor's Business Permit",    desc: "Valid Business Permit from the City/Municipal Hall" },
+  BIR:           { label: "BIR Certificate of Registration", desc: "Form 2303 Certificate of Registration with TIN" },
+  VALID_ID:      { label: "Government Issued Valid ID",  desc: "Passport, Driver's License, UMID, or National ID of Owner" },
+};
 export default function OwnerDocuments() {
   const [loading, setLoading] = useState(true);
   const [docStatuses, setDocStatuses] = useState([]);
@@ -22,16 +26,33 @@ export default function OwnerDocuments() {
   const [businessId, setBusinessId] = useState(null);
   const [userId, setUserId] = useState(null);
   const [previewDocUrl, setPreviewDocUrl] = useState(null);
-
-  // Edit/Reupload state
   const [reuploadFiles, setReuploadFiles] = useState({});
   const [reuploadPreviews, setReuploadPreviews] = useState({});
-  const [reuploadComments, setReuploadComments] = useState({});
   const [globalLoading, setGlobalLoading] = useState(false);
-  const [deleteDocLoading, setDeleteDocLoading] = useState({});
-  const [editSubmissionOpen, setEditSubmissionOpen] = useState({});
   const [reuploadError, setReuploadError] = useState(null);
-
+  const getDocType = (doc) => doc?.doc_type || doc?.document_type;
+  const getFileName = (doc) => {
+    if (doc?.file_name) return doc.file_name;
+    if (!doc?.file_url) return "";
+    try {
+      return decodeURIComponent(doc.file_url.split("/").pop() || "Uploaded document");
+    } catch {
+      return "Uploaded document";
+    }
+  };
+  const formatFileSize = (bytes) => bytes ? `${(bytes / (1024 * 1024)).toFixed(2)} MB` : "Size not stored";
+  const getFileFormat = (fileOrDoc) => {
+    if (fileOrDoc?.file_format) return fileOrDoc.file_format;
+    if (fileOrDoc?.type) return ACCEPTED_FILE_TYPES[fileOrDoc.type] || fileOrDoc.type;
+    const name = fileOrDoc?.name || fileOrDoc?.file_name || fileOrDoc?.file_url || "";
+    return name.includes(".") ? name.split(".").pop().toUpperCase() : "Unknown";
+  };
+  const validateDocumentFile = (file) => {
+    if (!file) return null;
+    if (!ACCEPTED_FILE_TYPES[file.type]) return "Upload a PNG, JPG, WEBP image, or PDF document only.";
+    if (file.size > MAX_FILE_SIZE_BYTES) return `${file.name} is ${formatFileSize(file.size)}. Maximum allowed size is 5.00 MB.`;
+    return null;
+  };
   const loadDocs = useCallback(async (bizId) => {
     const { data } = await supabase
       .from("business_documents")
@@ -39,13 +60,11 @@ export default function OwnerDocuments() {
       .eq("business_id", bizId);
     return data || [];
   }, []);
-
   useEffect(() => {
     const fetchDocs = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
       setUserId(user.id);
-
       const { data: business } = await supabase
         .from("businesses")
         .select("id, name")
@@ -53,7 +72,6 @@ export default function OwnerDocuments() {
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-
       if (business) {
         setBusinessName(business.name);
         setBusinessId(business.id);
@@ -62,34 +80,29 @@ export default function OwnerDocuments() {
       }
       setLoading(false);
     };
-
     fetchDocs();
   }, [loadDocs]);
-
-  useEffect(() => {
-    return () => {
-      Object.values(reuploadPreviews).forEach((previewUrl) => {
-        if (previewUrl) URL.revokeObjectURL(previewUrl);
-      });
-    };
-  }, [reuploadPreviews]);
-
   const handlePreviewFile = (docType, file) => {
+    if (file) {
+      const validationError = validateDocumentFile(file);
+      if (validationError) {
+        setReuploadError(validationError);
+        return;
+      }
+      setReuploadError(null);
+    }
     setReuploadFiles((prev) => {
       const next = { ...prev, [docType]: file || null };
       if (!file) delete next[docType];
       return next;
     });
-
     setReuploadPreviews((prev) => {
       const next = { ...prev };
       if (next[docType]) URL.revokeObjectURL(next[docType]);
-
       if (!file) {
         delete next[docType];
         return next;
       }
-
       if (file.type.startsWith("image/")) {
         next[docType] = URL.createObjectURL(file);
       } else {
@@ -98,415 +111,249 @@ export default function OwnerDocuments() {
       return next;
     });
   };
-
-  const handleSubmitAll = async () => {
-    setReuploadError(null);
-    const docsToUpload = Object.keys(reuploadFiles).filter(k => reuploadFiles[k]);
-    if (docsToUpload.length === 0) return;
-
+  const handleUploadDocument = async (docType) => {
+    const file = reuploadFiles[docType];
+    if (!file || !businessId || !userId) return;
     setGlobalLoading(true);
-
+    setReuploadError(null);
     try {
-      for (const docTypeStr of docsToUpload) {
-        const file = reuploadFiles[docTypeStr];
-        const doc = docStatuses.find((d) => d.doc_type === docTypeStr);
-
-        let payload = {
-          business_id: businessId,
-          doc_type: docTypeStr,
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${businessId}/${docType.toLowerCase()}_${Date.now()}.${fileExt}`;
+      const { error: uploadError } = await supabase.storage
+        .from('business-documents')
+        .upload(fileName, file, { upsert: true });
+      if (uploadError) throw uploadError;
+      const { data: { publicUrl } } = supabase.storage
+        .from('business-documents')
+        .getPublicUrl(fileName);
+      const existingDoc = docStatuses.find((d) => getDocType(d) === docType);
+      const metadata = {
+        file_name: file.name,
+        file_size_bytes: file.size,
+        file_type: file.type,
+        file_format: getFileFormat(file),
+        quality_requirement: SCAN_QUALITY_LABEL,
+      };
+      const saveDocument = async (includeMetadata = true) => {
+        const basePayload = {
+          file_url: publicUrl,
           status: "PENDING",
-          owner_comment: reuploadComments[docTypeStr] || null,
+          owner_comment: "Uploaded by owner for admin verification",
           admin_comment: null,
         };
-
-        const ext  = file.name.split(".").pop();
-        const path = `${userId}/${docTypeStr}-${Date.now()}.${ext}`;
-        const { error: upErr } = await supabase.storage
-          .from("business-documents")
-          .upload(path, file, { upsert: true });
-        if (upErr) throw upErr;
-        
-        const { data: { publicUrl } } = supabase.storage.from("business-documents").getPublicUrl(path);
-        payload.file_url = publicUrl;
-
-        if (doc?.id) {
-          const { error: updateErr } = await supabase.from("business_documents").update(payload).eq("id", doc.id);
-          if (updateErr) throw updateErr;
-        } else {
-          const { error: insertErr } = await supabase.from("business_documents").insert([payload]);
-          if (insertErr) throw insertErr;
+        const payload = includeMetadata ? { ...basePayload, ...metadata } : basePayload;
+        if (existingDoc) {
+          return supabase
+            .from("business_documents")
+            .update(payload)
+            .eq("id", existingDoc.id);
         }
+        return supabase
+          .from("business_documents")
+          .insert({
+            business_id: businessId,
+            doc_type: docType,
+            ...payload,
+          });
+      };
+      let { error: saveError } = await saveDocument(true);
+      if (saveError && /column .* does not exist|schema cache/i.test(saveError.message || "")) {
+        ({ error: saveError } = await saveDocument(false));
       }
-      
-      // Update business status to PENDING so admin checks again
-      await supabase.from("businesses").update({ status: "PENDING" }).eq("id", businessId);
-
-      // Refresh doc statuses
-      const freshDocs = await loadDocs(businessId);
-      setDocStatuses(freshDocs);
-
-      // Clear local state
-      setReuploadFiles({});
-      setReuploadPreviews({});
-      setReuploadComments({});
-      setEditSubmissionOpen({});
+      if (saveError) throw saveError;
+      const updatedDocs = await loadDocs(businessId);
+      setDocStatuses(updatedDocs);
+      setReuploadFiles((prev) => { const next = { ...prev }; delete next[docType]; return next; });
+      setReuploadPreviews((prev) => {
+        const next = { ...prev };
+        if (next[docType]) URL.revokeObjectURL(next[docType]);
+        delete next[docType];
+        return next;
+      });
+      alert("Document uploaded successfully for admin verification.");
     } catch (err) {
-      setReuploadError(err.message);
+      setReuploadError(err.message || "Failed to upload document.");
     } finally {
       setGlobalLoading(false);
     }
   };
-
-  const handleDeleteSubmission = async (docTypeStr, doc = null) => {
-    if (!doc || doc.status === "APPROVED") return;
-
-    setReuploadError(null);
-    setDeleteDocLoading((p) => ({ ...p, [docTypeStr]: true }));
-
-    try {
-      if (doc.file_url) {
-        const marker = "/storage/v1/object/public/business-documents/";
-        const idx = doc.file_url.indexOf(marker);
-        if (idx !== -1) {
-          const filePath = decodeURIComponent(doc.file_url.slice(idx + marker.length));
-          await supabase.storage.from("business-documents").remove([filePath]);
-        }
-      }
-
-      const { error: deleteErr } = await supabase
-        .from("business_documents")
-        .delete()
-        .eq("id", doc.id);
-
-      if (deleteErr) {
-        const { error: fallbackErr } = await supabase
-          .from("business_documents")
-          .update({
-            file_url: null,
-            owner_comment: null,
-            admin_comment: null,
-            status: "PENDING",
-          })
-          .eq("id", doc.id);
-        if (fallbackErr) throw fallbackErr;
-      }
-      
-      // Update business status to PENDING
-      await supabase.from("businesses").update({ status: "PENDING" }).eq("id", businessId);
-
-      const freshDocs = await loadDocs(businessId);
-      setDocStatuses(freshDocs);
-
-      setReuploadFiles((p) => { const n = { ...p }; delete n[docTypeStr]; return n; });
-      setReuploadPreviews((p) => {
-        const n = { ...p };
-        if (n[docTypeStr]) URL.revokeObjectURL(n[docTypeStr]);
-        delete n[docTypeStr];
-        return n;
-      });
-      setReuploadComments((p) => { const n = { ...p }; delete n[docTypeStr]; return n; });
-      setEditSubmissionOpen((p) => ({ ...p, [docTypeStr]: false }));
-    } catch (err) {
-      setReuploadError(err.message || "Unable to delete this submission.");
-    } finally {
-      setDeleteDocLoading((p) => ({ ...p, [docTypeStr]: false }));
-    }
-  };
-
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center font-mono uppercase text-[#1A1A1A]">
-        <Loader2 className="mr-2 animate-spin" size={24} /> Loading documents...
-      </div>
+      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={36} className="animate-spin text-[#EC008C]" />
+          <p className="text-xs font-semibold uppercase tracking-wider">Loading verification status...</p>
+        </div>
+      </main>
     );
   }
-
-  const docMap = Object.fromEntries(docStatuses.map((d) => [d.doc_type, d]));
-  
-  const missingDocs = REQUIRED_DOCS.filter(type => {
-    const doc = docMap[type];
-    return (!doc || doc.status === "NOT_SUBMITTED") && !reuploadFiles[type];
-  });
-  const hasChanges = Object.keys(reuploadFiles).length > 0;
-  const isSubmitDisabled = globalLoading || missingDocs.length > 0 || !hasChanges;
-
+  const approvedCount = docStatuses.filter(d => d.status === "APPROVED").length;
   return (
-    <main className="bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden min-h-screen">
+    <>
+      {/* Large Document Preview Modal */}
       {previewDocUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6">
-          <div className="relative w-full max-w-4xl h-[85vh] border-4 border-black bg-white p-3 shadow-[10px_10px_0px_0px_rgba(0,255,255,1)] flex flex-col">
-            <div className="flex justify-between items-center mb-3 px-1">
-              <h3 className="font-black uppercase tracking-tighter text-xl">Document Preview</h3>
-              <button 
-                onClick={() => setPreviewDocUrl(null)}
-                className="bg-[#EC008C] text-white p-1 border-2 border-black hover:bg-black transition-all"
-              >
-                <X size={24} />
-              </button>
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm" onClick={() => setPreviewDocUrl(null)}>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-6xl w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                <Eye size={18} className="text-[#00FFFF]" /> Document High-Resolution Preview
+              </h3>
+              <button onClick={() => setPreviewDocUrl(null)} className="p-1 text-slate-400 hover:text-slate-800"><X size={18} /></button>
             </div>
-            <div className="flex-1 border-4 border-black overflow-hidden bg-gray-100 flex items-center justify-center">
-              {previewDocUrl.toLowerCase().endsWith(".pdf") ? (
-                <iframe src={previewDocUrl} className="w-full h-full border-none" />
-              ) : (
-                <img src={previewDocUrl} alt="Document preview" className="max-w-full max-h-full object-contain" />
-              )}
-            </div>
+            {previewDocUrl.match(/\.(jpeg|jpg|png|webp|gif|svg)$/i) ? (
+              <img src={previewDocUrl} alt="Document preview" className="w-full h-auto rounded-xl max-h-[82vh] object-contain border border-slate-200 bg-slate-50" />
+            ) : (
+              <iframe src={previewDocUrl} title="Doc" className="w-full h-[82vh] rounded-xl border border-slate-200" />
+            )}
           </div>
         </div>
       )}
-
-      <section className="relative z-20 border-b-8 border-[#1A1A1A] px-6 py-12 md:px-10 md:py-14">
-        <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
-        <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
-        <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
-
-        <div className="relative mx-auto w-full max-w-[1920px]">
-          <div className="inline-flex items-center gap-3 border-4 border-[#1A1A1A] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest shadow-[6px_6px_0px_0px_rgba(0,255,255,1)]">
-            <span className="flex gap-1">
-              <span className="h-2 w-2 bg-[#00FFFF]" />
-              <span className="h-2 w-2 bg-[#EC008C]" />
-              <span className="h-2 w-2 bg-[#FFF200]" />
-            </span>
-            Compliance_Hub // {businessName || "Business"}
+      <main className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+        
+        {/* Header Banner */}
+        <section className="bg-white border-b border-slate-200 py-8 px-4 sm:px-6 lg:px-8 relative shadow-sm">
+          <div className="cmyk-bar absolute top-0 left-0 right-0" />
+          <div className="max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Business Verification Documents</h1>
+              <p className="mt-1 text-xs text-slate-500">Submit legal permits and tax documents to earn your Verified Shop badge.</p>
+            </div>
+            <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 text-slate-900 text-xs font-bold border border-slate-200">
+              <ShieldCheck size={18} className="text-[#00E5FF]" />
+              <span>{approvedCount} of 4 Documents Verified</span>
+            </div>
           </div>
-
-          <div className="mt-8">
-            <h1 className="text-5xl font-black uppercase italic tracking-tighter leading-[0.95] md:text-7xl">
-              Document_<span className="bg-[#1A1A1A] px-4 py-1 text-white not-italic">Verifications</span>
-            </h1>
-            <p className="mt-4 max-w-3xl font-mono text-[11px] uppercase tracking-[0.2em] leading-relaxed text-gray-600 md:text-sm">
-              View your uploaded business registration files and check their verification statuses.
-            </p>
+        </section>
+        {/* Upload Parameters Helper Banner */}
+        <section className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-start gap-3 text-xs text-slate-600">
+            <Info size={18} className="text-[#EC008C] shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold text-slate-900">Document Upload Specifications & Requirements:</p>
+              <p className="text-[#1A1A1A]/70">
+                Type: business verification document | Format: PNG, JPG, WEBP, or PDF | Size: maximum 5.0 MB per file | Quality: {SCAN_QUALITY_LABEL}
+              </p>
+            </div>
           </div>
-        </div>
-      </section>
-
-      <div className="relative z-20 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
-        <div className="mx-auto flex w-full max-w-[1920px] items-center gap-6 px-6 font-mono text-[10px] font-black uppercase tracking-[0.35em] md:px-10">
-          <span className="text-[#00FFFF]">Cyan</span>
-          <span className="text-[#EC008C]">Magenta</span>
-          <span className="text-[#FFF200]">Yellow</span>
-          <span className="text-white">Black</span>
-          <FileText size={14} className="text-white" />
-        </div>
-      </div>
-
-      <section className="relative z-10 mx-auto w-full max-w-[1920px] bg-transparent px-6 py-9 md:px-10 md:py-14">
+        </section>
         {reuploadError && (
-          <div className="mb-8 border-4 border-[#1A1A1A] bg-[#FFF200] px-5 py-4 font-mono text-[10px] font-black uppercase tracking-widest shadow-[8px_8px_0px_0px_rgba(26,26,26,1)] flex items-center gap-3">
-            <AlertCircle size={14} /> {reuploadError}
+          <div className="max-w-5xl mx-auto px-4 mt-4">
+            <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-semibold flex items-center gap-2">
+              <AlertCircle size={16} /> {reuploadError}
+            </div>
           </div>
         )}
-
-        <div className="grid gap-6">
+        {/* Documents Grid */}
+        <section className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
           {REQUIRED_DOCS.map((docType) => {
-            const doc = docMap[docType];
-            const meta = DOC_META[docType];
-            const status = doc?.status || "NOT_SUBMITTED";
-            const isEditing = status === "NOT_SUBMITTED" || !!editSubmissionOpen[docType];
-
+            const docInfo = DOC_META[docType] || { label: docType, desc: "Legal document" };
+            const doc = docStatuses.find(d => getDocType(d) === docType);
+            const selectedFile = reuploadFiles[docType];
+            const selectedPreview = reuploadPreviews[docType];
             return (
-              <div
-                key={docType}
-                className="overflow-hidden border-4 border-[#1A1A1A] bg-white shadow-[8px_8px_0px_0px_rgba(26,26,26,1)]"
-              >
-                <div className="flex items-stretch">
-                  <div
-                    className="hidden w-3 shrink-0 md:block"
-                    style={{ backgroundColor: meta.color }}
-                  />
-                  <div className="flex-1">
-                    <div className="flex flex-col gap-4 border-b-4 border-[#1A1A1A] p-5 md:flex-row md:items-center md:justify-between">
-                      <div className="flex items-center gap-4">
-                        <div
-                          className="flex h-14 w-14 flex-shrink-0 items-center justify-center border-4 border-[#1A1A1A]"
-                          style={{ backgroundColor: meta.color, color: meta.textColor }}
+              <div key={docType} className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col justify-between relative overflow-hidden">
+                <div className="cmyk-bar-sm absolute top-0 left-0 right-0" />
+                <div className="space-y-4">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h3 className="font-bold text-base text-slate-900">{docInfo.label}</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">{docInfo.desc}</p>
+                    </div>
+                    <span className={`px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1 ${
+                      doc?.status === "APPROVED" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" :
+                      doc?.status === "REJECTED" ? "bg-rose-50 text-rose-700 border border-rose-200" :
+                      doc?.status === "PENDING" ? "bg-amber-50 text-amber-700 border border-amber-200" :
+                      "bg-slate-100 text-slate-500 border border-slate-200"
+                    }`}>
+                      {doc?.status === "APPROVED" ? <CheckCircle size={14} /> :
+                       doc?.status === "REJECTED" ? <XCircle size={14} /> :
+                       doc?.status === "PENDING" ? <Clock size={14} /> :
+                       <AlertCircle size={14} />}
+                      {doc?.status || "Not Uploaded"}
+                    </span>
+                  </div>
+                  {doc?.file_url && (
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <File size={16} className="text-slate-400 shrink-0" />
+                          <span className="font-semibold text-slate-800 truncate">{getFileName(doc)}</span>
+                        </div>
+                        <span className="text-[11px] text-slate-400 font-mono shrink-0">{formatFileSize(doc.file_size_bytes)}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-500">
+                        <span><strong className="text-slate-700">Type:</strong> Verification file</span>
+                        <span><strong className="text-slate-700">Format:</strong> {getFileFormat(doc)}</span>
+                        <span><strong className="text-slate-700">Size:</strong> {formatFileSize(doc.file_size_bytes)}</span>
+                        <span><strong className="text-slate-700">Quality:</strong> Clear scan</span>
+                      </div>
+                    </div>
+                  )}
+                  {doc?.admin_comment && (
+                    <p className="p-3 rounded-xl bg-amber-50/60 border border-amber-200 text-xs text-amber-900">
+                      <strong>Admin note:</strong> {doc.admin_comment}
+                    </p>
+                  )}
+                  {selectedFile && (
+                    <div className="p-3 rounded-xl bg-cyan-50/60 border border-cyan-200 text-xs space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <File size={16} className="text-slate-500 shrink-0" />
+                          <span className="font-semibold text-slate-800 truncate">{selectedFile.name}</span>
+                        </div>
+                        <span className="text-[11px] text-slate-500 font-mono shrink-0">{formatFileSize(selectedFile.size)}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                        <span><strong className="text-slate-800">Type:</strong> Required document</span>
+                        <span><strong className="text-slate-800">Format:</strong> {getFileFormat(selectedFile)}</span>
+                        <span><strong className="text-slate-800">Size:</strong> {formatFileSize(selectedFile.size)}</span>
+                        <span><strong className="text-slate-800">Quality:</strong> {SCAN_QUALITY_LABEL}</span>
+                      </div>
+                      {selectedPreview && (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewDocUrl(selectedPreview)}
+                          className="w-full px-3 py-2 bg-white border border-cyan-200 text-slate-800 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5"
                         >
-                          <FileText size={22} />
-                        </div>
-                        <div>
-                          <p className="text-2xl font-black uppercase italic tracking-tighter leading-none">
-                            {meta.label}
-                          </p>
-                          <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.25em] text-gray-500">
-                            {doc ? "Uploaded document slot" : "Awaiting upload"}
-                          </p>
-                        </div>
-                      </div>
-                      <span
-                        className={`inline-flex w-fit items-center gap-2 border-2 border-[#1A1A1A] px-3 py-2 font-mono text-[9px] font-black uppercase tracking-widest ${
-                          status === "APPROVED"
-                            ? "bg-[#00FFFF] text-[#1A1A1A]"
-                            : status === "REJECTED"
-                              ? "bg-[#EC008C] text-white"
-                              : status === "PENDING"
-                                ? "bg-[#FFF200] text-[#1A1A1A]"
-                                : "bg-white text-[#1A1A1A]"
-                        }`}
+                          <ImageIcon size={14} /> Preview selected image
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {doc?.file_url && (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewDocUrl(doc.file_url)}
+                      className="w-full px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <Eye size={15} /> View High-Res Document Preview
+                    </button>
+                  )}
+                  {/* Upload Drop Zone */}
+                  <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 text-center space-y-3 hover:border-slate-300 transition-colors">
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,application/pdf"
+                      onChange={(e) => handlePreviewFile(docType, e.target.files[0])}
+                      className="text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3.5 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-slate-900 file:text-white hover:file:bg-[#EC008C] cursor-pointer"
+                    />
+                    {reuploadFiles[docType] && (
+                      <button
+                        type="button"
+                        onClick={() => handleUploadDocument(docType)}
+                        disabled={globalLoading}
+                        className="w-full py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-[#EC008C] transition-colors shadow-sm"
                       >
-                        {status === "APPROVED" && <CheckCircle size={10} />}
-                        {status === "REJECTED" && <XCircle size={10} />}
-                        {status === "PENDING" && <Clock size={10} />}
-                        {status}
-                      </span>
-                    </div>
-                    <div className="grid gap-6 p-5 lg:grid-cols-[1fr_320px]">
-                      <div className="space-y-4">
-                        {status === "REJECTED" && doc?.admin_comment && (
-                          <div className="border-4 border-[#EC008C] bg-[#FFF4FA] p-4">
-                            <p className="font-mono text-[9px] uppercase tracking-[0.25em] text-[#EC008C]">Admin Feedback</p>
-                            <p className="mt-2 font-mono text-[11px] uppercase leading-relaxed text-[#1A1A1A]">
-                              {doc.admin_comment}
-                            </p>
-                          </div>
-                        )}
-                        {doc?.file_url ? (
-                          <div className="flex items-center gap-4">
-                            <button
-                              onClick={() => setPreviewDocUrl(doc.file_url)}
-                              className="inline-flex items-center gap-2 bg-[#1A1A1A] text-white px-4 py-3 font-mono text-[10px] font-black uppercase tracking-widest hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]"
-                            >
-                              <Eye size={14} /> View Uploaded File
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="font-mono text-[10px] uppercase text-gray-500">
-                            No file uploaded yet.
-                          </div>
-                        )}
-                      </div>
-                      
-                      {/* Submission Actions */}
-                      <div className="border-4 border-[#1A1A1A] bg-[#FDFDFD] p-4 shadow-[6px_6px_0px_0px_rgba(0,255,255,1)]">
-                        {!isEditing && doc ? (
-                          <div>
-                            <p className="font-mono text-[9px] uppercase tracking-[0.3em] text-gray-500">Submission Actions</p>
-                            <div className="mt-3 flex flex-wrap items-center gap-2">
-                              <button
-                                onClick={() => setEditSubmissionOpen((p) => ({ ...p, [docType]: true }))}
-                                className="inline-flex items-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] text-white px-3 py-2 font-black uppercase tracking-widest text-[10px] hover:bg-[#EC008C]"
-                              >
-                                <Pencil size={12} /> Edit
-                              </button>
-
-                              {status !== "APPROVED" && (
-                                <button
-                                  onClick={() => handleDeleteSubmission(docType, doc)}
-                                  disabled={deleteDocLoading[docType]}
-                                  className="inline-flex items-center gap-2 border-2 border-[#1A1A1A] bg-white px-3 py-2 font-black uppercase tracking-widest text-[10px] hover:bg-[#FFF200] disabled:opacity-50"
-                                >
-                                  {deleteDocLoading[docType]
-                                    ? <><Loader2 size={12} className="animate-spin" /> Deleting</>
-                                    : <><Trash2 size={12} /> Delete</>}
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            <p className="font-mono text-[9px] uppercase tracking-[0.3em] text-gray-500">
-                              {status === "NOT_SUBMITTED" ? "Upload File" : "Edit Submission"}
-                            </p>
-                            <div className="mt-3 space-y-4">
-                              <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center border-4 border-dashed border-[#1A1A1A]/20 bg-white px-4 py-6 text-center transition-all hover:border-[#EC008C]">
-                                <Upload size={22} className="mb-3 text-[#EC008C]" />
-                                <input
-                                  type="file"
-                                  accept="image/*,.pdf"
-                                  onChange={(e) => handlePreviewFile(docType, e.target.files?.[0] || null)}
-                                  className="hidden"
-                                  disabled={globalLoading}
-                                />
-                                <span className="font-black uppercase tracking-widest text-sm">
-                                  {reuploadFiles[docType] ? reuploadFiles[docType].name : status === "NOT_SUBMITTED" ? "Select File" : "Select Replacement"}
-                                </span>
-                                <span className="mt-2 font-mono text-[9px] uppercase tracking-[0.25em] text-gray-500">
-                                  {status === "NOT_SUBMITTED" ? "Tap to choose a document" : "Saving edits sets this document back to pending review"}
-                                </span>
-                              </label>
-
-                              {reuploadFiles[docType] && (
-                                <div className="border-4 border-[#1A1A1A] bg-[#F9F9F7] p-3">
-                                  <p className="mb-3 font-mono text-[9px] uppercase tracking-[0.25em] text-gray-500">Preview</p>
-                                  {reuploadPreviews[docType] ? (
-                                    <img
-                                      src={reuploadPreviews[docType]}
-                                      alt={`${meta.label} preview`}
-                                      className="h-48 w-full border-2 border-[#1A1A1A] object-contain bg-white"
-                                    />
-                                  ) : (
-                                    <div className="flex h-48 w-full items-center justify-center border-2 border-[#1A1A1A] bg-white text-center">
-                                      <div>
-                                        <FileText size={28} className="mx-auto mb-2 text-[#EC008C]" />
-                                        <p className="font-black uppercase tracking-widest text-sm">PDF Selected</p>
-                                        <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.25em] text-gray-500">
-                                          {reuploadFiles[docType].name}
-                                        </p>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-
-                            <textarea
-                              value={reuploadComments[docType] || ""}
-                              onChange={(e) => setReuploadComments((p) => ({ ...p, [docType]: e.target.value }))}
-                              placeholder="Add an optional note for the reviewer"
-                              rows={3}
-                              className="mt-4 w-full border-4 border-[#1A1A1A]/10 bg-[#F9F9F7] px-4 py-3 font-mono text-[10px] uppercase tracking-[0.15em] text-[#1A1A1A] outline-none focus:border-[#00FFFF]"
-                              disabled={globalLoading}
-                            />
-
-                            {doc && (
-                              <button
-                                onClick={() => {
-                                  setEditSubmissionOpen((p) => ({ ...p, [docType]: false }));
-                                  setReuploadFiles((p) => { const n = { ...p }; delete n[docType]; return n; });
-                                }}
-                                disabled={globalLoading}
-                                className="mt-4 flex w-full items-center justify-center gap-2 border-2 border-[#1A1A1A] bg-white px-4 py-3 font-black uppercase tracking-[0.25em] text-[#1A1A1A] transition-all hover:bg-[#FFF200] disabled:opacity-50"
-                              >
-                                <X size={14} /> Cancel Edit
-                              </button>
-                            )}
-                          </>
-                        )}
-                      </div>
-
-                    </div>
+                        {globalLoading ? "Uploading..." : "Submit File for Review"}
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
             );
           })}
-        </div>
-
-        {/* Global Submit Button */}
-        <div className="mt-12 p-8 bg-white border-8 border-[#1A1A1A] shadow-[16px_16px_0px_0px_rgba(236,0,140,1)] flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div>
-            <h3 className="font-black uppercase tracking-tighter text-2xl italic">Submit Requirements</h3>
-            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-gray-500 mt-2">
-              {missingDocs.length > 0 
-                ? `You must upload ${missingDocs.length} more document${missingDocs.length > 1 ? 's' : ''} to proceed.`
-                : !hasChanges 
-                  ? "Make changes to a document to enable the submit button."
-                  : "All requirements met. Ready for submission."}
-            </p>
-          </div>
-          <button
-            onClick={handleSubmitAll}
-            disabled={isSubmitDisabled}
-            className="bg-[#1A1A1A] text-white px-10 py-5 font-black text-xl uppercase tracking-widest flex items-center justify-center gap-3 hover:bg-[#00FFFF] hover:text-[#1A1A1A] disabled:opacity-50 disabled:hover:bg-[#1A1A1A] disabled:hover:text-white transition-all shadow-[6px_6px_0px_0px_rgba(0,255,255,1)] active:translate-x-1 active:translate-y-1 active:shadow-none min-w-[280px]"
-          >
-            {globalLoading ? (
-              <><Loader2 size={24} className="animate-spin" /> Processing</>
-            ) : (
-              <><Upload size={24} /> Submit Files</>
-            )}
-          </button>
-        </div>
-      </section>
-    </main>
+        </section>
+      </main>
+    </>
   );
 }

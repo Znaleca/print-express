@@ -7,6 +7,28 @@ import {
   ChevronRight, ChevronLeft, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, Banknote, FileText
 } from "lucide-react";
 
+const DESIGN_FILE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,image/svg+xml,.ai,.psd,.eps,.tif,.tiff";
+const DESIGN_MAX_BYTES = 50 * 1024 * 1024;
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+
+const formatBytes = (bytes = 0) => {
+  if (!bytes) return "0 KB";
+  const units = ["bytes", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+};
+
+const getUploadProfile = (file) => {
+  const extension = (file.name.split(".").pop() || "").toLowerCase();
+  const mime = file.type || "application/octet-stream";
+  const fileType = mime.startsWith("image/") ? "Artwork image" : mime === "application/pdf" ? "Print PDF" : "Source design file";
+  const quality = mime.startsWith("image/") || mime === "application/pdf"
+    ? "Use 300 DPI or vector-quality artwork with embedded fonts and CMYK-safe colors."
+    : "Source file accepted for prepress review; export proof PDF before production.";
+
+  return { extension, mime, fileType, quality };
+};
+
 export default function OwnerMessagesPage() {
   const [user, setUser] = useState(null);
   const [conversations, setConversations] = useState([]);
@@ -342,6 +364,10 @@ export default function OwnerMessagesPage() {
 
   const sendImageMessage = async (file) => {
     if (!file || !activeConv || !user) return;
+    if (!file.type?.startsWith("image/") || file.size > IMAGE_MAX_BYTES) {
+      window.alert("Please upload an image file up to 10 MB for regular chat attachments.");
+      return;
+    }
     setSendingImage(true);
 
     const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
@@ -359,6 +385,12 @@ export default function OwnerMessagesPage() {
         sender_role: "BUSINESS_OWNER",
         content: "[image]",
         image_url: data?.publicUrl || null,
+        metadata: {
+          file_name: file.name,
+          file_size_bytes: file.size,
+          file_type: file.type || "image",
+          file_format: ext,
+        },
         is_read: false,
       });
     }
@@ -397,14 +429,32 @@ export default function OwnerMessagesPage() {
     
     const latestServiceInquiry = [...messages].reverse().find(m => m.message_type === 'service_inquiry');
     const serviceId = latestServiceInquiry?.metadata?.service_id || "";
+    const latestApprovedProof = [...messages].reverse().find(
+      (m) => m.message_type === "design_version" && m.metadata?.proof_status === "APPROVED"
+    );
+    const amount = parseFloat(quoteAmount);
+    const validUntil = new Date(Date.now() + 14 * 86400000).toISOString();
 
     await supabase.from("chat_messages").insert({
       conversation_id: activeConv.id,
       sender_id: user.id,
       sender_role: "BUSINESS_OWNER",
-      content: `I have prepared an official quote for your request.`,
+      content: "Detailed quotation prepared. Final cost can be locked after proof approval.",
       message_type: 'quote',
-      metadata: { quote_amount: parseFloat(quoteAmount), service_id: serviceId },
+      metadata: {
+        quote_amount: amount,
+        subtotal: amount,
+        taxes: 0,
+        discount: 0,
+        total_cost: amount,
+        currency: "PHP",
+        valid_until: validUntil,
+        service_id: serviceId,
+        proof_id: latestApprovedProof?.metadata?.proof_id || null,
+        proof_version: latestApprovedProof?.metadata?.version || null,
+        quotation_format: "formal_print_market",
+        terms: "Includes prepress review, proofing, print production, and standard finishing unless stated otherwise.",
+      },
       is_read: false,
     });
     setSending(false);
@@ -414,9 +464,14 @@ export default function OwnerMessagesPage() {
 
   const sendDesignVersionMessage = async (file) => {
     if (!file || !activeConv || !user) return;
+    if (file.size > DESIGN_MAX_BYTES) {
+      window.alert("Design proof files must be 50 MB or smaller.");
+      return;
+    }
     setSending(true);
 
-    const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+    const uploadProfile = getUploadProfile(file);
+    const ext = uploadProfile.extension || "file";
     const filePath = `${activeConv.id}/${user.id}-design-v${designVersion}-${Date.now()}.${ext}`;
 
     const { error: uploadErr } = await supabase.storage
@@ -425,13 +480,65 @@ export default function OwnerMessagesPage() {
 
     if (!uploadErr) {
       const { data } = supabase.storage.from("chat-images").getPublicUrl(filePath);
+      let proofId = null;
+      const numericVersion = Number.parseInt(designVersion, 10) || 1;
+      const proofPayload = {
+        conversation_id: activeConv.id,
+        version_number: numericVersion,
+        file_url: data?.publicUrl || null,
+        file_name: file.name,
+        file_size_bytes: file.size,
+        file_type: uploadProfile.fileType,
+        file_format: ext,
+        quality_notes: uploadProfile.quality,
+        status: "PENDING",
+        uploaded_by: user.id,
+        uploaded_role: "BUSINESS_OWNER",
+      };
+      let { data: proofRow, error: proofErr } = await supabase
+        .from("design_proofs")
+        .insert(proofPayload)
+        .select("id")
+        .maybeSingle();
+      if (proofErr) {
+        const fallbackPayload = {
+          conversation_id: proofPayload.conversation_id,
+          version_number: proofPayload.version_number,
+          file_url: proofPayload.file_url,
+          file_name: proofPayload.file_name,
+          file_size_bytes: proofPayload.file_size_bytes,
+          file_type: `${proofPayload.file_type} | ${proofPayload.file_format} | ${proofPayload.quality_notes}`,
+          status: proofPayload.status,
+          uploaded_by: proofPayload.uploaded_by,
+          uploaded_role: proofPayload.uploaded_role,
+        };
+        const retry = await supabase
+          .from("design_proofs")
+          .insert(fallbackPayload)
+          .select("id")
+          .maybeSingle();
+        proofRow = retry.data;
+      }
+      proofId = proofRow?.id || null;
+
       await supabase.from("chat_messages").insert({
         conversation_id: activeConv.id,
         sender_id: user.id,
         sender_role: "BUSINESS_OWNER",
-        content: "[image]",
+        content: `Design proof version ${designVersion} uploaded for review.`,
         message_type: 'design_version',
-        metadata: { version: designVersion },
+        metadata: {
+          version: designVersion,
+          proof_id: proofId,
+          proof_status: "PENDING",
+          is_locked: false,
+          file_name: file.name,
+          file_size_bytes: file.size,
+          file_type: uploadProfile.fileType,
+          file_format: ext,
+          file_mime: uploadProfile.mime,
+          quality_notes: uploadProfile.quality,
+        },
         image_url: data?.publicUrl || null,
         is_read: false,
       });
@@ -440,6 +547,51 @@ export default function OwnerMessagesPage() {
     setSending(false);
     setShowDesign(false);
     setDesignVersion((prev) => String(Number(prev) + 1));
+  };
+
+  const updateProofStatus = async (msg, status, lockCost = false) => {
+    if (!activeConv || !user) return;
+    const latestQuote = [...messages].reverse().find((m) => m.message_type === "quote");
+    const lockedTotal = lockCost
+      ? Number(latestQuote?.metadata?.total_cost || latestQuote?.metadata?.quote_amount || 0)
+      : Number(msg.metadata?.locked_total_amount || 0);
+    const metadata = {
+      ...(msg.metadata || {}),
+      proof_status: status,
+      is_locked: lockCost || msg.metadata?.is_locked || false,
+      locked_total_amount: lockedTotal || null,
+      reviewed_at: new Date().toISOString(),
+      reviewed_by: user.id,
+    };
+
+    setSending(true);
+    await supabase.from("chat_messages").update({ metadata }).eq("id", msg.id);
+    if (msg.metadata?.proof_id) {
+      await supabase
+        .from("design_proofs")
+        .update({
+          status,
+          is_locked: metadata.is_locked,
+          locked_total_amount: metadata.locked_total_amount,
+          locked_at: lockCost ? new Date().toISOString() : null,
+          reviewed_by: user.id,
+          reviewed_at: metadata.reviewed_at,
+        })
+        .eq("id", msg.metadata.proof_id);
+    }
+    await supabase.from("chat_messages").insert({
+      conversation_id: activeConv.id,
+      sender_id: user.id,
+      sender_role: "BUSINESS_OWNER",
+      content: lockCost
+        ? `Final design version ${msg.metadata?.version || ""} and quoted cost are locked for production.`
+        : `Proof version ${msg.metadata?.version || ""} marked as ${status.replace("_", " ").toLowerCase()}.`,
+      message_type: "proof_status",
+      metadata,
+      is_read: false,
+    });
+    await fetchMessages(activeConv.id, true);
+    setSending(false);
   };
 
   const markAsDesignVersion = async (msg) => {
@@ -465,7 +617,7 @@ export default function OwnerMessagesPage() {
     delete newMetadata.version;
 
     await supabase.from("chat_messages").update({
-      message_type: null,
+      message_type: "text",
       metadata: Object.keys(newMetadata).length > 0 ? newMetadata : null
     }).eq("id", msg.id);
 
@@ -688,6 +840,9 @@ export default function OwnerMessagesPage() {
                   messages.map((msg) => {
                     const isMine = msg.sender_id === user.id;
                     const isEditing = editingId === msg.id;
+                    const meta = msg.metadata || {};
+                    const uploadName = meta.file_name || "Uploaded file";
+                    const isPreviewable = Boolean(msg.image_url && (meta.file_mime?.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(uploadName)));
                     return (
                       <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
                         {!isMine && (
@@ -702,19 +857,31 @@ export default function OwnerMessagesPage() {
                         }`}>
                           {msg.image_url && (
                             <div className="relative group/img inline-block">
-                              <a href={msg.image_url} target="_blank" rel="noopener noreferrer">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={msg.image_url}
-                                  alt="Chat upload"
-                                  className={`mb-3 max-h-64 w-auto rounded border-2 border-black/20 ${msg.message_type === 'design_version' ? 'border-[#FFF200]' : ''}`}
-                                />
-                              </a>
+                              {isPreviewable ? (
+                                <a href={msg.image_url} target="_blank" rel="noopener noreferrer">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={msg.image_url}
+                                    alt={uploadName}
+                                    className={`mb-3 max-h-80 w-auto rounded border-2 border-black/20 ${msg.message_type === 'design_version' ? 'border-[#FFF200]' : ''}`}
+                                  />
+                                </a>
+                              ) : (
+                                <a
+                                  href={msg.image_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={`mb-3 flex min-w-64 items-center gap-3 border-2 p-4 font-mono text-[10px] font-black uppercase hover:bg-[#FFF200] ${msg.message_type === 'design_version' ? 'border-[#FFF200]' : 'border-[#1A1A1A]'}`}
+                                >
+                                  <FileText size={26} className="shrink-0" />
+                                  <span className="break-all text-left">{uploadName}</span>
+                                </a>
+                              )}
                               
                               {/* Label if it is a design version */}
                               {msg.message_type === 'design_version' && (
                                 <div className="absolute bottom-5 left-2 bg-[#1A1A1A] text-[#FFF200] font-mono text-[9px] font-black uppercase tracking-widest px-2 py-1 shadow-[2px_2px_0px_0px_rgba(255,242,0,1)]">
-                                  VERSION {msg.metadata?.version || "1"}
+                                  VERSION {meta.version || "1"}
                                 </div>
                               )}
 
@@ -802,15 +969,68 @@ export default function OwnerMessagesPage() {
                             <div className="flex flex-col p-4 border-2 border-[#FFF200] bg-[#1A1A1A] text-white min-w-[200px]">
                               <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#FFF200] mb-2">Official Quote Sent</p>
                               <p className="text-3xl font-black italic text-[#00FFFF] mb-4">₱{Number(msg.metadata?.quote_amount).toFixed(2)}</p>
+                              <div className="grid grid-cols-2 gap-2 text-[10px] font-mono uppercase mb-4">
+                                <span className="opacity-60">Valid Until</span>
+                                <span className="text-right">{meta.valid_until ? new Date(meta.valid_until).toLocaleDateString() : "14 days"}</span>
+                                <span className="opacity-60">Proof Version</span>
+                                <span className="text-right">{meta.proof_version || "Not locked"}</span>
+                              </div>
                               {msg.content && <p className="text-sm font-bold leading-relaxed mb-4">{msg.content}</p>}
                               <p className="font-mono text-[9px] uppercase tracking-widest text-[#FFF200]/50">Waiting for customer to finalize...</p>
                             </div>
                           ) : msg.message_type === 'design_version' ? (
-                            <div className="flex flex-col">
-                              {/* Only show extra text if it was sent by the owner as a version copy originally */}
+                            <div className="flex flex-col min-w-64">
+                              <div className="mb-3 border-2 border-[#FFF200] bg-[#FFF200]/10 p-3">
+                                <div className="flex items-center justify-between gap-3">
+                                  <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#FFF200]">Proof Version {meta.version || "1"}</p>
+                                  <span className="bg-[#1A1A1A] px-2 py-1 font-mono text-[9px] font-black uppercase text-white">
+                                    {meta.proof_status || "PENDING"}
+                                  </span>
+                                </div>
+                                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[9px] uppercase opacity-80">
+                                  <span>Type: {meta.file_type || "Design proof"}</span>
+                                  <span>Format: {(meta.file_format || "file").toUpperCase()}</span>
+                                  <span>Size: {formatBytes(meta.file_size_bytes)}</span>
+                                  <span>Quality: Print-ready review</span>
+                                </div>
+                                {meta.quality_notes && (
+                                  <p className="mt-2 font-mono text-[9px] uppercase leading-relaxed opacity-70">{meta.quality_notes}</p>
+                                )}
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => updateProofStatus(msg, "APPROVED")}
+                                    disabled={sending || meta.proof_status === "APPROVED"}
+                                    className="bg-[#00FFFF] px-3 py-2 font-black uppercase text-[9px] text-[#1A1A1A] border-2 border-[#1A1A1A] disabled:opacity-40"
+                                  >
+                                    Approve Proof
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => updateProofStatus(msg, "NEEDS_CHANGES")}
+                                    disabled={sending || meta.is_locked}
+                                    className="bg-white px-3 py-2 font-black uppercase text-[9px] text-[#1A1A1A] border-2 border-[#1A1A1A] disabled:opacity-40"
+                                  >
+                                    Needs Changes
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => updateProofStatus(msg, "APPROVED", true)}
+                                    disabled={sending || meta.is_locked}
+                                    className="bg-[#EC008C] px-3 py-2 font-black uppercase text-[9px] text-white border-2 border-[#1A1A1A] disabled:opacity-40"
+                                  >
+                                    Lock Cost
+                                  </button>
+                                </div>
+                              </div>
                               {msg.content && msg.content !== "[image]" && (
                                 <p className="text-sm font-bold leading-relaxed mb-3">{msg.content}</p>
                               )}
+                            </div>
+                          ) : msg.message_type === 'proof_status' ? (
+                            <div className="flex flex-col border-l-4 border-[#FFF200] pl-3">
+                              <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#FFF200]">Proof Update</p>
+                              <p className="text-sm font-bold leading-relaxed">{msg.content}</p>
                             </div>
                           ) : msg.message_type === 'service_inquiry' ? (
                             <div className="flex flex-col p-3 border-l-4 border-[#00FFFF] bg-white/5">
@@ -929,7 +1149,7 @@ export default function OwnerMessagesPage() {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/*"
+                    accept={showDesign ? DESIGN_FILE_ACCEPT : "image/*"}
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
@@ -1041,6 +1261,9 @@ export default function OwnerMessagesPage() {
                   {showSchedule && (
                     <div className="absolute bottom-16 right-0 bg-white border-2 border-[#1A1A1A] p-4 shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] flex flex-col gap-3 z-50 w-72">
                       <p className="font-black uppercase italic text-sm border-b-2 border-[#1A1A1A] pb-2">Schedule Video Call</p>
+                      <p className="font-mono text-[9px] uppercase leading-relaxed opacity-60">
+                        Includes camera, microphone, screen share, chat, raise hand, tile view, video quality controls, and whiteboard.
+                      </p>
                       <label className="flex flex-col gap-1">
                         <span className="font-mono text-[9px] uppercase font-black opacity-60">Select Time (Local)</span>
                         <input

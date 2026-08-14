@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import {
   ChevronDown, CheckCircle, Eye,
   ExternalLink, Activity, Package, Clock,
-  CreditCard, AlertCircle, MapPin, Truck, X, ShoppingBag, Printer, Upload
+  CreditCard, AlertCircle, MapPin, Truck, X, ShoppingBag, Printer, Upload, RefreshCcw, FileText, Loader2
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import ReceiptModal from "@/components/ReceiptModal";
@@ -30,17 +30,18 @@ const formatManilaDateTime = (value) => {
 export default function OwnerOrdersPage() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState(null);
+  const [activeTab, setActiveTab] = useState("ALL");
   const [viewMapOrder, setViewMapOrder] = useState(null);
-  const [cancelModal, setCancelModal] = useState(null); // { orderId }
+  const [cancelModal, setCancelModal] = useState(null);
   const [viewReceipt, setViewReceipt] = useState(null);
+  const [viewDocType, setViewDocType] = useState("RECEIPT");
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
-  const [refundModal, setRefundModal] = useState(null); // { orderId }
+  const [refundModal, setRefundModal] = useState(null);
   const [refundFile, setRefundFile] = useState(null);
   const [uploadingRefund, setUploadingRefund] = useState(false);
-  const [viewRefundProof, setViewRefundProof] = useState(null); // URL string
-  const [viewDpReceipt, setViewDpReceipt] = useState(null); // URL string
+  const [viewRefundProof, setViewRefundProof] = useState(null);
+  const [viewDpReceipt, setViewDpReceipt] = useState(null);
 
   useEffect(() => {
     let subscription;
@@ -69,7 +70,6 @@ export default function OwnerOrdersPage() {
            setOrders(ordersWithBiz);
         }
 
-        // Realtime Subscription
         subscription = supabase
           .channel(`owner_orders_status_${biz.id}_${Date.now()}`)
           .on(
@@ -99,683 +99,352 @@ export default function OwnerOrdersPage() {
     load();
 
     return () => {
-      if (subscription) {
-        supabase.removeChannel(subscription);
-      }
+      if (subscription) supabase.removeChannel(subscription);
     };
   }, []);
 
-  const updateStatus = async (id, newStatus, extraUpdates = {}) => {
-    const order = orders.find(o => o.id === id);
-    if (!order) return;
+  const handleUpdateStatus = async (orderId, newStatus) => {
+    try {
+      const { error } = await supabase
+        .from("orders")
+        .update({ status: newStatus })
+        .eq("id", orderId);
 
-    if (newStatus === 'COMPLETED') {
-      extraUpdates = { ...extraUpdates, balance_amount: 0, fully_paid: true };
-    }
+      if (error) throw error;
+      setOrders((prev) =>
+        prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
+      );
 
-    const terminalCancelledStates = ['CANCELLED', 'REFUNDED', 'REFUND_CONFIRMED'];
-    const isCurrentlyCancelled = terminalCancelledStates.includes(order.status);
-    const isMovingToCancelled = terminalCancelledStates.includes(newStatus);
-    
-    if (!isCurrentlyCancelled && isMovingToCancelled) {
-      if (Array.isArray(order.items)) {
-        for (const item of order.items) {
-          if (!item.service_id) continue;
-          const { data: svc } = await supabase
-            .from('services')
-            .select('stock_qty')
-            .eq('id', item.service_id)
-            .single();
-          
-          if (svc) {
-            await supabase
-              .from('services')
-              .update({ stock_qty: (svc.stock_qty || 0) + (Number(item.quantity) || 1) })
-              .eq('id', item.service_id);
-          }
+      if (["PREPARING", "READY_TO_PICK_UP", "COMPLETED"].includes(newStatus)) {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const smsRes = await fetch("/api/orders/status-sms", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${sessionData?.session?.access_token || ""}`,
+          },
+          body: JSON.stringify({ orderId, status: newStatus }),
+        });
+        const smsData = await smsRes.json().catch(() => ({}));
+        if (!smsRes.ok) {
+          console.warn("[Orders] SMS notification failed:", smsData);
+          alert(`Order status updated, but SMS failed: ${smsData.error || "Unknown SMS error"}`);
+        } else if (smsData.skipped) {
+          alert(`Order status updated, but SMS was not sent: ${smsData.reason}`);
         }
       }
-    }
-
-    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: newStatus, ...extraUpdates } : o)));
-
-    const { error } = await supabase
-      .from("orders")
-      .update({ status: newStatus, ...extraUpdates })
-      .eq("id", id);
-
-    if (error) {
-      alert("Status update failed: " + error.message);
-    } else {
-      setToast({ type: "success", msg: `ORDER_${id.split("-")[0]} SET TO ${newStatus}` });
-      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      alert(err.message || "Failed to update order status.");
     }
   };
 
-  const openOwnerCancelModal = (orderId) => {
-    setCancelModal({ orderId });
-    setCancelReason("");
-  };
-
-  const confirmOwnerCancel = async () => {
-    if (!cancelModal || !cancelReason.trim()) return;
+  const handleCancelOrder = async () => {
+    if (!cancelModal) return;
     setCancelling(true);
-    await updateStatus(cancelModal.orderId, 'CANCELLED', { cancel_reason: cancelReason.trim() });
-    setCancelling(false);
-    setCancelModal(null);
-  };
+    try {
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          status: "CANCELLED",
+          cancel_reason: cancelReason || "Cancelled by shop owner",
+          cancelled_at: new Date().toISOString(),
+        })
+        .eq("id", cancelModal.orderId);
 
-  const openRefundModal = (orderId) => {
-    setRefundModal({ orderId });
-    setRefundFile(null);
-  };
-
-  const confirmRefund = async () => {
-    if (!refundModal || !refundFile) return;
-    setUploadingRefund(true);
-
-    const fileExt = refundFile.name.split('.').pop();
-    const fileName = `${refundModal.orderId}-${Date.now()}.${fileExt}`;
-
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('refund-receipts')
-      .upload(`proofs/${fileName}`, refundFile);
-
-    if (uploadError) {
-      alert("Failed to upload proof: " + uploadError.message);
-      setUploadingRefund(false);
-      return;
+      if (error) throw error;
+      setOrders(prev => prev.map(o => o.id === cancelModal.orderId ? { ...o, status: "CANCELLED", cancel_reason: cancelReason } : o));
+      setCancelModal(null);
+      setCancelReason("");
+    } catch (err) {
+      alert(err.message || "Failed to cancel order.");
+    } finally {
+      setCancelling(false);
     }
-
-    const { data: publicUrlData } = supabase.storage
-      .from('refund-receipts')
-      .getPublicUrl(`proofs/${fileName}`);
-
-    await updateStatus(refundModal.orderId, 'REFUNDED', { refund_receipt_url: publicUrlData.publicUrl });
-
-    setUploadingRefund(false);
-    setRefundModal(null);
   };
 
-  const getOrderTotalQuantity = (order) => {
-    if (!Array.isArray(order?.items) || order.items.length === 0) return 0;
-    return order.items.reduce((sum, item) => sum + (Number(item?.quantity) || 1), 0);
+  const handleUploadRefund = async () => {
+    if (!refundModal || !refundFile) return alert("Please select a proof image.");
+    setUploadingRefund(true);
+    try {
+      const fileExt = refundFile.name.split('.').pop();
+      const filePath = `refunds/${refundModal.orderId}-${Date.now()}.${fileExt}`;
+      const { error: uploadErr } = await supabase.storage.from("chat-images").upload(filePath, refundFile);
+      if (uploadErr) throw uploadErr;
+
+      const { data: { publicUrl } } = supabase.storage.from("chat-images").getPublicUrl(filePath);
+
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          status: "REFUNDED",
+          refund_proof_url: publicUrl,
+          refunded_at: new Date().toISOString(),
+        })
+        .eq("id", refundModal.orderId);
+
+      if (error) throw error;
+      setOrders(prev => prev.map(o => o.id === refundModal.orderId ? { ...o, status: "REFUNDED", refund_proof_url: publicUrl } : o));
+      setRefundModal(null);
+      setRefundFile(null);
+      alert("Refund proof uploaded successfully.");
+    } catch (err) {
+      alert(err.message || "Failed to upload refund proof.");
+    } finally {
+      setUploadingRefund(false);
+    }
   };
+
+  const filteredOrders = orders.filter(o => {
+    if (activeTab === "ALL") return true;
+    if (activeTab === "PENDING") return ["PLACED", "PENDING"].includes(o.status);
+    if (activeTab === "PREPARING") return o.status === "PREPARING";
+    if (activeTab === "READY") return ["READY_TO_PICK_UP", "RIDER_ON_THE_WAY"].includes(o.status);
+    if (activeTab === "COMPLETED") return o.status === "COMPLETED";
+    if (activeTab === "CANCELLED") return ["CANCELLED", "REFUNDED", "REFUND_PENDING", "REFUND_CONFIRMED"].includes(o.status);
+    return true;
+  });
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#FDFDFD] flex flex-col items-center justify-center font-mono p-8 text-[#1A1A1A]">
-        <Activity className="animate-spin mb-4 text-[#00FFFF]" size={48} />
-        <p className="uppercase tracking-[0.35em] text-[10px] font-black animate-pulse text-[#1A1A1A]">
-          Loading_Order_Registry...
-        </p>
-      </div>
+      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={36} className="animate-spin text-[#EC008C]" />
+          <p className="text-xs font-semibold uppercase tracking-wider">Loading orders...</p>
+        </div>
+      </main>
     );
   }
 
   return (
-    <main className="bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden font-sans">
-      <section className="relative border-b-8 border-[#1A1A1A] px-6 py-12 md:px-10 md:py-14">
-        <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
-        <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
-        <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
+    <>
+      {viewReceipt && <ReceiptModal order={viewReceipt} onClose={() => setViewReceipt(null)} isOwner={true} initialDocType={viewDocType} />}
 
-        <div className="relative mx-auto w-full max-w-[1920px]">
-          <div className="inline-flex items-center gap-3 border-4 border-[#1A1A1A] bg-white px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest shadow-[6px_6px_0px_0px_rgba(236,0,140,1)]">
-            <span className="flex gap-1">
-              <span className="h-2 w-2 bg-[#00FFFF]" />
-              <span className="h-2 w-2 bg-[#EC008C]" />
-              <span className="h-2 w-2 bg-[#FFF200]" />
-            </span>
-            Order_Intel // Fulfillment_Console
+      {/* Downpayment Receipt Popup */}
+      {viewDpReceipt && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm" onClick={() => setViewDpReceipt(null)}>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-sm text-slate-900">Payment Proof Image</h3>
+              <button onClick={() => setViewDpReceipt(null)} className="p-1 text-slate-400 hover:text-slate-800"><X size={18} /></button>
+            </div>
+            <img src={viewDpReceipt} alt="Downpayment proof" className="w-full h-auto rounded-xl max-h-[60vh] object-contain border border-slate-200" />
           </div>
+        </div>
+      )}
 
-          <div className="mt-8 grid gap-8 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
+      {/* Refund Proof Upload Modal */}
+      {refundModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm" onClick={() => setRefundModal(null)}>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-base text-slate-900">Upload Refund Payment Receipt</h3>
+            <p className="text-xs text-slate-500">Upload the transaction receipt for the refund sent to the customer:</p>
+            <input type="file" accept="image/*" onChange={(e) => setRefundFile(e.target.files[0])} className="text-xs text-slate-500" />
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setRefundModal(null)} className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-semibold text-xs rounded-xl">Cancel</button>
+              <button onClick={handleUploadRefund} disabled={uploadingRefund || !refundFile} className="flex-1 py-2.5 bg-slate-900 text-white font-bold text-xs rounded-xl hover:bg-[#EC008C]">
+                {uploadingRefund ? "Uploading..." : "Submit Proof"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Modal */}
+      {cancelModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm" onClick={() => setCancelModal(null)}>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-base text-slate-900">Cancel Order</h3>
+            <p className="text-xs text-slate-500">Provide a reason for cancelling this order:</p>
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="e.g. Out of paper stock, equipment maintenance..."
+              className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-rose-400 h-24"
+            />
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setCancelModal(null)} className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-semibold text-xs rounded-xl">Back</button>
+              <button onClick={handleCancelOrder} disabled={cancelling} className="flex-1 py-2.5 bg-rose-600 text-white font-bold text-xs rounded-xl hover:bg-rose-700">
+                {cancelling ? "Cancelling..." : "Confirm Cancel"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <main className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+        
+        {/* Header */}
+        <section className="bg-white border-b border-slate-200 py-5 px-4 sm:px-6 lg:px-8 relative shadow-sm">
+          <div className="cmyk-bar absolute top-0 left-0 right-0" />
+          <div className="max-w-[1600px] mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <h1 className="text-5xl font-black uppercase italic tracking-tighter leading-[0.95] md:text-7xl">
-                Order_<span className="bg-[#1A1A1A] px-4 py-1 text-white not-italic">Control Deck</span>
-              </h1>
-              <p className="mt-4 max-w-3xl font-mono text-[11px] uppercase tracking-[0.2em] leading-relaxed text-gray-600 md:text-sm">
-                Track live transactions, update delivery states, and confirm payment lifecycle events from one command surface.
-              </p>
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Order Management</h1>
+              <p className="mt-0.5 text-xs text-slate-500">Review client orders, update production status, and manage refunds.</p>
             </div>
 
-            <div className="border-4 border-[#1A1A1A] bg-white p-5 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="font-mono text-[9px] uppercase tracking-[0.35em] text-gray-500">Live Orders</p>
-                  <p className="mt-1 text-lg font-black uppercase tracking-tighter">{orders.length} Records</p>
-                </div>
-                <div className="flex h-12 w-12 items-center justify-center bg-[#1A1A1A] text-white">
-                  <ShoppingBag className="h-6 w-6 text-[#00FFFF]" />
-                </div>
-              </div>
-              <div className="mt-4 flex gap-1">
-                <div className="h-1 flex-1 bg-[#00FFFF]" />
-                <div className="h-1 flex-1 bg-[#EC008C]" />
-                <div className="h-1 flex-1 bg-[#FFF200]" />
-              </div>
+            {/* Filter Tabs */}
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
+              {["ALL", "PENDING", "PREPARING", "READY", "COMPLETED", "CANCELLED"].map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                    activeTab === tab ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <div className="border-b-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
-        <div className="mx-auto flex w-full max-w-[1920px] items-center gap-6 px-6 font-mono text-[10px] font-black uppercase tracking-[0.35em] md:px-10">
-          <span className="text-[#00FFFF]">Cyan</span>
-          <span className="text-[#EC008C]">Magenta</span>
-          <span className="text-[#FFF200]">Yellow</span>
-          <span className="text-white">Black</span>
-          <Printer size={14} className="text-white" />
-        </div>
-      </div>
-
-      <section className="mx-auto w-full max-w-[1920px] px-4 py-8 md:px-10 md:py-14">
-        {/* ── HEADER ── */}
-        <div className="mb-8 flex flex-col justify-between gap-4 border-b-4 border-[#1A1A1A] pb-6 md:flex-row md:items-end">
-          <div>
-            <h2 className="text-4xl font-black uppercase italic tracking-tighter flex items-center gap-3">
-              <ShoppingBag size={30} className="text-[#00FFFF]" /> Order_Management
-            </h2>
-            <p className="mt-2 font-mono text-[10px] uppercase tracking-widest opacity-60">
-              Transaction Tracking // Order Fulfillment & Status Registry
-            </p>
-          </div>
-
-          {toast && (
-            <div className="bg-[#FFF200] text-[#1A1A1A] px-4 py-2 font-mono text-[10px] font-black uppercase animate-in fade-in slide-in-from-right-4 border-2 border-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]">
-              <CheckCircle size={12} className="inline mr-2" /> {toast.msg}
+        {/* Orders Table & Cards */}
+        <section className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-5">
+          {filteredOrders.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-xs font-medium text-slate-500 max-w-md mx-auto">
+              No orders found under "{activeTab}" filter.
             </div>
-          )}
-        </div>
-
-      {/* ── ORDERS TABLE ── */}
-      <div className="bg-white border-4 border-[#1A1A1A] shadow-[10px_10px_0px_0px_rgba(236,0,140,1)] relative overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
-                {[
-                  "Date",
-                  "Order_ID",
-                  "Items",
-                  "Qty",
-                  "Delivery_Type",
-                  "Schedule",
-                  "Transaction",
-                  "Payment_Proof",
-                  "Design_Files",
-                  "Order_Status",
-                ].map((h) => (
-                  <th key={h} className="p-4 font-mono text-[10px] uppercase tracking-widest font-black whitespace-nowrap">
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="font-mono text-xs">
-              {orders.length === 0 ? (
-                <tr>
-                  <td colSpan="10" className="p-12 text-center text-black/40 italic uppercase tracking-[0.2em]">
-                    No transactions found in database.
-                  </td>
-                </tr>
-              ) : orders.map((order) => {
-                return (
-                  <tr key={order.id} className="border-b-2 border-[#1A1A1A]/10 hover:bg-[#00FFFF]/5 transition-colors group">
-                    <td className="p-4 whitespace-nowrap font-bold">
+          ) : (
+            <div className="space-y-4">
+              {filteredOrders.map((o) => (
+                <div key={o.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+                  
+                  {/* Top Bar */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
+                    <div>
                       <div className="flex items-center gap-2">
-                        <Clock size={12} className="text-[#EC008C]" />
-                        {formatManilaDateTime(order.created_at)}
+                        <span className="font-bold text-sm text-slate-900">Order #{o.id.split('-')[0].toUpperCase()}</span>
+                        <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-800 text-[11px] font-bold">
+                          {o.status}
+                        </span>
                       </div>
-                    </td>
+                      <p className="text-xs text-slate-500 mt-0.5">Placed on {new Date(o.created_at).toLocaleString()}</p>
+                    </div>
 
-                    <td className="p-4">
-                      <span className="bg-[#1A1A1A] text-[#FFF200] px-2 py-0.5 font-bold tracking-tighter">
-                        #{order.id.split('-')[0].toUpperCase()}
-                      </span>
-                      <button 
-                        onClick={() => setViewReceipt(order)}
-                        className="mt-2 text-[9px] bg-white border border-black px-2 py-1 flex items-center gap-1 hover:bg-gray-200 transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:shadow-none"
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => { setViewDocType("RECEIPT"); setViewReceipt(o); }}
+                        className="px-3 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5"
                       >
-                        <Printer size={10} /> View Receipt
+                        <FileText size={14} /> Receipt
                       </button>
-                    </td>
+                      <button
+                        onClick={() => { setViewDocType("QUOTATION"); setViewReceipt(o); }}
+                        className="px-3 py-1.5 bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                      >
+                        <FileText size={14} /> Quotation Copy
+                      </button>
+                      <button
+                        onClick={() => { setViewDocType("DELIVERY"); setViewReceipt(o); }}
+                        className="px-3 py-1.5 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                      >
+                        <Truck size={14} /> Delivery Receipt
+                      </button>
+                      <button
+                        onClick={() => { setViewDocType("INVOICE"); setViewReceipt(o); }}
+                        className="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                      >
+                        <Printer size={14} /> Sales Invoice
+                      </button>
 
-                    <td className="p-4 min-w-[200px]">
-                      <div className="flex flex-col gap-3">
-                        {order.items?.map((item, idx) => (
-                          <div key={idx} className="flex flex-col border-l-2 border-[#1A1A1A]/20 pl-2">
-                            <span className="font-black uppercase text-[10px] leading-tight text-[#1A1A1A] break-words">{item.name}</span>
-                            <span className="font-mono text-[9px] uppercase tracking-widest opacity-60">Qty: {item.quantity || 1} | ₱{item.price}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </td>
-
-                    <td className="p-4 font-black italic">
-                      {getOrderTotalQuantity(order)} QTY
-                    </td>
-
-                    <td className="p-4">
-                      <div className="flex flex-col gap-1">
-                        {order.delivery_type === 'DELIVERY' ? (
-                          <>
-                            <span className="bg-[#EC008C] text-white px-2 py-0.5 text-[9px] font-black tracking-widest uppercase w-fit inline-flex items-center gap-1">
-                              <Truck size={10} /> SHIPPING
-                            </span>
-                            {order.delivery_coordinates?.lat && (
-                              <button onClick={() => setViewMapOrder(order)} className="text-[#EC008C] hover:text-[#1A1A1A] font-mono text-[9px] font-black flex items-center gap-1 mt-1 text-left underline underline-offset-2">
-                                <MapPin size={10} /> VIEW_LOCATION
-                              </button>
-                            )}
-                          </>
-                        ) : (
-                          <span className="bg-[#00FFFF] text-[#1A1A1A] px-2 py-0.5 text-[9px] font-black tracking-widest uppercase w-fit inline-flex items-center gap-1">
-                            <Package size={10} /> PICK_UP
-                          </span>
-                        )}
-                      </div>
-                    </td>
-
-                    <td className="p-4">
-                      <div className="flex flex-col gap-1">
-                        {order.fulfillment_mode === 'ADVANCE' ? (
-                          <>
-                            <span className="bg-[#FFF200] text-[#1A1A1A] px-2 py-0.5 text-[9px] font-black tracking-widest uppercase w-fit">
-                              ADVANCE_ORDER
-                            </span>
-                            <span className="text-[9px] font-black uppercase opacity-70">
-                              {formatManilaDateTime(order.expected_fulfillment_at)}
-                            </span>
-                          </>
-                        ) : (
-                          <span className="bg-[#1A1A1A] text-[#00FFFF] px-2 py-0.5 text-[9px] font-black tracking-widest uppercase w-fit">
-                            NEED_NOW
-                          </span>
-                        )}
-                      </div>
-                    </td>
-
-                    <td className="p-4">
-                      <div className="flex flex-col gap-1">
-                        <span className="font-black text-[#1A1A1A] text-sm">Tot: ₱{Number(order.total).toFixed(2)}</span>
-                        <span className="font-mono text-[9px] uppercase text-[#EC008C] font-black tracking-widest">DP: ₱{Number(order.downpayment_amount || 0).toFixed(2)}</span>
-                        <span className="text-[9px] opacity-70 uppercase flex items-center gap-1 font-bold">
-                           <CreditCard size={8} /> Bal: ₱{Number(order.balance_amount || 0).toFixed(2)} ({order.payment_method})
-                        </span>
-                      </div>
-                    </td>
-
-                    <td className="p-4">
-                      {order.receipt_url ? (
-                        <button onClick={() => setViewDpReceipt(order.receipt_url)} className="inline-flex items-center gap-1 bg-[#1A1A1A] text-white px-2 py-1 hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all font-black text-[9px] uppercase">
-                          <Eye size={10} /> DP_Receipt
+                      {o.receipt_url && (
+                        <button
+                          onClick={() => setViewDpReceipt(o.receipt_url)}
+                          className="px-3 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                        >
+                          <Eye size={14} /> Payment Proof
                         </button>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-[#EC008C] font-black text-[9px] uppercase animate-pulse">
-                          <AlertCircle size={10} /> Unpaid_DP
-                        </span>
                       )}
-                    </td>
+                    </div>
+                  </div>
 
-                    <td className="p-4">
-                      <div className="flex flex-wrap gap-1 max-w-[120px]">
-                        {(order.design_files || []).length > 0 ? (
-                          order.design_files.map((df, i) => (
-                            <a key={i} href={df.url} target="_blank" rel="noopener noreferrer" className="bg-white border-2 border-[#1A1A1A] p-1 hover:bg-[#FFF200] transition-all">
-                              <ExternalLink size={12} />
-                            </a>
-                          ))
-                        ) : (
-                          <span className="text-[9px] opacity-30 uppercase font-bold">No_Files</span>
-                        )}
-                      </div>
-                    </td>
-
-                    <td className="p-4">
-                      {order.status === 'CANCELLED' ? (
-                        <div className="flex flex-col gap-2">
-                          <span className="bg-[#EC008C] text-white px-2 py-1 text-[9px] font-black tracking-widest uppercase w-fit">
-                            CANCELLED
-                          </span>
-                          {order.cancel_reason && (
-                            <div className="bg-red-50 border-2 border-red-300 px-3 py-2 max-w-[200px]">
-                              <p className="font-mono text-[8px] uppercase font-black text-red-600 mb-1">Reason:</p>
-                              <p className="font-mono text-[9px] italic text-red-800">{order.cancel_reason}</p>
+                  {/* Items List & Customer Details */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-xs">
+                    <div className="md:col-span-2 space-y-2">
+                      <p className="font-bold text-slate-400 uppercase tracking-wider text-[11px]">Items Ordered</p>
+                      {(o.items || []).map((it, idx) => (
+                        <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+                          <div className="flex justify-between items-center">
+                            <span><strong className="text-slate-900">{it.name}</strong> × {it.quantity || 1}</span>
+                            <span className="font-bold text-slate-900">₱{(Number(it.price) * (it.quantity || 1)).toFixed(2)}</span>
+                          </div>
+                          {it.selected_specs && (
+                            <div className="text-[11px] text-slate-600 bg-white p-2 rounded-lg border border-slate-200 space-y-0.5 font-medium">
+                              {it.selected_specs.size && <div>• Size: <span className="font-semibold text-slate-900">{it.selected_specs.size}</span></div>}
+                              {it.selected_specs.material && <div>• Material: <span className="font-semibold text-slate-900">{it.selected_specs.material}</span></div>}
+                              {it.selected_specs.quality && <div>• Quality: <span className="font-semibold text-slate-900">{it.selected_specs.quality}</span></div>}
+                              {it.selected_specs.notes && <div className="text-amber-800 italic">"Notes: {it.selected_specs.notes}"</div>}
                             </div>
                           )}
-                          <button
-                            onClick={() => openRefundModal(order.id)}
-                            className="bg-[#FFF200] text-[#1A1A1A] border-2 border-[#1A1A1A] px-3 py-2 font-black text-[9px] uppercase hover:bg-[#00FFFF] transition-all shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] active:shadow-none flex items-center gap-1 w-fit"
-                          >
-                            ✓ MARK AS REFUNDED
-                          </button>
                         </div>
-                      ) : order.status === 'REFUNDED' ? (
-                        <div className="flex flex-col gap-2">
-                          <span className="bg-[#00FFFF] text-[#1A1A1A] px-2 py-1 text-[9px] font-black tracking-widest uppercase w-fit">
-                            ✓ REFUNDED
-                          </span>
-                          <span className="font-mono text-[8px] uppercase opacity-50">Awaiting customer confirmation</span>
-                          {order.refund_receipt_url && (
-                            <button onClick={() => setViewRefundProof(order.refund_receipt_url)} className="mt-1 inline-flex items-center gap-1 text-[9px] font-black text-[#EC008C] hover:underline uppercase w-fit text-left">
-                              <Eye size={10} /> View Proof
-                            </button>
-                          )}
-                        </div>
-                      ) : order.status === 'REFUND_CONFIRMED' ? (
-                        <div className="flex flex-col gap-2">
-                          <span className="bg-[#FFF200] text-[#1A1A1A] px-2 py-1 text-[9px] font-black tracking-widest uppercase w-fit">
-                            ✓ REFUND CONFIRMED
-                          </span>
-                          <span className="font-mono text-[8px] uppercase opacity-50">Customer acknowledged</span>
-                          {order.refund_receipt_url && (
-                            <button onClick={() => setViewRefundProof(order.refund_receipt_url)} className="mt-1 inline-flex items-center gap-1 text-[9px] font-black text-[#EC008C] hover:underline uppercase w-fit text-left">
-                              <Eye size={10} /> View Proof
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="flex flex-col gap-2">
-                          {/* When PENDING: only PLACED and CANCELLED are clickable */}
-                          {([
-                            { value: 'PLACED',          label: 'PLACED',    color: 'bg-white border-[#1A1A1A] hover:bg-[#00FFFF]' },
-                            { value: 'PREPARING',       label: 'PREPARING', color: 'bg-[#FFF200] border-[#1A1A1A] hover:bg-[#00FFFF]' },
-                            { value: 'READY_TO_PICK_UP',label: 'READY',     color: 'bg-[#00FFFF] border-[#1A1A1A] hover:bg-[#FFF200]' },
-                            { value: 'RIDER_ON_THE_WAY',label: 'TRANSIT',   color: 'bg-[#EC008C] text-white border-[#1A1A1A] hover:bg-[#FFF200] hover:text-[#1A1A1A]' },
-                            { value: 'COMPLETED',       label: 'COMPLETE',  color: 'bg-[#1A1A1A] text-[#00FFFF] border-[#1A1A1A] hover:bg-[#00FFFF] hover:text-[#1A1A1A]' },
-                          ]).map(({ value, label, color }) => {
-                            const isActive = order.status === value;
-                            const isPending = order.status === 'PENDING';
-                            // When PENDING, only PLACED is allowed (not the rest)
-                            const isDisabled = isPending && value !== 'PLACED';
-                            return (
-                              <button
-                                key={value}
-                                disabled={isActive || isDisabled}
-                                onClick={() => updateStatus(order.id, value)}
-                                className={`border-2 px-3 py-1.5 font-black text-[9px] uppercase tracking-widest transition-all ${
-                                  isActive
-                                    ? `${color} shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] cursor-default`
-                                    : isDisabled
-                                    ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed opacity-40'
-                                    : `${color} shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] active:shadow-none cursor-pointer`
-                                }`}
-                              >
-                                {isActive ? `✓ ${label}` : label}
-                              </button>
-                            );
-                          })}
-                          {/* CANCEL button — always available unless already a terminal state */}
-                          <button
-                            onClick={() => openOwnerCancelModal(order.id)}
-                            className="border-2 border-[#EC008C] text-[#EC008C] px-3 py-1.5 font-black text-[9px] uppercase hover:bg-[#EC008C] hover:text-white transition-all shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] active:shadow-none w-fit"
-                          >
-                            CANCEL
-                          </button>
-                        </div>
+                      ))}
+                    </div>
+
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
+                      <p className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">Total & Balance</p>
+                      <div className="flex justify-between text-slate-600">
+                        <span>Total:</span>
+                        <span className="font-bold text-slate-900">₱{Number(o.total).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>Downpayment:</span>
+                        <span className="font-bold text-emerald-600">₱{Number(o.downpayment_amount || 0).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600 pt-1 border-t border-slate-200">
+                        <span>Balance:</span>
+                        <span className="font-bold text-slate-900">₱{Number(o.balance_amount || 0).toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Status Actions */}
+                  <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-500">Update Status:</span>
+                      {o.status === "PLACED" && (
+                        <button
+                          onClick={() => handleUpdateStatus(o.id, "PREPARING")}
+                          className="px-3.5 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-colors"
+                        >
+                          Start Production
+                        </button>
                       )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                      {o.status === "PREPARING" && (
+                        <button
+                          onClick={() => handleUpdateStatus(o.id, "READY_TO_PICK_UP")}
+                          className="px-3.5 py-1.5 bg-cyan-600 text-white rounded-xl text-xs font-bold hover:bg-cyan-700 transition-colors"
+                        >
+                          Mark Ready for Pickup
+                        </button>
+                      )}
+                      {(o.status === "READY_TO_PICK_UP" || o.status === "PREPARING") && (
+                        <button
+                          onClick={() => handleUpdateStatus(o.id, "COMPLETED")}
+                          className="px-3.5 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-colors"
+                        >
+                          Mark Complete
+                        </button>
+                      )}
+                    </div>
 
-      {/* ── FOOTER ── */}
-      <div className="mt-6 flex justify-between items-center font-mono text-[9px] uppercase opacity-40">
-        <div className="flex gap-4">
-          <span>Log: Verified</span>
-          <span>Access: Business_Owner</span>
-        </div>
-        <span>Total_Orders: {orders.length}</span>
-      </div>
-      </section>
+                    {["PLACED", "PREPARING"].includes(o.status) && (
+                      <button
+                        onClick={() => setCancelModal({ orderId: o.id })}
+                        className="px-3 py-1.5 border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold"
+                      >
+                        Cancel Order
+                      </button>
+                    )}
+                  </div>
 
-      {/* ── MAP MODAL ── */}
-      {viewMapOrder && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-[#1A1A1A]/90 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white border-4 border-[#1A1A1A] p-6 shadow-[12px_12px_0px_0px_rgba(0,255,255,1)] max-w-2xl w-full relative">
-            <button 
-              onClick={() => setViewMapOrder(null)}
-              className="absolute top-4 right-4 text-[#1A1A1A] hover:text-[#EC008C] transition-colors"
-            >
-              <X size={24} />
-            </button>
-            <h2 className="text-2xl font-black uppercase italic tracking-tighter flex items-center gap-2 mb-2">
-              <MapPin className="text-[#EC008C]" /> Location_Intel
-            </h2>
-            <div className="font-mono text-[10px] uppercase font-bold tracking-widest bg-gray-100 p-2 border-2 border-[#1A1A1A] mb-6">
-               <span className="opacity-40">Destination // </span>
-               <span>{viewMapOrder.delivery_address || 'UNSPECIFIED'}</span>
-            </div>
-            
-            {viewMapOrder.delivery_coordinates?.lat && (
-              <div className="border-4 border-[#1A1A1A] h-[300px] overflow-hidden pointer-events-none relative">
-                <LocationPicker 
-                  lat={viewMapOrder.delivery_coordinates.lat} 
-                  lng={viewMapOrder.delivery_coordinates.lng} 
-                />
-              </div>
-            )}
-            
-            <a 
-              href={`https://www.google.com/maps/search/?api=1&query=${viewMapOrder.delivery_coordinates?.lat},${viewMapOrder.delivery_coordinates?.lng}`} 
-              target="_blank" 
-              rel="noopener noreferrer" 
-              className="block w-full bg-[#1A1A1A] text-white text-center py-4 mt-6 font-mono text-[10px] font-black uppercase tracking-widest hover:bg-[#EC008C] transition-colors"
-            >
-              OPEN_IN_MAPS
-            </a>
-          </div>
-        </div>
-      )}
-
-      {/* ── OWNER CANCELLATION REASON MODAL ── */}
-      {cancelModal && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(236,0,140,1)]">
-            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
-              <div className="flex items-center gap-3">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 bg-[#00FFFF]" />
-                  <div className="w-2 h-2 bg-[#EC008C]" />
-                  <div className="w-2 h-2 bg-[#FFF200]" />
                 </div>
-                <span className="font-black uppercase italic tracking-widest">Cancel_Order</span>
-              </div>
-              <button onClick={() => setCancelModal(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
-                <X size={20} />
-              </button>
+              ))}
             </div>
-            <div className="p-6">
-              <p className="font-mono text-[10px] uppercase tracking-widest text-gray-500 font-black mb-1">Cancellation Reason</p>
-              <p className="text-sm font-bold text-gray-700 mb-4">Provide a reason for cancelling this order. The customer will see this.</p>
-              <div className="space-y-3">
-                {[
-                  "Customer requested cancellation",
-                  "Out of stock / materials unavailable",
-                  "Unable to fulfill by deadline",
-                  "Payment not received",
-                  "Other",
-                ].map((preset) => (
-                  <button
-                    key={preset}
-                    onClick={() => setCancelReason(preset)}
-                    className={`w-full text-left px-4 py-3 border-2 font-mono text-[10px] uppercase font-black tracking-wider transition-all ${
-                      cancelReason === preset
-                        ? "border-[#EC008C] bg-[#EC008C] text-white"
-                        : "border-[#1A1A1A] bg-white hover:bg-[#FFF200] text-[#1A1A1A]"
-                    }`}
-                  >
-                    {cancelReason === preset ? "✓ " : ""}{preset}
-                  </button>
-                ))}
-                <textarea
-                  value={cancelReason}
-                  onChange={(e) => setCancelReason(e.target.value)}
-                  placeholder="Or type your own reason..."
-                  rows={2}
-                  className="w-full border-2 border-[#1A1A1A] px-4 py-3 font-mono text-[10px] uppercase focus:outline-none focus:ring-4 ring-[#00FFFF]/30 bg-[#F9F9F7] resize-none"
-                />
-              </div>
-              <div className="flex gap-3 mt-6">
-                <button
-                  onClick={() => setCancelModal(null)}
-                  className="flex-1 border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#1A1A1A] hover:text-white transition-all"
-                >
-                  Go Back
-                </button>
-                <button
-                  onClick={confirmOwnerCancel}
-                  disabled={!cancelReason.trim() || cancelling}
-                  className="flex-1 bg-[#EC008C] text-white border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#1A1A1A] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:shadow-none"
-                >
-                  {cancelling ? "Cancelling..." : "Confirm Cancel"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+          )}
+        </section>
 
-      {/* ── RECEIPT MODAL ── */}
-      {viewReceipt && (
-        <ReceiptModal 
-          order={viewReceipt} 
-          onClose={() => setViewReceipt(null)} 
-          isOwner={true} 
-        />
-      )}
-
-      {/* ── REFUND PROOF MODAL ── */}
-      {refundModal && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(236,0,140,1)]">
-            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
-              <div className="flex items-center gap-3">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 bg-[#00FFFF]" />
-                  <div className="w-2 h-2 bg-[#EC008C]" />
-                  <div className="w-2 h-2 bg-[#FFF200]" />
-                </div>
-                <span className="font-black uppercase italic tracking-widest">Process_Refund</span>
-              </div>
-              <button onClick={() => setRefundModal(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6">
-              <p className="font-mono text-[10px] uppercase tracking-widest text-gray-500 font-black mb-1">Proof of Refund</p>
-              <p className="text-sm font-bold text-gray-700 mb-4">Please upload an image (e.g., GCash/Bank receipt) showing the refund transfer.</p>
-              <div className="space-y-3">
-                <label className="block w-full border-2 border-dashed border-[#1A1A1A] px-4 py-8 text-center cursor-pointer hover:bg-[#00FFFF]/10 transition-colors">
-                  <Upload size={24} className="mx-auto mb-2 text-[#1A1A1A]" />
-                  <span className="font-mono text-[10px] uppercase font-black text-[#1A1A1A]">
-                    {refundFile ? refundFile.name : "CLICK TO UPLOAD IMAGE"}
-                  </span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => setRefundFile(e.target.files[0])}
-                  />
-                </label>
-              </div>
-              <div className="flex gap-3 mt-6">
-                <button
-                  onClick={() => setRefundModal(null)}
-                  className="flex-1 border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#1A1A1A] hover:text-white transition-all"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmRefund}
-                  disabled={!refundFile || uploadingRefund}
-                  className="flex-1 bg-[#00FFFF] text-[#1A1A1A] border-2 border-[#1A1A1A] py-3 font-black uppercase text-[10px] hover:bg-[#FFF200] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] active:shadow-none"
-                >
-                  {uploadingRefund ? "UPLOADING..." : "SUBMIT PROOF"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── VIEW REFUND PROOF MODAL ── */}
-      {viewRefundProof && (
-        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)]">
-            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
-              <div className="flex items-center gap-3">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 bg-[#00FFFF]" />
-                  <div className="w-2 h-2 bg-[#EC008C]" />
-                  <div className="w-2 h-2 bg-[#FFF200]" />
-                </div>
-                <span className="font-black uppercase italic tracking-widest">Refund_Proof</span>
-              </div>
-              <button onClick={() => setViewRefundProof(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6 bg-gray-100 flex items-center justify-center min-h-[300px]">
-              <img 
-                src={viewRefundProof} 
-                alt="Refund Proof" 
-                className="max-w-full max-h-[70vh] object-contain border-4 border-[#1A1A1A]"
-              />
-            </div>
-            <div className="p-6 border-t-4 border-[#1A1A1A] flex justify-end">
-              <button
-                onClick={() => setViewRefundProof(null)}
-                className="bg-[#1A1A1A] text-white px-6 py-3 font-black uppercase text-[10px] hover:bg-[#EC008C] transition-all shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] active:shadow-none"
-              >
-                CLOSE_VIEWER
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── VIEW DP RECEIPT MODAL ── */}
-      {viewDpReceipt && (
-        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)]">
-            <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
-              <div className="flex items-center gap-3">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 bg-[#00FFFF]" />
-                  <div className="w-2 h-2 bg-[#EC008C]" />
-                  <div className="w-2 h-2 bg-[#FFF200]" />
-                </div>
-                <span className="font-black uppercase italic tracking-widest">DP_Receipt</span>
-              </div>
-              <button onClick={() => setViewDpReceipt(null)} className="p-1 hover:bg-[#EC008C] transition-colors">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6 bg-gray-100 flex items-center justify-center min-h-[300px]">
-              <img 
-                src={viewDpReceipt} 
-                alt="DP Receipt" 
-                className="max-w-full max-h-[70vh] object-contain border-4 border-[#1A1A1A]"
-              />
-            </div>
-            <div className="p-6 border-t-4 border-[#1A1A1A] flex justify-end">
-              <button
-                onClick={() => setViewDpReceipt(null)}
-                className="bg-[#1A1A1A] text-white px-6 py-3 font-black uppercase text-[10px] hover:bg-[#EC008C] transition-all shadow-[4px_4px_0px_0px_rgba(0,255,255,1)] active:shadow-none"
-              >
-                CLOSE_VIEWER
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </main>
+      </main>
+    </>
   );
 }

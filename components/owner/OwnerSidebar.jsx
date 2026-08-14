@@ -17,13 +17,13 @@ import {
 } from "lucide-react";
 
 const NAV_ITEMS = [
-  { href: "/owner",           label: "Overview",   icon: BarChart2,     color: "hover:bg-[#00FFFF]",  badge: null },
-  { href: "/owner/shop",      label: "My Shop",    icon: Store,         color: "hover:bg-[#EC008C]",  badge: null },
-  { href: "/owner/services",  label: "Services",   icon: Layers,        color: "hover:bg-[#FFF200]",  badge: null },
-  { href: "/owner/orders",    label: "Orders",     icon: ShoppingBag,   color: "hover:bg-[#00FFFF]",  badge: "orders" },
-  { href: "/owner/messages",  label: "Messages",   icon: MessageSquare, color: "hover:bg-[#EC008C]",  badge: "messages" },
-  { href: "/owner/reviews",   label: "Reviews",    icon: Star,          color: "hover:bg-[#FFF200]",  badge: null },
-  { href: "/owner/documents", label: "Documents",  icon: FileText,      color: "hover:bg-[#00FFFF]",  badge: null },
+  { href: "/owner",           label: "Overview",   icon: BarChart2,     badge: null },
+  { href: "/owner/shop",      label: "My Shop",    icon: Store,         badge: null },
+  { href: "/owner/services",  label: "Services",   icon: Layers,        badge: null },
+  { href: "/owner/orders",    label: "Orders",     icon: ShoppingBag,   badge: "orders" },
+  { href: "/owner/messages",  label: "Messages",   icon: MessageSquare, badge: "messages" },
+  { href: "/owner/reviews",   label: "Reviews",    icon: Star,          badge: null },
+  { href: "/owner/documents", label: "Documents",  icon: FileText,      badge: null },
 ];
 
 export default function OwnerSidebar({ businessName, isOpen, onToggle, isVerified = true, pendingOrders = 0, unreadMessages = 0 }) {
@@ -37,28 +37,32 @@ export default function OwnerSidebar({ businessName, isOpen, onToggle, isVerifie
 
   return (
     <aside
-      className={`relative h-screen bg-[#FDFDFD] border-r-8 border-[#1A1A1A] transition-all duration-300 ease-in-out flex flex-col z-50
-        ${isOpen ? "w-72" : "w-24"}`}
+      className={`relative h-screen bg-slate-900 text-white border-r border-slate-800 transition-all duration-300 ease-in-out flex flex-col z-50
+        ${isOpen ? "w-64" : "w-20"}`}
     >
-      {/* Neo-Brutalist Arrow Toggle */}
+      <div className="cmyk-bar" />
+
+      {/* Toggle Arrow */}
       <button
         onClick={onToggle}
-        className="absolute -right-7 top-12 z-50 flex h-12 w-12 items-center justify-center border-4 border-[#1A1A1A] bg-white text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all"
+        className="absolute -right-3.5 top-12 z-50 flex h-7 w-7 items-center justify-center rounded-full border border-slate-700 bg-slate-800 text-white shadow-md hover:bg-slate-700 transition-all"
       >
-        {isOpen ? <ChevronLeft size={24} strokeWidth={3} /> : <ChevronRight size={24} strokeWidth={3} />}
+        {isOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
       </button>
 
-      {/* Brand Section */}
-      <div className="p-6 mb-8">
-        <div className="flex items-center gap-4">
-          <div className="flex-shrink-0 flex h-12 w-12 items-center justify-center border-4 border-[#1A1A1A] bg-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]">
-            <Printer size={24} />
+      {/* Brand Header */}
+      <div className="p-5 mb-4 border-b border-slate-800">
+        <div className="flex items-center gap-3">
+          <div className="flex-shrink-0 flex h-10 w-10 items-center justify-center rounded-xl bg-white text-slate-950 font-black text-sm">
+            <span className="text-[#00E5FF]">P</span>
+            <span className="text-[#EC008C]">-</span>
+            <span className="text-[#EAB308]">P</span>
           </div>
           {isOpen && (
             <div className="min-w-0 flex-1">
-              <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#EC008C]">Console_v1.0</p>
-              <p className="truncate font-black text-xl uppercase tracking-tighter text-[#1A1A1A] italic">
-                {businessName || "My Business"}
+              <p className="text-[10px] font-semibold text-slate-400">Shop Dashboard</p>
+              <p className="truncate font-bold text-sm text-white">
+                {businessName || "My Shop"}
               </p>
             </div>
           )}
@@ -66,8 +70,8 @@ export default function OwnerSidebar({ businessName, isOpen, onToggle, isVerifie
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-4 space-y-4">
-        {NAV_ITEMS.map(({ href, label, icon: Icon, color, badge: badgeKey }) => {
+      <nav className="flex-1 px-3 space-y-1">
+        {NAV_ITEMS.map(({ href, label, icon: Icon, badge: badgeKey }) => {
           const isLocked = !isVerified && href !== "/owner" && href !== "/owner/documents";
           const isActive = href === "/owner" ? pathname === "/owner" : pathname.startsWith(href);
           const count = badgeKey ? getBadgeCount(badgeKey) : 0;
@@ -76,49 +80,43 @@ export default function OwnerSidebar({ businessName, isOpen, onToggle, isVerifie
             <Link
               key={href}
               href={href}
-              className={`relative flex items-center justify-between p-3 border-4 transition-all group min-w-0
+              className={`relative flex items-center justify-between px-3.5 py-2.5 rounded-xl transition-all group text-xs font-semibold
                 ${isActive
-                  ? "border-[#1A1A1A] bg-[#1A1A1A] text-white shadow-[6px_6px_0px_0px_rgba(236,0,140,1)] translate-x-[-2px] translate-y-[-2px]"
-                  : `border-transparent text-[#1A1A1A] ${color} hover:border-[#1A1A1A] hover:shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]`
+                  ? "bg-slate-800 text-white font-bold"
+                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
                 }
-                ${isLocked ? "opacity-70" : ""}`}
+                ${isLocked ? "opacity-60" : ""}`}
             >
-              <div className="relative flex items-center gap-4">
-                {/* Icon with badge */}
+              <div className="flex items-center gap-3">
                 <div className="relative flex-shrink-0">
-                  <Icon size={24} strokeWidth={isActive ? 3 : 2} />
-                  {count > 0 && (
-                    <span className="absolute -top-2 -right-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#EC008C] border-2 border-white text-white font-black text-[9px] leading-none px-1 shadow-sm">
+                  <Icon size={18} className={isActive ? "text-[#00FFFF]" : ""} />
+                  {count > 0 && !isOpen && (
+                    <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-[#EC008C] text-white text-[9px] font-bold">
                       {count > 99 ? "99+" : count}
                     </span>
                   )}
                 </div>
 
-                {/* Label */}
-                <span
-                  className={`font-black uppercase tracking-tighter text-lg whitespace-nowrap overflow-hidden transition-all duration-200 ${
-                    isOpen ? "max-w-[150px] opacity-100" : "max-w-0 opacity-0"
-                  }`}
-                >
-                  {label}
-                </span>
+                {isOpen && (
+                  <span className="truncate">
+                    {label}
+                  </span>
+                )}
               </div>
 
+              {isOpen && count > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-[#EC008C] text-white text-[10px] font-bold">
+                  {count}
+                </span>
+              )}
+
               {isLocked && isOpen && (
-                <Lock size={16} strokeWidth={3} className="text-[#EC008C]" />
+                <Lock size={14} className="text-amber-400" />
               )}
             </Link>
           );
         })}
       </nav>
-
-      {/* Bottom CMYK Decorative Strip */}
-      <div className="flex h-4 w-full border-t-4 border-[#1A1A1A]">
-        <div className="flex-1 bg-[#00FFFF]" />
-        <div className="flex-1 bg-[#EC008C]" />
-        <div className="flex-1 bg-[#FFF200]" />
-        <div className="flex-1 bg-[#1A1A1A]" />
-      </div>
     </aside>
   );
 }

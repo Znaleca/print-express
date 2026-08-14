@@ -3,15 +3,15 @@
 import { useState, useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Search, Star, Loader2, Map as MapIcon, ChevronRight, Printer, Store } from "lucide-react";
+import { Search, Star, Loader2, Map as MapIcon, ChevronRight, Printer, Store, MapPin, SlidersHorizontal, Navigation } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
 const MapComponent = dynamic(() => import("@/components/MapComponent"), {
   ssr: false,
   loading: () => (
-    <div className="w-full h-full flex flex-col items-center justify-center bg-[#1A1A1A] text-[#00FFFF] font-mono animate-pulse">
-      <Loader2 className="animate-spin mb-4" size={40} />
-      <p className="uppercase tracking-[0.3em] text-xs font-black">Initialising_CMYK_Map_Engine...</p>
+    <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900 text-[#00FFFF] font-sans animate-pulse">
+      <Loader2 className="animate-spin mb-4" size={36} />
+      <p className="tracking-wider text-xs font-semibold uppercase">Loading Map View...</p>
     </div>
   ),
 });
@@ -35,7 +35,6 @@ export default function BrowsePage() {
         });
       },
       () => {
-        // Location is optional. Recommendations will still work with other metrics.
         setUserLocation(null);
       },
       { enableHighAccuracy: true, timeout: 7000 }
@@ -53,6 +52,17 @@ export default function BrowsePage() {
     return 2 * R * Math.asin(Math.sqrt(a));
   };
 
+  const estimateTravelMinutes = (distanceKm) => {
+    if (distanceKm == null) return null;
+    return Math.max(1, Math.round(distanceKm * 2.5));
+  };
+
+  const buildRouteUrl = (shop) => {
+    if (!Number.isFinite(shop.lat) || !Number.isFinite(shop.lng)) return null;
+    const origin = userLocation ? `&origin=${userLocation.lat},${userLocation.lng}` : "";
+    return `https://www.google.com/maps/dir/?api=1${origin}&destination=${shop.lat},${shop.lng}`;
+  };
+
   useEffect(() => {
     async function loadBusinesses() {
       const { data: bizData, error: bizError } = await supabase
@@ -63,8 +73,7 @@ export default function BrowsePage() {
           business_reviews ( rating )
         `)
         .eq("status", "APPROVED")
-        .not("lat", "is", null)
-        .not("lng", "is", null);
+        .order("created_at", { ascending: false });
 
       if (bizError) {
         console.error("Error loading businesses:", bizError);
@@ -84,10 +93,10 @@ export default function BrowsePage() {
 
         return {
           id: b.id,
-          name: b.name || "UNNAMED_UNIT",
-          address: b.address || "LOC_UNKNOWN",
-          lat: parseFloat(b.lat),
-          lng: parseFloat(b.lng),
+          name: b.name || "Print Shop",
+          address: b.address || "Location unavailable",
+          lat: b.lat == null ? null : parseFloat(b.lat),
+          lng: b.lng == null ? null : parseFloat(b.lng),
           logo_url: b.logo_url,
           is_open: b.is_open ?? true,
           rating: parseFloat(avgRating),
@@ -119,10 +128,11 @@ export default function BrowsePage() {
     if (filtered.length === 0) return [];
 
     const withDistance = filtered.map((b) => {
-      const distanceKm = userLocation
+      const hasCoordinates = Number.isFinite(b.lat) && Number.isFinite(b.lng);
+      const distanceKm = userLocation && hasCoordinates
         ? haversineKm(userLocation.lat, userLocation.lng, b.lat, b.lng)
         : null;
-      return { ...b, distanceKm };
+      return { ...b, distanceKm, travelMinutes: estimateTravelMinutes(distanceKm), hasCoordinates };
     });
 
     const maxReviews = Math.max(...withDistance.map((b) => b.reviewCount), 1);
@@ -139,8 +149,9 @@ export default function BrowsePage() {
       const distanceScore =
         b.distanceKm == null ? 0 : Math.max(0, 1 - b.distanceKm / maxDistance);
 
+      const openScore = b.is_open ? 0.05 : 0;
       const recommendationScore =
-        ratingScore * 0.4 + reviewScore * 0.25 + serviceScore * 0.2 + distanceScore * 0.15;
+        ratingScore * 0.35 + reviewScore * 0.22 + serviceScore * 0.18 + distanceScore * 0.2 + openScore;
 
       return {
         ...b,
@@ -148,7 +159,11 @@ export default function BrowsePage() {
       };
     });
 
-    return scored.sort((a, b) => b.recommendationScore - a.recommendationScore);
+    return scored.sort((a, b) => {
+      if (b.recommendationScore !== a.recommendationScore) return b.recommendationScore - a.recommendationScore;
+      if (b.rating !== a.rating) return b.rating - a.rating;
+      return a.name.localeCompare(b.name);
+    });
   }, [filtered, userLocation]);
 
   const displayedBusinesses = useMemo(() => {
@@ -158,160 +173,211 @@ export default function BrowsePage() {
       return list.sort((a, b) => {
         const da = a.distanceKm == null ? Number.POSITIVE_INFINITY : a.distanceKm;
         const db = b.distanceKm == null ? Number.POSITIVE_INFINITY : b.distanceKm;
-        return da - db;
+        if (da !== db) return da - db;
+        return a.name.localeCompare(b.name);
       });
     }
 
     if (sortMode === "most_reviews") {
-      return list.sort((a, b) => b.reviewCount - a.reviewCount);
+      return list.sort((a, b) => {
+        if (b.reviewCount !== a.reviewCount) return b.reviewCount - a.reviewCount;
+        if (b.rating !== a.rating) return b.rating - a.rating;
+        return a.name.localeCompare(b.name);
+      });
     }
 
     return list;
   }, [recommended, sortMode]);
 
+  const nearestBusiness = useMemo(() => {
+    const distanceReady = recommended.filter((b) => b.distanceKm != null);
+    if (distanceReady.length === 0) return null;
+    return [...distanceReady].sort((a, b) => a.distanceKm - b.distanceKm)[0];
+  }, [recommended]);
+  const nearestBusinessId = nearestBusiness?.id || null;
+
   return (
-    <div className="flex h-[calc(100vh-80px)] overflow-hidden bg-[#FDFDFD] font-sans">
-      {/* ── Sidebar: Dark Industrial ── */}
-      <aside className="w-[450px] shrink-0 flex flex-col bg-[#1A1A1A] text-white z-10 relative border-r-8 border-[#1A1A1A]">
+    <div className="flex flex-col lg:flex-row h-[calc(100vh-88px)] overflow-hidden bg-slate-50 font-sans">
+      
+      {/* Sidebar View */}
+      <aside className="w-full lg:w-[460px] shrink-0 flex flex-col bg-white border-r border-slate-200 z-10 relative shadow-md">
 
-        {/* Header - CMYK Accented */}
-        <div className="p-8 border-b-4 border-white/10 bg-[#1A1A1A] relative">
-          <div className="absolute top-0 left-0 w-full h-2 flex">
-            <div className="flex-1 bg-[#00FFFF]" />
-            <div className="flex-1 bg-[#EC008C]" />
-            <div className="flex-1 bg-[#FFF200]" />
-          </div>
+        {/* Top Filter Header */}
+        <div className="p-4 sm:p-5 border-b border-slate-200 bg-white relative">
+          <div className="cmyk-bar absolute top-0 left-0 right-0" />
 
-          <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center gap-3">
-              <Printer size={24} className="text-[#EC008C]" />
-              <h1 className="text-4xl font-black uppercase italic tracking-tighter leading-none">Find_Shops</h1>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center">
+                <Printer size={18} className="text-[#00FFFF]" />
+              </div>
+              <div>
+                <h1 className="text-lg font-bold text-slate-900 tracking-tight leading-none">Find Print Shops</h1>
+                <p className="text-[11px] text-slate-500 mt-0.5">{displayedBusinesses.length} registered verified shops available</p>
+              </div>
             </div>
           </div>
 
-          <div className="relative group">
-            <div className="absolute -inset-0.5 bg-[#00FFFF] opacity-20 group-focus-within:opacity-100 transition-opacity" />
-            <div className="relative flex items-center bg-[#2A2A2A] border-2 border-white/20">
-              <Search className="ml-4 text-[#00FFFF]" size={20} />
-              <input
-                type="text"
-                className="w-full bg-transparent px-4 py-4 text-white placeholder:text-white/20 focus:outline-none font-mono text-xs font-black uppercase tracking-widest"
-                placeholder="SEARCH_BY_SHOP_OR_ITEM..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
+          <div className="relative mb-3">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <input
+              type="text"
+              className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#EC008C] focus:border-transparent transition-all"
+              placeholder="Search by shop name, service, or area..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
 
-          <div className="mt-4 flex items-center gap-3">
-            <span className="font-mono text-[9px] uppercase tracking-[0.25em] text-white/50 font-black">Sort_By</span>
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-semibold text-slate-600 flex items-center gap-1">
+              <SlidersHorizontal size={12} /> Sort by:
+            </span>
             <select
               value={sortMode}
               onChange={(e) => setSortMode(e.target.value)}
-              className="bg-[#2A2A2A] border-2 border-white/20 px-3 py-2 font-mono text-[10px] uppercase tracking-widest font-black text-white focus:outline-none focus:border-[#00FFFF]"
+              className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00FFFF]"
             >
               <option value="recommended">Recommended</option>
-              <option value="nearest">Nearest</option>
+              <option value="nearest">Nearest to Me</option>
               <option value="most_reviews">Most Reviewed</option>
             </select>
           </div>
+          {nearestBusiness && (
+            <div className="mt-3 rounded-xl border border-[#FFF200] bg-[#FFF200]/20 px-3 py-2 text-xs text-slate-800">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-bold truncate">Nearest: {nearestBusiness.name}</span>
+                <span className="font-semibold shrink-0">{nearestBusiness.distanceKm.toFixed(1)} km | ~{nearestBusiness.travelMinutes} min</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Shop List Container */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#1A1A1A] scrollbar-thin scrollbar-thumb-white/20">
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50">
           {loading ? (
-            <div className="flex flex-col items-center justify-center h-64 font-mono uppercase text-[10px] tracking-[0.3em] text-[#00FFFF]">
-              <Loader2 className="animate-spin mb-4" size={40} />
-              <p>Syncing_Shop_Data...</p>
+            <div className="flex flex-col items-center justify-center h-64 text-xs font-semibold text-slate-500">
+              <Loader2 className="animate-spin mb-3 text-[#EC008C]" size={32} />
+              <p>Loading print shops...</p>
             </div>
           ) : displayedBusinesses.length === 0 ? (
-            <div className="p-10 border-4 border-dashed border-white/10 text-center font-mono text-xs uppercase opacity-40">
-              No active shops detected in sector.
+            <div className="p-8 rounded-2xl border border-dashed border-slate-300 bg-white text-center text-xs font-medium text-slate-500">
+              No print shops match your search criteria.
             </div>
           ) : (
-            displayedBusinesses.map((b, index) => {
+            displayedBusinesses.map((b) => {
               const isSelected = selectedId === b.id;
               return (
                 <div key={b.id} className="w-full">
                   <div
                     onClick={() => setSelectedId(b.id)}
-                    className={`w-full text-left p-6 border-4 transition-all relative group cursor-pointer ${
+                    className={`w-full text-left p-4 rounded-2xl border transition-all cursor-pointer relative group ${
                       isSelected
-                        ? "bg-white text-[#1A1A1A] border-[#00FFFF] shadow-[10px_10px_0px_0px_rgba(0,255,255,1)] -translate-x-1 -translate-y-1"
-                        : "bg-[#222222] border-white/10 hover:border-white/30"
-                    } ${!b.is_open ? "grayscale opacity-70" : ""}`}
+                        ? "bg-white border-[#EC008C] shadow-md ring-2 ring-[#EC008C]/20"
+                        : "bg-white border-slate-200 hover:border-slate-300 shadow-sm"
+                    } ${!b.is_open ? "opacity-75" : ""}`}
                   >
-                    <div className="flex flex-col gap-4">
-                      {/* Logo & Identity */}
-                      <div className="flex items-center gap-5">
-                        {b.logo_url ? (
-                          <div className="relative shrink-0">
-                            {isSelected && <div className="absolute -inset-1 bg-[#FFF200] -z-10 translate-x-1 translate-y-1" />}
-                            <img
-                              src={b.logo_url}
-                              alt={b.name}
-                              className={`w-16 h-16 object-cover border-4 transition-colors ${isSelected ? "border-[#1A1A1A]" : "border-white/20"}`}
-                            />
-                          </div>
-                        ) : (
-                          <div className={`w-16 h-16 flex items-center justify-center border-4 ${isSelected ? "bg-[#1A1A1A] text-white border-[#1A1A1A]" : "bg-white/5 border-white/10 text-white/20"} shrink-0`}>
-                            <Store size={24} />
-                          </div>
-                        )}
+                    <div className="flex items-start gap-4">
+                      {/* Logo */}
+                      {b.logo_url ? (
+                        <img
+                          src={b.logo_url}
+                          alt={b.name}
+                          className="w-14 h-14 object-cover rounded-xl border border-slate-200 shrink-0"
+                        />
+                      ) : (
+                        <div className="w-14 h-14 rounded-xl bg-slate-100 border border-slate-200 text-slate-400 flex items-center justify-center shrink-0">
+                          <Store size={22} />
+                        </div>
+                      )}
 
-                        <div className="flex flex-col">
-                          <span className={`font-mono text-[9px] uppercase font-black flex items-center gap-2 ${isSelected ? "text-[#EC008C]" : "text-white/40"}`}>
-                            ID_{b.id.split('-')[0]}
-                            {!b.is_open && (
-                              <span className="bg-[#1A1A1A] text-white px-1 py-0.5 border border-white/20">CLOSED</span>
-                            )}
-                          </span>
-                          <h2 className="text-3xl font-black uppercase italic leading-none tracking-tighter">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <h2 className="text-base font-bold text-slate-900 truncate group-hover:text-[#EC008C] transition-colors">
                             {b.name}
                           </h2>
+                          {!b.is_open ? (
+                            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-bold uppercase tracking-wider shrink-0">
+                              CLOSED
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase tracking-wider shrink-0">
+                              OPEN
+                            </span>
+                          )}
                         </div>
-                      </div>
 
-                      <div className={`font-mono text-[10px] uppercase tracking-tighter border-l-4 pl-3 py-1 ${isSelected ? "border-[#1A1A1A]/10 text-gray-500" : "border-white/10 text-white/40"}`}>
-                        {b.address}
-                      </div>
+                        <p className="text-xs text-slate-500 truncate flex items-center gap-1 mt-0.5">
+                          <MapPin size={12} className="shrink-0 text-slate-400" />
+                          <span>{b.address}</span>
+                        </p>
 
-                      <div className={`flex items-center justify-between border-t-2 pt-4 ${isSelected ? "border-[#1A1A1A]/10" : "border-white/5"}`}>
-                        <span className="flex items-center gap-1 font-black text-sm italic">
-                          <Star size={16} fill={isSelected ? "#1A1A1A" : "#FFF200"} className={isSelected ? "text-[#1A1A1A]" : "text-[#FFF200]"} />
-                          {b.rating.toFixed(1)}
-                        </span>
+                        <div className="flex items-center justify-between gap-3 mt-2 text-xs">
+                          <div className="flex items-center gap-1 font-bold text-slate-900">
+                            <Star size={14} className="fill-amber-400 text-amber-400" />
+                            <span>{b.rating.toFixed(1)}</span>
+                            <span className="text-slate-400 font-normal">({b.reviewCount})</span>
+                          </div>
 
-                        <div className="flex gap-1 flex-wrap justify-end">
+                          {b.distanceKm != null ? (
+                            <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-600">
+                              <span>{b.distanceKm.toFixed(1)} km away</span>
+                              <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-bold">
+                                ~{b.travelMinutes} min drive
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] font-semibold text-slate-400">
+                              No pinned map location
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Nearest Shop Badge & Open Route Action */}
+                        <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-slate-100">
+                          {b.id === nearestBusinessId ? (
+                            <span className="px-2 py-0.5 rounded-md bg-[#00FFFF]/20 text-slate-900 text-[10px] font-extrabold uppercase tracking-wider">
+                              Nearest Shop
+                            </span>
+                          ) : <span />}
+
+                          {buildRouteUrl(b) ? (
+                            <a
+                              href={buildRouteUrl(b)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-900 hover:text-[#EC008C] transition-colors"
+                            >
+                              <Navigation size={12} className="text-[#EC008C]" />
+                              Show Route
+                            </a>
+                          ) : (
+                            <span className="text-[11px] text-slate-400 font-semibold">Route unavailable</span>
+                          )}
+                        </div>
+
+                        {/* Service tags */}
+                        <div className="flex gap-1.5 flex-wrap mt-2.5">
                           {b.services.map((s, idx) => (
-                            <span key={idx} className={`font-mono text-[9px] px-2 py-0.5 border-2 uppercase font-black tracking-tighter ${isSelected ? "bg-[#FFF200] border-[#1A1A1A]" : "bg-white/5 border-white/10"
-                              }`}>
+                            <span key={idx} className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-medium">
                               {s}
                             </span>
                           ))}
                         </div>
-                      </div>
 
-                      <div className={`mt-2 grid grid-cols-2 gap-2 font-mono text-[9px] uppercase ${isSelected ? "text-[#1A1A1A]/70" : "text-white/50"}`}>
-                        <span>Reviews: {b.reviewCount}</span>
-                        <span>Items: {b.serviceCount}</span>
-                        <span>
-                          Distance: {b.distanceKm == null ? "--" : `${b.distanceKm.toFixed(1)} km`}
-                        </span>
-                        <span>{sortMode === "recommended" ? "Rec" : sortMode === "nearest" ? "Near" : "Rev"} Rank: #{index + 1}</span>
+                        {isSelected && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              router.push(`/business/${b.id}`);
+                            }}
+                            className="mt-3.5 w-full py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-[#EC008C] transition-all flex items-center justify-center gap-2 shadow-sm"
+                          >
+                            View Shop Details <ChevronRight size={14} />
+                          </button>
+                        )}
                       </div>
-
-                      {isSelected && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            router.push(`/business/${b.id}`);
-                          }}
-                          className="mt-4 w-full py-4 bg-[#1A1A1A] text-white font-black text-[11px] uppercase tracking-[0.2em] hover:bg-[#EC008C] transition-all flex items-center justify-center gap-3"
-                        >
-                          Visit_Shop <ChevronRight size={16} strokeWidth={3} />
-                        </button>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -319,30 +385,24 @@ export default function BrowsePage() {
             })
           )}
         </div>
-
-        {/* Sidebar Footer */}
-        <div className="p-6 border-t-4 border-white/10 bg-black flex justify-between items-center">
-          <div className="flex gap-2">
-            <div className="w-8 h-2 bg-[#00FFFF]" />
-            <div className="w-8 h-2 bg-[#EC008C]" />
-            <div className="w-8 h-2 bg-[#FFF200]" />
-          </div>
-          <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF]">
-            {displayedBusinesses.length}_Shops_Online
-          </span>
-        </div>
       </aside>
 
-      {/* ── Map ── */}
-      <div className="flex-1 relative border-l-8 border-[#1A1A1A] z-0 bg-[#E5E5E5]">
-        <MapComponent businesses={displayedBusinesses} selectedBusinessId={selectedId} />
+      {/* Map View */}
+      <div className="flex-1 relative z-0 bg-slate-200">
+        <MapComponent
+          businesses={displayedBusinesses}
+          selectedBusinessId={selectedId}
+          userLocation={userLocation}
+          nearestBusinessId={nearestBusinessId}
+        />
 
-        {/* Floating Sector Label */}
-        <div className="absolute top-8 right-8 z-10 bg-[#1A1A1A] text-white px-6 py-4 font-black italic uppercase tracking-widest text-sm flex items-center gap-4 border-4 border-[#00FFFF] shadow-[8px_8px_0px_0px_rgba(236,0,140,1)]">
-          <MapIcon size={20} className="text-[#00FFFF]" />
-          Sector_Grid_01
+        {/* Floating Header */}
+        <div className="absolute top-4 right-4 z-10 bg-white/95 backdrop-blur-md text-slate-900 px-4 py-2.5 rounded-xl border border-slate-200 shadow-lg text-xs font-semibold flex items-center gap-2">
+          <MapIcon size={16} className="text-[#00E5FF]" />
+          <span>Interactive Map | nearest route highlighted</span>
         </div>
       </div>
+
     </div>
   );
 }
