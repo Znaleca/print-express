@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { X, Save, Loader2, ImagePlus, ImageOff, Layers, Sparkles, Plus, Trash2, ShieldAlert, AlertCircle, Send, Calculator } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
 
 const CATEGORY_GROUPS = {
   "Core Printing Categories": [
@@ -86,7 +87,7 @@ const EMPTY_PRODUCT = {
   }
 };
 
-export default function ServiceFormModal({ mode, initialValues, onSave, onClose, forcedType, businessId }) {
+export default function ServiceFormModal({ mode, initialValues, onSave, onClose, forcedType, businessId, embedded = false }) {
   const defaultType = forcedType || initialValues?.item_type || "service";
 
   const [form, setForm] = useState(() => {
@@ -132,6 +133,9 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
   const [categoryRequestLoading, setCategoryRequestLoading] = useState(false);
   const [categoryNotice, setCategoryNotice] = useState(null);
   const [customSize, setCustomSize] = useState({ label: "", width: "", height: "", unit: "in", rate: "" });
+  const [customMaterial, setCustomMaterial] = useState({ label: "", modifier: "" });
+  const [customQuality, setCustomQuality] = useState({ label: "", modifier: "" });
+  const [showCategoryRequest, setShowCategoryRequest] = useState(false);
 
   const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
 
@@ -220,6 +224,55 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
     setError(null);
   };
 
+  const addCustomOption = (categoryKey, draft, resetDraft) => {
+    const label = draft.label.trim();
+    const modifier = Number.parseFloat(draft.modifier);
+    if (!label) {
+      setError("Enter a name for the custom option.");
+      return;
+    }
+    if (!Number.isFinite(modifier) || modifier < 0) {
+      setError("Enter a valid price modifier of 0 or higher.");
+      return;
+    }
+
+    setForm((f) => {
+      const current = f.specs?.[categoryKey] || [];
+      return {
+        ...f,
+        specs: {
+          ...(f.specs || {}),
+          [categoryKey]: current.includes(label) ? current : [...current, label],
+          price_modifiers: {
+            ...(f.specs?.price_modifiers || {}),
+            [label]: modifier,
+          },
+        },
+      };
+    });
+
+    resetDraft();
+    setError(null);
+  };
+
+  const removeOption = (categoryKey, optionName) => {
+    setForm((f) => {
+      const nextModifiers = { ...(f.specs?.price_modifiers || {}) };
+      delete nextModifiers[optionName];
+      return {
+        ...f,
+        specs: {
+          ...(f.specs || {}),
+          [categoryKey]: (f.specs?.[categoryKey] || []).filter((option) => option !== optionName),
+          price_modifiers: nextModifiers,
+          ...(categoryKey === "allowed_sizes" && f.specs?.default_size === optionName ? { default_size: "" } : {}),
+          ...(categoryKey === "allowed_materials" && f.specs?.default_material === optionName ? { default_material: "" } : {}),
+          ...(categoryKey === "quality_levels" && f.specs?.default_quality === optionName ? { default_quality: "" } : {}),
+        },
+      };
+    });
+  };
+
   const handleCategoryRequest = async () => {
     const categoryName = categoryRequestName.trim();
     if (!categoryName) {
@@ -256,9 +309,28 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
     }
   };
 
+  const handleImageSelected = async (file) => {
+    if (!file) return;
+    if (!file.type?.startsWith("image/")) {
+      setError("Choose a JPG, PNG, or WebP image.");
+      return;
+    }
+
+    try {
+      const optimized = await optimizeImageForUpload(file);
+      set("imageFile", optimized);
+      set("removeImage", false);
+      setImagePreview(URL.createObjectURL(optimized));
+      setError(null);
+    } catch (optimizationError) {
+      setError(optimizationError.message || "Could not optimize this image.");
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.name.trim()) return setError("Item name is required.");
+    if (!form.category) return setError("Please choose a category.");
     
     const parsedPrice = parseFloat(form.price);
     if (isNaN(parsedPrice) || parsedPrice < 0) {
@@ -271,12 +343,18 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
     try {
       let finalImageUrl = form.imageUrl;
       if (form.imageFile) {
-        const fileExt = form.imageFile.name.split(".").pop();
-        const filePath = `services/${Date.now()}_${Math.random().toString(36).substring(2)}.${fileExt}`;
-        const { error: uploadErr } = await supabase.storage.from("chat-images").upload(filePath, form.imageFile);
+        const { data: { user: currentUser } } = await supabase.auth.getUser();
+        if (!currentUser || !businessId) throw new Error("Your owner session expired. Please sign in again.");
+        const optimized = await optimizeImageForUpload(form.imageFile);
+        const fileExt = getUploadExtension(optimized);
+        const filePath = `services/${businessId}/${currentUser.id}-${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+        const { error: uploadErr } = await supabase.storage.from(IMAGE_BUCKET).upload(filePath, optimized, {
+          cacheControl: "31536000",
+          contentType: optimized.type,
+        });
         if (uploadErr) throw uploadErr;
 
-        const { data: { publicUrl } } = supabase.storage.from("chat-images").getPublicUrl(filePath);
+        const { data: { publicUrl } } = supabase.storage.from(IMAGE_BUCKET).getPublicUrl(filePath);
         finalImageUrl = publicUrl;
       }
 
@@ -323,21 +401,29 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
   ];
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-2xl w-full max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
-          <h2 className="font-bold text-base text-slate-900">
-            {mode === "create" ? `Add New ${isService ? "Service" : "Product"}` : `Edit ${isService ? "Service" : "Product"}`}
-          </h2>
-          <button onClick={onClose} className="p-1 rounded-lg text-slate-400 hover:text-slate-700"><X size={18} /></button>
-        </div>
+    <div className={embedded ? "w-full" : "dialog-overlay"} role={embedded ? undefined : "dialog"} aria-modal={embedded ? undefined : "true"} onClick={embedded ? undefined : onClose}>
+      <div className={embedded ? "w-full" : "dialog-surface max-w-2xl w-full max-h-[92vh] overflow-y-auto"} onClick={(e) => e.stopPropagation()}>
+        {!embedded && (
+          <div className="p-6 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
+            <h2 className="font-bold text-base text-slate-900">
+              {mode === "create" ? `Add New ${isService ? "Service" : "Product"}` : `Edit ${isService ? "Service" : "Product"}`}
+            </h2>
+            <button onClick={onClose} className="p-1 rounded-lg text-slate-400 hover:text-slate-700"><X size={18} /></button>
+          </div>
+        )}
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+        <form onSubmit={handleSubmit} className={`${embedded ? "p-6 sm:p-8 lg:p-10" : "p-6"} space-y-5`}>
           {error && (
             <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-semibold flex items-center gap-2">
               <AlertCircle size={16} /> {error}
             </div>
           )}
+
+          <div className="rounded-2xl border border-[#D8D6CE] bg-[#FCFCFA] px-4 py-3 text-xs font-semibold text-slate-600">
+            Complete the item details below, then save when everything is ready. Required fields are checked before saving.
+          </div>
+
+          <div className="space-y-5">
 
           {/* Item Type Switcher */}
           <div>
@@ -389,42 +475,103 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
               {FLAT_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
             <p className="mt-1 text-[11px] text-slate-500">Use an approved category. New categories need admin approval before they appear in the list.</p>
-            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3 space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs font-bold text-amber-900">Request a new category</p>
-                <ShieldAlert size={15} className="text-amber-600 shrink-0" />
-              </div>
-              {categoryNotice && (
-                <p className={`text-[11px] font-semibold ${categoryNotice.type === "error" ? "text-rose-700" : "text-emerald-700"}`}>
-                  {categoryNotice.message}
-                </p>
-              )}
-              <input
-                type="text"
-                value={categoryRequestName}
-                onChange={(e) => setCategoryRequestName(e.target.value)}
-                placeholder="e.g. Risograph Printing"
-                className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-medium outline-none"
-              />
-              <textarea
-                value={categoryRequestReason}
-                onChange={(e) => setCategoryRequestReason(e.target.value)}
-                rows={2}
-                placeholder="Describe what customers will upload or order under this category."
-                className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-medium outline-none"
-              />
-              <button
-                type="button"
-                onClick={handleCategoryRequest}
-                disabled={categoryRequestLoading}
-                className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-[#EC008C] disabled:opacity-50"
-              >
-                {categoryRequestLoading ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
-                Send for approval
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
+              <button type="button" onClick={() => setShowCategoryRequest((open) => !open)} className="flex w-full items-center justify-between gap-3 text-left">
+                <span>
+                  <span className="block text-xs font-bold text-amber-900">Need a new category?</span>
+                  <span className="mt-0.5 block text-[11px] text-amber-800/70">Request admin approval without leaving this page.</span>
+                </span>
+                <ShieldAlert size={15} className="shrink-0 text-amber-600" />
               </button>
+              {showCategoryRequest && (
+                <div className="mt-3 space-y-2 border-t border-amber-200 pt-3">
+                  {categoryNotice && (
+                    <p className={`text-[11px] font-semibold ${categoryNotice.type === "error" ? "text-rose-700" : "text-emerald-700"}`}>
+                      {categoryNotice.message}
+                    </p>
+                  )}
+                  <input
+                    type="text"
+                    value={categoryRequestName}
+                    onChange={(e) => setCategoryRequestName(e.target.value)}
+                    placeholder="e.g. Risograph Printing"
+                    className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium outline-none"
+                  />
+                  <textarea
+                    value={categoryRequestReason}
+                    onChange={(e) => setCategoryRequestReason(e.target.value)}
+                    rows={2}
+                    placeholder="Describe what customers will upload or order under this category."
+                    className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCategoryRequest}
+                    disabled={categoryRequestLoading}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-[#EC008C] disabled:opacity-50"
+                  >
+                    {categoryRequestLoading ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+                    Send for approval
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
+          <div>
+            <div className="mb-1.5 flex items-center justify-between gap-3">
+              <label className="block text-xs font-semibold text-slate-700">Item Image</label>
+              <span className="text-[10px] font-semibold text-slate-400">Auto-compressed · 5MB max</span>
+            </div>
+            <div className="flex flex-col gap-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center">
+              <div className="flex h-48 w-full shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white sm:h-44 sm:w-44">
+                {imagePreview ? (
+                  <img src={imagePreview} alt="Item preview" className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex flex-col items-center gap-2 text-slate-400">
+                    <ImageOff size={32} />
+                    <span className="text-[11px] font-semibold">No image yet</span>
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(event) => handleImageSelected(event.target.files?.[0])}
+                  className="w-full text-xs text-slate-500 file:mr-3 file:rounded-xl file:border-0 file:bg-slate-900 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white hover:file:bg-[#EC008C]"
+                />
+                {imagePreview && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      set("imageFile", null);
+                      set("imageUrl", null);
+                      set("removeImage", true);
+                      setImagePreview(null);
+                    }}
+                    className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 hover:text-rose-700"
+                  >
+                    <Trash2 size={12} /> Remove image
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Description</label>
+            <textarea
+              value={form.description}
+              onChange={(e) => set("description", e.target.value)}
+              rows={4}
+              placeholder="Describe paper finish, turnaround speed, or custom options..."
+              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium outline-none"
+            />
+          </div>
+            </div>
+
+          <div className="space-y-5 border-t border-[#D8D6CE] pt-6">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">{isService ? "Base Price (₱)" : "Selling Price (₱)"}</label>
@@ -483,6 +630,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
               </div>
             </div>
           )}
+            </div>
 
           {/* Printable Options & Spec Modifiers for Services */}
           {isService && (
@@ -584,6 +732,18 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
                   >
                     <Plus size={13} /> Add calculated size
                   </button>
+                  {(form.specs?.allowed_sizes || []).filter((size) => !SIZE_PRESETS.includes(size)).length > 0 && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {(form.specs?.allowed_sizes || []).filter((size) => !SIZE_PRESETS.includes(size)).map((size) => (
+                        <span key={size} className="inline-flex max-w-full items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-slate-700 ring-1 ring-cyan-200">
+                          <span className="truncate">{size}</span>
+                          <button type="button" onClick={() => removeOption("allowed_sizes", size)} className="text-slate-400 hover:text-rose-600" aria-label={`Remove ${size}`}>
+                            <Trash2 size={11} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -607,6 +767,43 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
                     );
                   })}
                 </div>
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_120px_auto]">
+                  <input
+                    type="text"
+                    value={customMaterial.label}
+                    onChange={(e) => setCustomMaterial((p) => ({ ...p, label: e.target.value }))}
+                    placeholder="Custom paper or material"
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-[#00FFFF]"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={customMaterial.modifier}
+                    onChange={(e) => setCustomMaterial((p) => ({ ...p, modifier: e.target.value }))}
+                    placeholder="+ PHP"
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-[#00FFFF]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => addCustomOption("allowed_materials", customMaterial, () => setCustomMaterial({ label: "", modifier: "" }))}
+                    className="inline-flex items-center justify-center gap-1 rounded-lg bg-[#1A1A1A] px-3 py-2 text-xs font-bold text-white hover:bg-[#EC008C]"
+                  >
+                    <Plus size={13} /> Add paper
+                  </button>
+                </div>
+                {(form.specs?.allowed_materials || []).filter((material) => !MATERIAL_PRESETS.includes(material)).length > 0 && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {(form.specs?.allowed_materials || []).filter((material) => !MATERIAL_PRESETS.includes(material)).map((material) => (
+                      <span key={material} className="inline-flex max-w-full items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-slate-700 ring-1 ring-cyan-200">
+                        <span className="truncate">{material}</span>
+                        <button type="button" onClick={() => removeOption("allowed_materials", material)} className="text-slate-400 hover:text-rose-600" aria-label={`Remove ${material}`}>
+                          <Trash2 size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Quality Levels */}
@@ -629,6 +826,43 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
                     );
                   })}
                 </div>
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_120px_auto]">
+                  <input
+                    type="text"
+                    value={customQuality.label}
+                    onChange={(e) => setCustomQuality((p) => ({ ...p, label: e.target.value }))}
+                    placeholder="Custom quality level"
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-[#00FFFF]"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={customQuality.modifier}
+                    onChange={(e) => setCustomQuality((p) => ({ ...p, modifier: e.target.value }))}
+                    placeholder="+ PHP"
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-[#00FFFF]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => addCustomOption("quality_levels", customQuality, () => setCustomQuality({ label: "", modifier: "" }))}
+                    className="inline-flex items-center justify-center gap-1 rounded-lg bg-[#1A1A1A] px-3 py-2 text-xs font-bold text-white hover:bg-[#EC008C]"
+                  >
+                    <Plus size={13} /> Add quality
+                  </button>
+                </div>
+                {(form.specs?.quality_levels || []).filter((quality) => !QUALITY_PRESETS.includes(quality)).length > 0 && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {(form.specs?.quality_levels || []).filter((quality) => !QUALITY_PRESETS.includes(quality)).map((quality) => (
+                      <span key={quality} className="inline-flex max-w-full items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-slate-700 ring-1 ring-cyan-200">
+                        <span className="truncate">{quality}</span>
+                        <button type="button" onClick={() => removeOption("quality_levels", quality)} className="text-slate-400 hover:text-rose-600" aria-label={`Remove ${quality}`}>
+                          <Trash2 size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-200">
@@ -671,10 +905,10 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
               {selectedAllOptions.length > 0 && (
                 <div className="pt-3 border-t border-slate-200 space-y-2">
                   <span className="text-[11px] font-bold text-slate-900 block">4. Option Price Modifiers (added to base price)</span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto pr-1">
+                  <div className="grid grid-cols-1 gap-2 pr-1 sm:grid-cols-2">
                     {selectedAllOptions.map((optName) => (
                       <div key={optName} className="p-2 rounded-lg bg-white border border-slate-200 flex items-center justify-between gap-2 text-xs">
-                        <span className="truncate font-semibold text-slate-800 text-[11px]">{optName}</span>
+                        <span className="min-w-0 break-words font-semibold text-slate-800 text-[11px]">{optName}</span>
                         <div className="flex items-center gap-1 shrink-0">
                           <span className="text-[10px] text-slate-400 font-bold">PHP</span>
                           <input
@@ -694,16 +928,13 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
             </div>
           )}
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Description</label>
-            <textarea
-              value={form.description}
-              onChange={(e) => set("description", e.target.value)}
-              rows={3}
-              placeholder="Describe paper finish, turnaround speed, or custom options..."
-              className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium outline-none"
-            />
-          </div>
+          {!isService && (
+            <div className="rounded-2xl border border-cyan-200 bg-cyan-50/60 p-6 text-center">
+              <Sparkles size={24} className="mx-auto text-[#00AEEF]" />
+              <h3 className="mt-3 text-sm font-black text-slate-900">Print options are for custom services</h3>
+              <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-600">Ready-made products use a fixed configuration. Stock and selling price are managed above.</p>
+            </div>
+          )}
 
           {error && (
             <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-semibold flex items-center gap-2">
@@ -711,13 +942,15 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
             </div>
           )}
 
-          <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-            <button type="button" onClick={onClose} className="px-5 py-2.5 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50">
-              Cancel
-            </button>
-            <button type="submit" disabled={saving} className="px-6 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-[#EC008C] transition-colors flex items-center gap-2">
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save Item Specs
-            </button>
+          <div className="sticky bottom-0 z-20 -mx-6 border-t border-slate-200 bg-white/95 px-6 py-4 backdrop-blur sm:-mx-8 sm:px-8 lg:-mx-10 lg:px-10">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+                <button type="button" onClick={onClose} className="hidden rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 sm:inline-flex">
+                  Cancel
+                </button>
+                <button type="submit" disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-bold text-white transition-colors hover:bg-[#EC008C] disabled:cursor-not-allowed disabled:opacity-50">
+                  {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save item
+                </button>
+            </div>
           </div>
         </form>
       </div>

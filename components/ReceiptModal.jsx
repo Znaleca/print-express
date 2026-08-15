@@ -49,8 +49,8 @@ export default function ReceiptModal({ order, onClose, isOwner, initialDocType =
         }
       `}</style>
 
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 no-print">
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md flex flex-col max-h-[92vh] overflow-hidden">
+      <div className="dialog-overlay no-print" role="dialog" aria-modal="true" aria-label="Print document generator">
+        <div className="dialog-surface w-full max-w-md flex flex-col max-h-[92vh] overflow-hidden">
           
           {/* Header */}
           <div className="flex justify-between items-center bg-slate-900 text-white px-5 py-3.5">

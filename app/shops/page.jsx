@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Search, Star, Loader2, Store, ChevronRight, MapPin, Printer, ShieldCheck } from "lucide-react";
+import Image from "next/image";
+import { Search, Star, Loader2, Store, ChevronRight, MapPin, ArrowRight } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function ShopsPage() {
@@ -16,25 +17,45 @@ export default function ShopsPage() {
       const { data: bizData, error: bizError } = await supabase
         .from("businesses")
         .select(`
-          id, name, address, logo_url, is_open,
-          services ( name, category, available ),
-          business_reviews ( rating )
+          id, name, address, lat, lng, logo_url, is_open,
+          services ( name, category, available )
         `)
         .eq("status", "APPROVED")
         .order("created_at", { ascending: false });
 
       if (bizError) {
-        console.error("Error loading businesses:", bizError);
+        console.error("Error loading businesses:", {
+          code: bizError.code,
+          message: bizError.message,
+          details: bizError.details,
+          hint: bizError.hint,
+        });
         setLoading(false);
         return;
       }
+
+      const { data: reviewData, error: reviewError } = await supabase
+        .from("business_reviews")
+        .select("business_id, rating");
+      if (reviewError) {
+        console.warn("Reviews are temporarily unavailable:", {
+          code: reviewError.code,
+          message: reviewError.message,
+          details: reviewError.details,
+          hint: reviewError.hint,
+        });
+      }
+      const reviewsByBusiness = (reviewData || []).reduce((map, review) => {
+        map[review.business_id] = [...(map[review.business_id] || []), review];
+        return map;
+      }, {});
 
       const formatted = (bizData || []).map((b) => {
         const availableServices = (b.services || [])
           .filter(s => s.available)
           .map(s => s.name);
 
-        const reviews = b.business_reviews || [];
+        const reviews = reviewsByBusiness[b.id] || [];
         const avgRating = reviews.length > 0
           ? (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1)
           : 5.0;
@@ -43,6 +64,8 @@ export default function ShopsPage() {
           id: b.id,
           name: b.name || "Print Shop",
           address: b.address || "Location unavailable",
+          lat: b.lat == null ? null : parseFloat(b.lat),
+          lng: b.lng == null ? null : parseFloat(b.lng),
           logo_url: b.logo_url,
           is_open: b.is_open ?? true,
           rating: parseFloat(avgRating),
@@ -58,132 +81,151 @@ export default function ShopsPage() {
     loadBusinesses();
   }, []);
 
-  const filtered = businesses.filter(
+  const mappedBusinesses = businesses.filter(
+    (b) => Number.isFinite(b.lat) && Number.isFinite(b.lng)
+  );
+
+  const filtered = mappedBusinesses.filter(
     (b) =>
-      b.name.toLowerCase().includes(search.toLowerCase()) ||
-      b.services.some((s) => s.toLowerCase().includes(search.toLowerCase())) ||
-      b.address.toLowerCase().includes(search.toLowerCase())
+      (
+        b.name.toLowerCase().includes(search.toLowerCase()) ||
+        b.services.some((s) => s.toLowerCase().includes(search.toLowerCase())) ||
+        b.address.toLowerCase().includes(search.toLowerCase())
+      )
   );
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-20">
-      
-      {/* Header Banner */}
-      <section className="bg-white border-b border-slate-200 py-8 px-4 sm:px-6 lg:px-8 relative">
-        <div className="cmyk-bar absolute top-0 left-0 right-0" />
-        <div className="max-w-[1600px] mx-auto">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 text-slate-800 text-xs font-semibold mb-3">
-            <ShieldCheck size={14} className="text-[#EC008C]" /> Verified Partner Directory
-          </div>
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
-            Print Shop Directory
-          </h1>
-          <p className="mt-1.5 text-sm text-slate-600 max-w-2xl">
-            Browse approved local print providers, explore available products and printing services, and place orders directly.
-          </p>
+    <main className="shops-page min-h-screen bg-[#F6F6F2] pb-20 font-sans text-[#1A1A1A]">
+      <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-10 pt-9 text-white sm:px-8 sm:pb-12 sm:pt-11 lg:px-12">
+        <div className="cmyk-bar absolute left-0 right-0 top-0" />
+        <div className="pointer-events-none absolute -right-20 -top-28 h-80 w-80 rounded-full border border-white/10" />
+        <div className="pointer-events-none absolute bottom-5 left-8 hidden h-24 w-24 rotate-12 border border-[#EC008C]/30 sm:block" />
 
-          {/* Search Bar */}
-          <div className="mt-5 max-w-2xl relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+        <div className="relative mx-auto w-full max-w-[1800px]">
+          <div className="max-w-3xl">
+            <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">
+              Print shops <span className="text-[#00FFFF]">near you.</span>
+            </h1>
+            <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/65 sm:text-base">
+              Compare verified local partners, browse their available services, and choose the right shop for your next print order.
+            </p>
+          </div>
+
+          <div className="relative mt-7 max-w-2xl">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/55" size={19} />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by shop name, service type, or address..."
-              className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all shadow-sm"
+              placeholder="Search shop, service, or area..."
+              aria-label="Search mapped print shops"
+              className="shops-search h-14 w-full rounded-full border border-white/25 bg-white/10 pl-12 pr-5 text-sm font-semibold text-white outline-none transition-all placeholder:text-white/45 focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/20 sm:text-base"
             />
           </div>
         </div>
       </section>
 
-      {/* Main Grid */}
-      <section className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+      <section className="mx-auto w-full max-w-[1800px] px-4 pt-8 sm:px-6 lg:px-8">
+        <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-[#EC008C]">Directory / mapped partners</p>
+            <h2 className="mt-1 text-2xl font-black tracking-tight sm:text-3xl">Choose your print shop.</h2>
+          </div>
+          <div className="flex items-center gap-2 text-xs font-bold text-[#676762]">
+            <MapPin size={14} className="text-[#EC008C]" />
+            {loading ? "Loading..." : `${filtered.length} shop${filtered.length === 1 ? "" : "s"} with map location`}
+          </div>
+        </div>
+
         {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 text-xs font-semibold text-slate-500">
-            <Loader2 className="animate-spin mb-3 text-[#EC008C]" size={36} />
-            <p>Loading directory of print shops...</p>
+          <div className="flex flex-col items-center justify-center rounded-3xl border border-[#D8D6CE] bg-white/60 py-24 text-xs font-bold text-[#676762]">
+            <Loader2 className="mb-3 animate-spin text-[#EC008C]" size={34} />
+            <p>Loading mapped print shops...</p>
           </div>
         ) : filtered.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-sm font-medium text-slate-500 max-w-md mx-auto">
-            No print shops matched your search query. Try resetting your search terms.
+          <div className="mx-auto max-w-lg rounded-3xl border border-dashed border-[#D8D6CE] bg-white/60 p-12 text-center">
+            <MapPin className="mx-auto mb-4 text-[#EC008C]" size={30} />
+            <h3 className="text-lg font-black">No mapped shops found</h3>
+            <p className="mt-2 text-sm leading-relaxed text-[#676762]">
+              Try another search, or check the browse map for verified partners with a saved location.
+            </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5">
-            {filtered.map((b) => (
-              <div
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+            {filtered.map((b, index) => (
+              <article
                 key={b.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => router.push(`/business/${b.id}`)}
-                className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all p-6 cursor-pointer flex flex-col justify-between group hover:-translate-y-1 relative overflow-hidden"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") router.push(`/business/${b.id}`);
+                }}
+                className="group relative flex h-auto min-h-0 cursor-pointer flex-col overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white shadow-sm transition-all hover:-translate-y-1 hover:border-[#EC008C]/50 hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-[#EC008C]/40"
               >
-                <div className="cmyk-bar-sm absolute top-0 left-0 right-0" />
+                <div className="cmyk-bar-sm absolute left-0 right-0 top-0" />
 
-                <div>
-                  {/* Shop Header */}
-                  <div className="flex items-start gap-4 mb-4">
-                    {b.logo_url ? (
-                      <img
-                        src={b.logo_url}
-                        alt={b.name}
-                        className="w-14 h-14 object-cover rounded-xl border border-slate-200 shrink-0"
-                      />
-                    ) : (
-                      <div className="w-14 h-14 rounded-xl bg-slate-100 border border-slate-200 text-slate-400 flex items-center justify-center shrink-0">
-                        <Store size={22} />
-                      </div>
-                    )}
+                <div className="relative aspect-[16/9] w-full overflow-hidden bg-[#ECECE8]">
+                  {b.logo_url ? (
+                    <Image src={b.logo_url} alt={`${b.name} banner`} width={960} height={480} priority={index === 0} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-[#1A1A1A] text-[#00FFFF]">
+                      <Store size={42} />
+                    </div>
+                  )}
+                  <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#1A1A1A]/35 via-transparent to-transparent" />
+                </div>
 
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <h2 className="text-base font-bold text-slate-900 truncate group-hover:text-[#EC008C] transition-colors">
-                          {b.name}
-                        </h2>
-                        {!b.is_open ? (
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-bold uppercase tracking-wider shrink-0">
-                            CLOSED
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase tracking-wider shrink-0">
-                            OPEN
-                          </span>
-                        )}
-                      </div>
-
-                      <p className="text-xs text-slate-500 truncate flex items-center gap-1 mt-1">
-                        <MapPin size={12} className="shrink-0 text-slate-400" />
-                        <span>{b.address}</span>
+                <div className="flex min-h-0 flex-1 flex-col p-5 pt-4 lg:p-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <h3 className="truncate text-lg font-black tracking-tight transition-colors group-hover:text-[#EC008C]">{b.name}</h3>
+                      <p className="mt-1 flex items-center gap-1 text-xs font-semibold text-[#676762]">
+                        <MapPin size={12} className="shrink-0 text-[#EC008C]" />
+                        <span className="truncate">{b.address}</span>
                       </p>
-
-                      <div className="flex items-center gap-1 font-bold text-slate-900 text-xs mt-2">
-                        <Star size={14} className="fill-amber-400 text-amber-400" />
-                        <span>{b.rating.toFixed(1)}</span>
-                        <span className="text-slate-400 font-normal">({b.reviewCount} reviews)</span>
-                      </div>
                     </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-wider ${b.is_open ? "bg-emerald-100 text-emerald-700" : "bg-[#ECECE8] text-[#676762]"}`}>
+                      {b.is_open ? "Open" : "Closed"}
+                    </span>
                   </div>
 
-                  {/* Services badges */}
-                  <div className="pt-3 border-t border-slate-100">
-                    <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Available Services</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {b.services.map((s, idx) => (
-                        <span key={idx} className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[11px] font-medium">
-                          {s}
-                        </span>
-                      ))}
-                    </div>
+                <div className="mt-3 flex items-center justify-between border-y border-[#ECECE8] py-2.5">
+                  <div className="flex items-center gap-1 text-sm font-black">
+                    <Star size={15} className="fill-[#FFF200] text-[#D6C900]" />
+                    {b.rating.toFixed(1)}
+                    <span className="text-xs font-medium text-[#676762]">({b.reviewCount} reviews)</span>
+                  </div>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-[#676762]">
+                    <MapPin size={12} className="text-[#00A5A5]" /> Mapped
+                  </span>
+                </div>
+
+                <div className="mt-3 min-h-0">
+                  <p className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-[#676762]">Available services</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {b.services.length > 0 ? b.services.map((service, index) => (
+                      <span key={index} className="rounded-full border border-[#D8D6CE] bg-[#F6F6F2] px-2.5 py-1 text-[10px] font-bold text-[#4E4E49]">
+                        {service}
+                      </span>
+                    )) : (
+                      <span className="text-xs text-[#676762]">Services available on request</span>
+                    )}
                   </div>
                 </div>
 
-                <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-900 group-hover:text-[#EC008C] transition-colors">
-                  <span>View Shop Catalog</span>
-                  <ChevronRight size={16} />
+                <div className="mt-auto flex items-center justify-between border-t border-[#ECECE8] pt-3 text-xs font-black transition-colors group-hover:text-[#EC008C]">
+                  <span>View shop catalog</span>
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1A1A1A] text-white transition-colors group-hover:bg-[#EC008C]">
+                    <ArrowRight size={15} />
+                  </span>
                 </div>
-              </div>
+                </div>
+              </article>
             ))}
           </div>
         )}
       </section>
-
     </main>
   );
 }

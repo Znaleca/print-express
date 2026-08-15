@@ -9,6 +9,7 @@ import {
   AlertCircle, ShieldCheck, UserCheck, Store
 } from "lucide-react";
 import { normalizePhilippinePhone } from "@/lib/phone";
+import BrandMark from "@/components/BrandMark";
 
 const Requirement = ({ label, met }) => (
   <div className={`flex items-center gap-1.5 text-xs transition-colors ${met ? "text-emerald-600 font-medium" : "text-slate-400"}`}>
@@ -20,9 +21,20 @@ const Requirement = ({ label, met }) => (
 export default function SignUpPage() {
   const router = useRouter();
   const [role, setRole] = useState("CUSTOMER");
+  const [ownerStep, setOwnerStep] = useState(1);
 
   // Step 1 Form Data
-  const [formData, setFormData] = useState({ firstName: "", lastName: "", phone: "", email: "", password: "", confirmPassword: "", businessName: "" });
+  const [formData, setFormData] = useState({
+    firstName: "",
+    lastName: "",
+    phone: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
+    businessName: "",
+    businessBackground: "",
+    productsSummary: "",
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
@@ -77,9 +89,23 @@ export default function SignUpPage() {
 
   const handleChange = (e) => setFormData((p) => ({ ...p, [e.target.name]: e.target.value }));
 
-  /* STEP 1 SUBMIT (SEND OTP) */
+  const chooseRole = (nextRole) => {
+    setRole(nextRole);
+    setOwnerStep(1);
+    setError(null);
+    setEmailStatus(null);
+  };
+
+  /* Owner onboarding uses two short steps before email verification. */
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (role === "BUSINESS_OWNER" && ownerStep === 1) {
+      setError(null);
+      setOwnerStep(2);
+      return;
+    }
+
     if (emailStatus === "taken") return;
     
     setLoading(true);
@@ -135,7 +161,11 @@ export default function SignUpPage() {
         phone: normalizedPhone,
         role
       };
-      if (role === "BUSINESS_OWNER") userData.business_name = formData.businessName;
+      if (role === "BUSINESS_OWNER") {
+        userData.business_name = formData.businessName.trim();
+        userData.business_background = formData.businessBackground.trim();
+        userData.products_summary = formData.productsSummary.trim();
+      }
 
       const res = await fetch("/api/auth/verify-otp", {
         method: "POST",
@@ -175,12 +205,14 @@ export default function SignUpPage() {
   /* OTP SCREEN */
   if (showOtp) {
     return (
-      <main className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-md w-full mx-auto">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden p-8 sm:p-10">
+      <main className="signup-page relative flex min-h-screen flex-col justify-center overflow-hidden bg-[#1A1A1A] px-4 py-12 font-sans text-slate-900 sm:px-6 lg:px-8">
+        <div className="cmyk-bar absolute left-0 right-0 top-0" />
+        <div className="pointer-events-none absolute -right-24 top-10 h-80 w-80 rounded-full border border-white/10" />
+        <div className="relative z-10 mx-auto w-full max-w-md">
+          <div className="overflow-hidden rounded-3xl border border-[#D8D6CE] bg-[#F6F6F2] p-7 shadow-2xl sm:p-10">
             <div className="cmyk-bar -mt-8 -mx-8 sm:-mx-10 mb-8" />
             
-            <div className="w-12 h-12 rounded-2xl bg-cyan-50 text-[#00E5FF] border border-cyan-200 flex items-center justify-center mx-auto mb-6">
+            <div className="mx-auto mb-6 flex h-12 w-12 items-center justify-center rounded-2xl border border-[#00FFFF]/40 bg-[#00FFFF]/15 text-[#00A5A5]">
               <Mail size={24} />
             </div>
 
@@ -200,7 +232,7 @@ export default function SignUpPage() {
                   maxLength={6} 
                   value={otpCode} 
                   onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                  className="w-full px-4 py-3.5 bg-slate-50 border border-slate-200 rounded-xl text-center text-3xl font-bold tracking-[0.4em] outline-none focus:ring-2 focus:ring-[#EC008C] focus:border-slate-400 transition-all" 
+                  className="w-full rounded-2xl border border-[#D8D6CE] bg-white px-4 py-3.5 text-center text-3xl font-black tracking-[0.4em] outline-none transition-all focus:border-[#EC008C] focus:ring-2 focus:ring-[#EC008C]/20"
                   placeholder="000000" 
                 />
               </div>
@@ -214,7 +246,7 @@ export default function SignUpPage() {
               <button 
                 type="submit" 
                 disabled={otpLoading || otpCode.length !== 6}
-                className="w-full bg-slate-900 text-white py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider hover:bg-[#EC008C] transition-all shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
+                className="flex w-full items-center justify-center gap-2 rounded-full bg-[#00FFFF] py-3.5 text-xs font-black uppercase tracking-wider text-[#1A1A1A] shadow-md transition-all hover:bg-[#FFF200] disabled:opacity-50"
               >
                 {otpLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
                   <>Verify Code <ArrowRight size={16} /></>
@@ -238,43 +270,45 @@ export default function SignUpPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-xl w-full mx-auto space-y-8">
+    <main className="signup-page relative flex min-h-screen flex-col justify-center overflow-hidden bg-[#1A1A1A] px-4 py-12 font-sans text-slate-900 sm:px-6 lg:px-8">
+      <div className="cmyk-bar absolute left-0 right-0 top-0" />
+      <div className="pointer-events-none absolute -left-24 bottom-10 h-80 w-80 rounded-full border border-[#EC008C]/20" />
+      <div className="pointer-events-none absolute -right-24 top-10 h-80 w-80 rounded-full border border-white/10" />
+      <div className="relative z-10 mx-auto w-full max-w-xl space-y-8">
 
         {/* Form Container */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+        <div className="overflow-hidden rounded-3xl border border-[#D8D6CE] bg-[#F6F6F2] shadow-2xl">
           <div className="cmyk-bar" />
 
           <div className="p-8 sm:p-10">
             {/* Header */}
             <div className="text-center mb-8">
-              <Link href="/" className="inline-flex items-center gap-2.5 group mb-4">
-                <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center text-white font-black text-base shadow-md">
-                  <span className="text-[#00FFFF]">P</span>
-                  <span className="text-[#EC008C]">-</span>
-                  <span className="text-[#FFF200]">P</span>
-                </div>
-                <span className="text-2xl font-extrabold text-slate-900 tracking-tight">
-                  Press <span className="text-[#EC008C]">&</span> Present
-                </span>
+              <Link href="/" className="inline-flex items-center group mb-4" aria-label="Press and Present home">
+                <BrandMark className="h-11 w-[78px] text-2xl transition-transform group-hover:-rotate-2" />
               </Link>
               
-              <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-                Create your account
+              <h1 className="text-3xl font-black uppercase tracking-tight text-[#1A1A1A]">
+                {role === "BUSINESS_OWNER"
+                  ? ownerStep === 1 ? "Tell us about your shop" : "Create your owner account"
+                  : "Create your account"}
               </h1>
-              <p className="mt-1 text-xs text-slate-500">
-                Join Press & Present as a customer or register your local print shop
+              <p className="mt-2 text-xs leading-relaxed text-[#676762]">
+                {role === "BUSINESS_OWNER"
+                  ? ownerStep === 1
+                    ? "Start with the details customers need to understand what you offer."
+                    : "Add your contact details and secure login to finish registration."
+                  : "Join Press & Present as a customer or register your local print shop"}
               </p>
             </div>
 
             {/* Account Role Selector */}
-            <div className="grid grid-cols-2 gap-3 mb-8 p-1.5 bg-slate-100 rounded-xl">
+            <div className="mb-8 grid grid-cols-2 gap-3 rounded-2xl bg-[#ECECE8] p-1.5">
               <button 
                 type="button" 
-                onClick={() => setRole("CUSTOMER")}
+                onClick={() => chooseRole("CUSTOMER")}
                 className={`py-3 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                  role === "CUSTOMER" 
-                    ? "bg-white text-slate-900 shadow-sm border border-slate-200" 
+                  role === "CUSTOMER"
+                    ? "bg-[#1A1A1A] text-white shadow-sm"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
               >
@@ -284,10 +318,10 @@ export default function SignUpPage() {
 
               <button 
                 type="button" 
-                onClick={() => setRole("BUSINESS_OWNER")}
+                onClick={() => chooseRole("BUSINESS_OWNER")}
                 className={`py-3 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                  role === "BUSINESS_OWNER" 
-                    ? "bg-white text-slate-900 shadow-sm border border-slate-200" 
+                  role === "BUSINESS_OWNER"
+                    ? "bg-[#1A1A1A] text-white shadow-sm"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
               >
@@ -296,26 +330,97 @@ export default function SignUpPage() {
               </button>
             </div>
 
+            {role === "BUSINESS_OWNER" && (
+              <div className="mb-7 flex items-center gap-3" aria-label={`Owner signup step ${ownerStep} of 2`}>
+                {["Shop profile", "Your details"].map((label, index) => {
+                  const step = index + 1;
+                  const active = ownerStep === step;
+                  const complete = ownerStep > step;
+                  return (
+                    <div key={label} className="flex min-w-0 flex-1 items-center gap-2">
+                      <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-black ${
+                        active || complete ? "bg-[#1A1A1A] text-[#00FFFF]" : "bg-[#E3E3DE] text-slate-500"
+                      }`}>
+                        {complete ? <CheckCircle2 size={14} /> : step}
+                      </div>
+                      <span className={`truncate text-[11px] font-bold ${active ? "text-slate-900" : "text-slate-400"}`}>{label}</span>
+                      {step === 1 && <div className={`h-px flex-1 ${ownerStep === 2 ? "bg-[#00C7C7]" : "bg-[#D8D6CE]"}`} />}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-5">
-              {role === "BUSINESS_OWNER" && (
-                <div className="p-4 rounded-xl bg-amber-50/60 border border-amber-200">
-                  <label className="block text-xs font-bold text-slate-800 mb-1">
+              {role === "BUSINESS_OWNER" && ownerStep === 1 && (
+                <div className="space-y-4 rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-amber-800">Tell customers about your shop</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-slate-600">
+                      This information appears on your public shop profile after verification. Keep it clear and customer-friendly.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 mb-1">
                     Print Shop / Business Name <span className="text-rose-500">*</span>
-                  </label>
-                  <input 
-                    name="businessName" 
-                    type="text" 
-                    required 
-                    value={formData.businessName} 
-                    onChange={handleChange}
-                    className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:ring-2 focus:ring-[#FFF200] focus:border-slate-400 transition-all"
-                    placeholder="e.g. Apex Print Studio" 
-                  />
-                  <p className="mt-1 text-[11px] text-slate-500">After email verification, upload DTI, Mayor's Permit, BIR, and valid ID documents. Admin approval is required before seller tools unlock.</p>
+                    </label>
+                    <input
+                      name="businessName"
+                      type="text"
+                      required
+                      minLength={2}
+                      maxLength={120}
+                      value={formData.businessName}
+                      onChange={handleChange}
+                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold outline-none transition-all focus:border-slate-400 focus:ring-2 focus:ring-[#FFF200]"
+                      placeholder="e.g. Apex Print Studio"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 mb-1">
+                      Business background <span className="text-rose-500">*</span>
+                    </label>
+                    <textarea
+                      name="businessBackground"
+                      required
+                      minLength={20}
+                      maxLength={800}
+                      rows={3}
+                      value={formData.businessBackground}
+                      onChange={handleChange}
+                      className="w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none transition-all focus:border-slate-400 focus:ring-2 focus:ring-[#FFF200]"
+                      placeholder="Briefly tell customers when you started, what you specialize in, and what makes your shop reliable."
+                    />
+                    <p className="mt-1 text-[11px] text-slate-500">20–800 characters · Avoid private contact details or payment information.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 mb-1">
+                      Products &amp; services offered <span className="text-rose-500">*</span>
+                    </label>
+                    <textarea
+                      name="productsSummary"
+                      required
+                      minLength={10}
+                      maxLength={500}
+                      rows={2}
+                      value={formData.productsSummary}
+                      onChange={handleChange}
+                      className="w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none transition-all focus:border-slate-400 focus:ring-2 focus:ring-[#FFF200]"
+                      placeholder="e.g. Business cards, flyers, posters, tarpaulins, stickers, photo printing, and rush orders."
+                    />
+                    <p className="mt-1 text-[11px] text-slate-500">10–500 characters · You can add detailed items and prices later in your catalog.</p>
+                  </div>
+
+                  <p className="text-[11px] text-slate-500">After email verification, upload DTI, Mayor&apos;s Permit, BIR, and valid ID documents. Admin approval is required before seller tools unlock.</p>
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {(role === "CUSTOMER" || ownerStep === 2) && (
+                <>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">First Name</label>
                   <input 
@@ -385,7 +490,7 @@ export default function SignUpPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Password</label>
                   <div className="relative">
@@ -438,6 +543,8 @@ export default function SignUpPage() {
                 <Requirement label="Special symbol (!@#$)" met={passwordRequirements.symbol} />
                 <Requirement label="Passwords match" met={passwordsMatch} />
               </div>
+                </>
+              )}
 
               {error && (
                 <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2">
@@ -445,20 +552,30 @@ export default function SignUpPage() {
                 </div>
               )}
 
-              <button 
-                type="submit" 
-                disabled={loading || emailStatus === "taken"}
-                className="w-full bg-slate-900 text-white py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-[#EC008C] transition-all shadow-md disabled:opacity-50"
+              {role === "BUSINESS_OWNER" && ownerStep === 2 && (
+                <button
+                  type="button"
+                  onClick={() => { setOwnerStep(1); setError(null); }}
+                  className="w-full rounded-full border border-[#D8D6CE] bg-white px-6 py-3.5 text-xs font-black uppercase tracking-wider text-slate-700 transition-colors hover:border-[#EC008C] hover:text-[#EC008C]"
+                >
+                  Back to shop profile
+                </button>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading || (ownerStep === 2 && emailStatus === "taken")}
+                className="flex w-full items-center justify-center gap-2 rounded-full bg-[#00FFFF] px-6 py-3.5 text-xs font-black uppercase tracking-wider text-[#1A1A1A] shadow-md transition-all hover:bg-[#FFF200] disabled:opacity-50"
               >
                 {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
                   <>
-                    Create Account
+                    {role === "BUSINESS_OWNER" && ownerStep === 1 ? "Continue to your details" : "Create Account"}
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
               </button>
 
-              <div className="mt-6 pt-6 border-t border-slate-100 text-center text-xs text-slate-500">
+              <div className="mt-6 border-t border-[#D8D6CE] pt-6 text-center text-xs text-[#676762]">
                 Already have an account?{" "}
                 <Link href="/login" className="font-bold text-slate-900 hover:text-[#EC008C] transition-colors">
                   Sign in

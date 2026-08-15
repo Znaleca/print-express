@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Loader2, ArrowRight, ShieldCheck, Mail, Eye, EyeOff, Lock, CheckCircle2 } from "lucide-react";
+import BrandMark from "@/components/BrandMark";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -100,11 +101,12 @@ export default function LoginPage() {
 
       const routes = {
         ADMIN: "/admin",
-        SUPER_ADMIN: "/admin",
         BUSINESS_OWNER: "/owner"
       };
 
-      router.push(routes[role] || "/");
+      // Login is a transition into the app, so don't leave the login screen in
+      // browser history when sending portal users to their workspace.
+      router.replace(routes[role] || "/");
     } catch (err) {
       setError(getReadableError(err));
     } finally {
@@ -117,33 +119,29 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full mx-auto space-y-8">
+    <main className="login-page relative flex min-h-screen flex-col justify-center overflow-hidden bg-[#1A1A1A] px-4 py-12 font-sans text-slate-900 sm:px-6 lg:px-8">
+      <div className="pointer-events-none absolute -right-24 top-10 h-80 w-80 rounded-full border border-white/10" />
+      <div className="pointer-events-none absolute bottom-12 left-8 hidden h-20 w-20 rotate-12 border border-[#00FFFF]/30 sm:block" />
+      <div className="cmyk-bar absolute left-0 right-0 top-0" />
+      <div className="relative z-10 mx-auto w-full max-w-md space-y-8">
 
         {/* Card Container */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+        <div className="overflow-hidden rounded-3xl border border-[#D8D6CE] bg-[#F6F6F2] shadow-2xl">
           
           {/* Top CMYK Signature Bar */}
           <div className="cmyk-bar" />
 
-          <div className="p-8 sm:p-10">
+          <div className="p-7 sm:p-10">
             {/* Header */}
             <div className="text-center mb-8">
-              <Link href="/" className="inline-flex items-center gap-2.5 group mb-4">
-                <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center text-white font-black text-base shadow-md">
-                  <span className="text-[#00FFFF]">P</span>
-                  <span className="text-[#EC008C]">-</span>
-                  <span className="text-[#FFF200]">P</span>
-                </div>
-                <span className="text-2xl font-extrabold text-slate-900 tracking-tight">
-                  Press <span className="text-[#EC008C]">&</span> Present
-                </span>
+              <Link href="/" className="inline-flex items-center group mb-4" aria-label="Press and Present home">
+                <BrandMark className="h-11 w-[78px] text-2xl transition-transform group-hover:-rotate-2" />
               </Link>
               
-              <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
+              <h1 className="text-3xl font-black uppercase tracking-tight text-[#1A1A1A]">
                 {isResetMode ? "Reset your password" : "Welcome back"}
               </h1>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-2 text-xs leading-relaxed text-[#676762]">
                 {isResetMode ? "Enter your email to receive a password reset code" : "Sign in to access your print orders and messages"}
               </p>
             </div>
@@ -178,7 +176,7 @@ export default function LoginPage() {
                       maxLength={6} 
                       value={resetOtp} 
                       onChange={(e) => setResetOtp(e.target.value.replace(/\D/g, ''))}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-center text-2xl font-bold tracking-[0.4em] outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all" 
+                      className="w-full rounded-2xl border border-[#D8D6CE] bg-white px-4 py-3 text-center text-2xl font-black tracking-[0.4em] outline-none transition-all focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/30"
                       placeholder="000000" 
                     />
                   </div>
@@ -189,14 +187,14 @@ export default function LoginPage() {
                       required 
                       value={newPassword} 
                       onChange={(e) => setNewPassword(e.target.value)}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all"
+                      className="w-full rounded-2xl border border-[#D8D6CE] bg-white px-4 py-3 text-sm outline-none transition-all focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/30"
                       placeholder="••••••••" 
                     />
                   </div>
                   <button 
                     type="submit" 
                     disabled={loading || resetOtp.length !== 6 || newPassword.length < 8}
-                    className="w-full bg-slate-900 text-white py-3 rounded-xl font-semibold text-xs hover:bg-slate-800 transition-all shadow-md disabled:opacity-50 flex items-center justify-center"
+                    className="flex w-full items-center justify-center rounded-full bg-[#1A1A1A] py-3 font-black text-xs text-white shadow-md transition-all hover:bg-[#EC008C] disabled:opacity-50"
                   >
                     {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify & Reset Password"}
                   </button>
@@ -204,7 +202,7 @@ export default function LoginPage() {
 
                 <button 
                   onClick={() => { setResetSent(false); setResetOtp(""); setNewPassword(""); }}
-                  className="text-xs text-slate-500 hover:text-slate-900 underline"
+                  className="text-xs font-semibold text-[#676762] underline hover:text-[#EC008C]"
                 >
                   Cancel and start over
                 </button>
@@ -220,7 +218,7 @@ export default function LoginPage() {
                       required
                       value={formData.email}
                       onChange={handleChange}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all"
+                      className="w-full rounded-2xl border border-[#D8D6CE] bg-white px-4 py-3 text-sm outline-none transition-all focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/30"
                       placeholder="name@example.com"
                     />
                   </div>
@@ -245,7 +243,7 @@ export default function LoginPage() {
                         required
                         value={formData.password}
                         onChange={handleChange}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all pr-10"
+                        className="w-full rounded-2xl border border-[#D8D6CE] bg-white px-4 py-3 pr-10 text-sm outline-none transition-all focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/30"
                         placeholder="••••••••"
                       />
                       <button
@@ -262,7 +260,7 @@ export default function LoginPage() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full bg-slate-900 text-white py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-[#EC008C] transition-all shadow-md disabled:opacity-50"
+                  className="flex w-full items-center justify-center gap-2 rounded-full bg-[#00FFFF] px-6 py-3.5 text-xs font-black uppercase tracking-wider text-[#1A1A1A] shadow-md transition-all hover:bg-[#FFF200] disabled:opacity-50"
                 >
                   {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
                     <>
@@ -287,9 +285,9 @@ export default function LoginPage() {
             )}
 
             {/* Footer Prompt */}
-            <div className="mt-8 pt-6 border-t border-slate-100 text-center text-xs text-slate-500">
+            <div className="mt-8 border-t border-[#D8D6CE] pt-6 text-center text-xs text-[#676762]">
               Don't have an account yet?{" "}
-              <Link href="/signup" className="font-bold text-slate-900 hover:text-[#EC008C] transition-colors">
+                <Link href="/signup" className="font-black text-[#1A1A1A] transition-colors hover:text-[#EC008C]">
                 Create an account
               </Link>
             </div>

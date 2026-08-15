@@ -1,15 +1,16 @@
 "use client";
 
-import { useState, useEffect, useRef, Suspense } from "react";
+import { useState, useEffect, useRef, useMemo, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
   MessageSquare, Send, Loader2, User, Store,
   ChevronRight, ChevronLeft, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, MapPin, Sparkles, CheckCircle2, ArrowRight, FileText
 } from "lucide-react";
+import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
 
 const DESIGN_FILE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,image/svg+xml,.ai,.psd,.eps,.tif,.tiff";
-const DESIGN_MAX_BYTES = 50 * 1024 * 1024;
+const DESIGN_MAX_BYTES = 10 * 1024 * 1024;
 
 const formatBytes = (bytes = 0) => {
   if (!bytes) return "0 KB";
@@ -29,44 +30,60 @@ const getUploadProfile = (file) => {
   return { extension, mime, fileType, quality };
 };
 
-const GENERATED_PRINT_QUESTIONS = [
-  {
-    key: "file_check",
-    label: "Check my file before printing",
-    customerText: "Can you check if my file is print-ready before I place the order?",
-    reply: "Yes. Please upload the file here and we can check resolution, bleed, margins, font issues, and whether it is suitable for production.",
-  },
-  {
-    key: "color_match",
-    label: "Will colors match my screen?",
-    customerText: "Will the printed colors match what I see on my screen?",
-    reply: "Screen colors can differ from print output. For important colors, ask for a proof and specify CMYK-safe colors or a printed sample before full production.",
-  },
-  {
-    key: "bleed_margin",
-    label: "Do I need bleed or margins?",
-    customerText: "Do I need to add bleed, crop marks, or safe margins to my design?",
-    reply: "For trimmed prints, include at least 3mm bleed and keep important text/logos inside the safe margin. We can review your uploaded file before printing.",
-  },
-  {
-    key: "paper_finish",
-    label: "Best paper or finish?",
-    customerText: "Which paper, material, or finish is best for my design and budget?",
-    reply: "Send the product type, size, use case, and budget range. We can recommend bond, glossy, matte cardstock, sticker, vinyl, or other materials based on durability and finish.",
-  },
-  {
-    key: "deadline",
-    label: "Can this meet my deadline?",
-    customerText: "Can this order be finished before my deadline?",
-    reply: "Please send your needed date/time, quantity, size, material, and finishing requirements. Rush production depends on shop queue, file readiness, and material availability.",
-  },
-  {
-    key: "proof_cost_lock",
-    label: "Proof and final cost lock",
-    customerText: "Can I approve a proof first and lock the final cost before production?",
-    reply: "Yes. The shop can upload proof versions here. After approval, the final design and total cost can be locked before production starts.",
-  },
-];
+const shorten = (value, maxLength = 25) => {
+  const text = String(value || "").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
+};
+
+/*
+ * These are real questions sent to the shop, not synthetic answers. The
+ * catalog context makes the wording useful without pretending the platform
+ * knows a shop's live prices, queue, materials, or delivery coverage.
+ */
+const buildShopQuestions = (business) => {
+  const shopName = business?.name || "your shop";
+  const availableItems = (business?.services || []).filter((item) => item?.available !== false);
+  const featuredItem = availableItems[0];
+  const featuredName = featuredItem?.name ? shorten(featuredItem.name) : "my print job";
+  const hasCustomServices = availableItems.some((item) => item.item_type !== "product" || item.is_customizable);
+
+  return [
+    {
+      key: "catalog",
+      label: "What do you offer?",
+      customerText: `Hi! What printing services and products are currently available at ${shopName}?`,
+    },
+    {
+      key: "quote",
+      label: featuredItem ? `Price for ${featuredName}` : "Ask for a quote",
+      customerText: featuredItem
+        ? `Could you give me an estimate for ${featuredItem.name}? Please include the available options, minimum quantity, and expected turnaround.`
+        : "Could you give me a quote? I can send the size, quantity, material, and deadline so you can price it accurately.",
+    },
+    {
+      key: "options",
+      label: "Ask about options",
+      customerText: featuredItem
+        ? `For ${featuredItem.name}, what sizes, materials, finishes, and quality options do you currently offer? Please include any added costs.`
+        : "What sizes, materials, finishes, and quality options do you currently offer, and what does each option cost?",
+    },
+    {
+      key: "file_check",
+      label: hasCustomServices ? "Check my design file" : "Can you check my file?",
+      customerText: "Can you check my PDF or image for size, resolution, bleed, margins, and print-readiness before I order?",
+    },
+    {
+      key: "turnaround",
+      label: "Ask about turnaround",
+      customerText: "What is the current turnaround for my print job? I can provide the quantity, specifications, and the date I need it.",
+    },
+    {
+      key: "fulfillment",
+      label: "Pickup or delivery?",
+      customerText: "Do you offer pickup or delivery? Please share the available area, delivery fee, and estimated delivery time.",
+    },
+  ];
+};
 
 function MessagesInner() {
   const searchParams = useSearchParams();
@@ -80,6 +97,7 @@ function MessagesInner() {
   const [messages, setMessages] = useState([]);
   const [msgLimit, setMsgLimit] = useState(20);
   const [hasMoreMsgs, setHasMoreMsgs] = useState(false);
+  const [loadingOlderMsgs, setLoadingOlderMsgs] = useState(false);
   const [input, setInput] = useState("");
   const [loadingConvs, setLoadingConvs] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
@@ -93,11 +111,17 @@ function MessagesInner() {
   const [viewImagePopup, setViewImagePopup] = useState(null);
   const bottomRef = useRef(null);
   const scrollContainerRef = useRef(null);
+  const msgLimitRef = useRef(20);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
   const pendingDesignUpload = useRef(false);
   const jitsiApiRef = useRef(null);
   const jitsiScriptRef = useRef(null);
+
+  const shopQuestions = useMemo(
+    () => buildShopQuestions(activeConv?.businesses),
+    [activeConv]
+  );
 
   /* Jitsi API setup */
   useEffect(() => {
@@ -196,7 +220,10 @@ function MessagesInner() {
       .from("chat_conversations")
       .select(`
         id, created_at, business_id,
-        businesses ( name, logo_url )
+        businesses (
+          name, logo_url, description, products_summary, address, is_open,
+          services ( id, name, item_type, price, price_max, description, category, available, is_customizable, specs_json )
+        )
       `)
       .eq("customer_id", currentUser.id)
       .order("updated_at", { ascending: false });
@@ -207,14 +234,17 @@ function MessagesInner() {
     }
 
     const unreadMap = {};
-    for (const c of convsData) {
-      const { count } = await supabase
+    const conversationIds = convsData.map((conversation) => conversation.id);
+    if (conversationIds.length > 0) {
+      const { data: unreadRows } = await supabase
         .from("chat_messages")
-        .select("id", { count: "exact", head: true })
-        .eq("conversation_id", c.id)
+        .select("conversation_id")
+        .in("conversation_id", conversationIds)
         .neq("sender_id", currentUser.id)
         .eq("is_read", false);
-      unreadMap[c.id] = count || 0;
+      (unreadRows || []).forEach((row) => {
+        unreadMap[row.conversation_id] = (unreadMap[row.conversation_id] || 0) + 1;
+      });
     }
 
     setUnreadByConv(unreadMap);
@@ -238,21 +268,23 @@ function MessagesInner() {
       channelRef.current = null;
     }
 
-    fetchMessages(activeConv.id, false, msgLimit);
+    msgLimitRef.current = 20;
+    setMsgLimit(20);
+    setMessages([]);
+    setHasMoreMsgs(false);
+    fetchMessages(activeConv.id, false, 20);
 
     const channel = supabase
       .channel(`chat_all:${activeConv.id}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "chat_messages" },
+        { event: "*", schema: "public", table: "chat_messages", filter: `conversation_id=eq.${activeConv.id}` },
         async (payload) => {
           const row = payload.new || payload.old;
           if (!row?.conversation_id) return;
 
-          if (row.conversation_id === activeConv.id) {
-            await fetchMessages(activeConv.id, true);
-            await markConversationRead(activeConv.id);
-          }
+          await fetchMessages(activeConv.id, true, msgLimitRef.current);
+          await markConversationRead(activeConv.id);
           await loadConversations();
         }
       )
@@ -263,10 +295,14 @@ function MessagesInner() {
     return () => {
       if (channelRef.current) supabase.removeChannel(channelRef.current);
     };
-  }, [activeConv, msgLimit]);
+  }, [activeConv]);
 
-  const fetchMessages = async (convId, isBg = false, limit = 20) => {
-    if (!isBg) setLoadingMsgs(true);
+  const fetchMessages = async (convId, isBg = false, limit = 20, prepend = false) => {
+    const previousHeight = scrollContainerRef.current?.scrollHeight || 0;
+
+    if (prepend) setLoadingOlderMsgs(true);
+    else if (!isBg) setLoadingMsgs(true);
+
     const { data, count } = await supabase
       .from("chat_messages")
       .select("*", { count: "exact" })
@@ -275,10 +311,26 @@ function MessagesInner() {
       .limit(limit);
 
     if (data) {
-      setMessages(data.reverse());
-      setHasMoreMsgs(count > limit);
+      const orderedMessages = data.reverse();
 
-      if (limit === 20 || isBg) {
+      if (prepend) {
+        setMessages((currentMessages) => {
+          const existingIds = new Set(currentMessages.map((message) => message.id));
+          const olderMessages = orderedMessages.filter((message) => !existingIds.has(message.id));
+          return [...olderMessages, ...currentMessages];
+        });
+      } else {
+        setMessages(orderedMessages);
+      }
+
+      setHasMoreMsgs((count || 0) > limit);
+
+      if (prepend) {
+        window.setTimeout(() => {
+          const container = scrollContainerRef.current;
+          if (container) container.scrollTop = container.scrollHeight - previousHeight;
+        }, 50);
+      } else if (limit === 20 || isBg) {
         setTimeout(() => {
           if (scrollContainerRef.current) {
             scrollContainerRef.current.scrollTo({
@@ -289,8 +341,33 @@ function MessagesInner() {
         }, 50);
       }
     }
-    if (!isBg) setLoadingMsgs(false);
+
+    if (prepend) setLoadingOlderMsgs(false);
+    else if (!isBg) setLoadingMsgs(false);
   };
+
+  const loadOlderMessages = async () => {
+    if (!activeConv || !hasMoreMsgs || loadingOlderMsgs) return;
+
+    const nextLimit = msgLimitRef.current + 20;
+    msgLimitRef.current = nextLimit;
+    setMsgLimit(nextLimit);
+    await fetchMessages(activeConv.id, false, nextLimit, true);
+  };
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || !activeConv) return;
+
+    const handleScroll = () => {
+      if (container.scrollTop <= 56 && hasMoreMsgs && !loadingOlderMsgs) {
+        loadOlderMessages();
+      }
+    };
+
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, [activeConv, hasMoreMsgs, loadingOlderMsgs, msgLimit]);
 
   const markConversationRead = async (convId) => {
     await supabase
@@ -327,21 +404,37 @@ function MessagesInner() {
   const sendDesignUpload = async (file) => {
     if (!file || !activeConv || !user) return;
     if (file.size > DESIGN_MAX_BYTES) {
-      window.alert("Design files must be 50 MB or smaller.");
+      window.alert("Design files must be 10 MB or smaller.");
       return;
     }
 
     setSending(true);
-    const uploadProfile = getUploadProfile(file);
-    const ext = uploadProfile.extension || "file";
+    const uploadFile = file.type?.startsWith("image/")
+      ? await optimizeImageForUpload(file).catch((error) => {
+          window.alert(error.message || "Images must be 5 MB or smaller after optimization.");
+          return null;
+        })
+      : file;
+    if (!uploadFile) {
+      setSending(false);
+      return;
+    }
+
+    const uploadProfile = getUploadProfile(uploadFile);
+    const ext = uploadFile.type?.startsWith("image/") ? getUploadExtension(uploadFile) : (uploadProfile.extension || "file");
     const filePath = `${activeConv.id}/${user.id}-customer-design-${Date.now()}.${ext}`;
+    const storageBucket = uploadFile.type?.startsWith("image/") ? IMAGE_BUCKET : "chat-images";
 
     const { error: uploadErr } = await supabase.storage
-      .from("chat-images")
-      .upload(filePath, file, { upsert: false });
+      .from(storageBucket)
+      .upload(filePath, uploadFile, {
+        upsert: false,
+        cacheControl: "31536000",
+        contentType: uploadFile.type,
+      });
 
     if (!uploadErr) {
-      const { data } = supabase.storage.from("chat-images").getPublicUrl(filePath);
+      const { data } = supabase.storage.from(storageBucket).getPublicUrl(filePath);
       await supabase.from("chat_messages").insert({
         conversation_id: activeConv.id,
         sender_id: user.id,
@@ -350,7 +443,7 @@ function MessagesInner() {
         message_type: "design_upload",
         metadata: {
           file_name: file.name,
-          file_size_bytes: file.size,
+          file_size_bytes: uploadFile.size,
           file_type: uploadProfile.fileType,
           file_format: ext,
           file_mime: uploadProfile.mime,
@@ -406,17 +499,17 @@ function MessagesInner() {
       metadata,
       is_read: false,
     });
-    await fetchMessages(activeConv.id, true);
+    await fetchMessages(activeConv.id, true, msgLimitRef.current);
     setSending(false);
   };
 
   const sendQuickReply = async (action) => {
     if (!activeConv || !user) return;
-    const question = GENERATED_PRINT_QUESTIONS.find((item) => item.key === action);
+    const question = shopQuestions.find((item) => item.key === action);
     if (!question) return;
     setSending(true);
 
-    await supabase.from("chat_messages").insert({
+    const { error } = await supabase.from("chat_messages").insert({
       conversation_id: activeConv.id,
       sender_id: user.id,
       sender_role: "CUSTOMER",
@@ -424,43 +517,53 @@ function MessagesInner() {
       is_read: false,
     });
 
-    await supabase.from("chat_messages").insert({
-      conversation_id: activeConv.id,
-      sender_id: activeConv.business_id,
-      sender_role: "BUSINESS_OWNER",
-      content: question.reply,
-      message_type: "generated_guidance",
-      metadata: { question_key: question.key },
-      is_read: false,
-    });
+    if (error) {
+      window.alert(error.message || "Could not send this question.");
+      setSending(false);
+      return;
+    }
 
+    setShowQuickReplies(false);
     setSending(false);
   };
 
   return (
-    <main className="min-h-screen bg-slate-50 font-sans text-slate-900 flex flex-col">
+    <main className="messages-page h-[calc(100vh-70px)] sm:h-[calc(100vh-86px)] min-h-0 overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 flex flex-col">
       
       {/* Header */}
-      <section className="bg-white border-b border-slate-200 py-6 px-4 sm:px-6 lg:px-8 relative shadow-sm shrink-0">
-        <div className="cmyk-bar absolute top-0 left-0 right-0" />
-        <div className="max-w-[1800px] mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">Messages & Proofing</h1>
-            <p className="text-xs text-slate-500 mt-0.5">Chat directly with print shop owners, receive price quotes, and approve design proofs.</p>
+      <section className="relative shrink-0 overflow-hidden border-b border-white/10 bg-[#1A1A1A] px-4 pb-8 pt-9 text-white sm:px-8 sm:pb-10 sm:pt-11 lg:px-12">
+        <div className="cmyk-bar absolute left-0 right-0 top-0" />
+        <div className="pointer-events-none absolute -right-20 -top-28 h-80 w-80 rounded-full border border-white/10" />
+        <div className="pointer-events-none absolute bottom-5 left-8 hidden h-24 w-24 rotate-12 border border-[#EC008C]/30 sm:block" />
+
+        <div className="relative mx-auto max-w-6xl">
+          <div className="max-w-3xl">
+            <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">
+              Message <span className="text-[#00FFFF]">print shops.</span>
+            </h1>
+            <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/65 sm:text-base">
+              Chat with print partners, review files, and approve proofs in one place.
+            </p>
           </div>
         </div>
       </section>
 
       {/* Main Chat Container */}
-      <div className="max-w-[1800px] w-full mx-auto p-3 sm:p-4 flex-1 flex gap-4 h-[calc(100vh-170px)] min-h-[500px]">
+      <div className="max-w-[1800px] w-full mx-auto p-3 sm:p-4 flex-1 flex flex-col sm:flex-row gap-4 min-h-0 overflow-hidden">
         
         {/* Sidebar Conversations List */}
-        <aside className="w-full sm:w-80 shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-          <div className="p-4 border-b border-slate-100 bg-slate-50/50">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">Conversations</h2>
+        <aside className="w-full sm:w-80 h-56 sm:h-auto min-h-0 shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+          <div className="p-4 border-b border-slate-100 bg-[#F6F6F2]">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#EC008C]">Inbox</p>
+                <h2 className="mt-1 text-sm font-extrabold text-slate-900">Conversations</h2>
+              </div>
+              <span className="text-[10px] font-bold text-slate-400">{conversations.length} shops</span>
+            </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain divide-y divide-slate-100">
             {loadingConvs ? (
               <div className="p-8 text-center text-xs text-slate-400 font-medium">
                 <Loader2 className="animate-spin mx-auto mb-2 text-[#EC008C]" size={24} />
@@ -480,8 +583,8 @@ function MessagesInner() {
                   <button
                     key={c.id}
                     onClick={() => setActiveConv(c)}
-                    className={`w-full p-4 text-left flex items-start gap-3 transition-colors ${
-                      isActive ? "bg-slate-100/80 font-semibold" : "hover:bg-slate-50"
+                    className={`w-full p-4 text-left flex items-start gap-3 transition-colors border-l-4 ${
+                      isActive ? "bg-[#EFFFFF] border-[#00FFFF] font-semibold" : "border-transparent hover:bg-slate-50"
                     }`}
                   >
                     <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 shrink-0 font-bold text-sm">
@@ -506,11 +609,11 @@ function MessagesInner() {
         </aside>
 
         {/* Chat Thread */}
-        <section className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden relative">
+        <section className="flex-1 min-h-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden relative">
           {activeConv ? (
             <>
               {/* Active Header */}
-              <div className="p-4 border-b border-slate-200 bg-white flex items-center justify-between z-10">
+              <div className="p-4 border-b border-slate-200 bg-white flex items-center justify-between gap-3 z-10 shrink-0">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-xs">
                     {activeConv.businesses?.name?.charAt(0) || "S"}
@@ -524,17 +627,20 @@ function MessagesInner() {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setShowQuickReplies(!showQuickReplies)}
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 text-xs font-medium hover:bg-slate-100 flex items-center gap-1.5"
+                    className="px-3 py-2 rounded-lg border border-slate-200 bg-[#F6F6F2] text-slate-700 text-xs font-bold hover:border-[#EC008C] hover:text-[#EC008C] flex items-center gap-1.5"
                   >
-                    <Sparkles size={14} className="text-[#EC008C]" /> Quick Questions
+                    <Sparkles size={14} className="text-[#EC008C]" /> Ask the shop
                   </button>
                 </div>
               </div>
 
-              {/* Quick Reply Drawer */}
+              {/* Context-aware questions are sent directly to the shop. */}
               {showQuickReplies && (
-                <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap gap-2 animate-slide-up">
-                  {GENERATED_PRINT_QUESTIONS.map((question) => (
+                <div className="border-b border-slate-200 bg-slate-50 p-3 animate-slide-up">
+                  <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Questions for {activeConv.businesses?.name || "the shop"}</p>
+                  <p className="mb-2 text-[11px] text-slate-500">These are sent directly to the shop—answers come from the shop, not an automatic estimate.</p>
+                  <div className="flex flex-wrap gap-2">
+                  {shopQuestions.map((question) => (
                     <button
                       key={question.key}
                       onClick={() => sendQuickReply(question.key)}
@@ -543,18 +649,32 @@ function MessagesInner() {
                       {question.label}
                     </button>
                   ))}
+                  </div>
                 </div>
               )}
 
               {/* Messages Scroll Thread */}
-              <div ref={scrollContainerRef} className="flex-1 p-6 overflow-y-auto space-y-4 bg-slate-50/50">
+              <div ref={scrollContainerRef} className="min-h-0 flex-1 p-4 sm:p-6 overflow-y-auto overscroll-contain space-y-4 bg-[#F6F6F2]">
                 {loadingMsgs ? (
                   <div className="p-12 text-center text-xs text-slate-400">
                     <Loader2 className="animate-spin mx-auto mb-2 text-[#00FFFF]" size={24} />
                     Loading message thread...
                   </div>
                 ) : (
-                  messages.map((m) => {
+                  <>
+                    {hasMoreMsgs && (
+                      <div className="sticky top-0 z-20 flex justify-center pb-1">
+                        <button
+                          type="button"
+                          onClick={loadOlderMessages}
+                          disabled={loadingOlderMsgs}
+                          className="border border-slate-300 bg-white px-3 py-1.5 text-[10px] font-bold text-slate-600 shadow-sm hover:border-[#00FFFF] hover:text-slate-900 disabled:cursor-wait disabled:opacity-70"
+                        >
+                          {loadingOlderMsgs ? "Loading older messages…" : "Load older messages"}
+                        </button>
+                      </div>
+                    )}
+                    {messages.map((m) => {
                     const isMe = m.sender_id === user?.id;
                     const meta = m.metadata || {};
                     const uploadName = meta.file_name || "Uploaded file";
@@ -666,15 +786,16 @@ function MessagesInner() {
                         </div>
                       </div>
                     );
-                  })
+                    })}
+                  </>
                 )}
                 <div ref={bottomRef} />
               </div>
 
               {/* Quick Reply Suggestions */}
-              <div className="px-4 pt-2.5 bg-white border-t border-slate-100 flex items-center gap-2 overflow-x-auto text-[11px] font-semibold text-slate-600 no-scrollbar">
-                <span className="shrink-0 text-slate-400 font-bold">Quick Inquiries:</span>
-                {GENERATED_PRINT_QUESTIONS.slice(0, 5).map((question) => (
+              <div className="shrink-0 px-4 pt-2.5 bg-white border-t border-slate-100 flex items-center gap-2 overflow-x-auto text-[11px] font-semibold text-slate-600 no-scrollbar">
+                <span className="shrink-0 text-slate-400 font-bold">Ask the shop:</span>
+                {shopQuestions.slice(0, 5).map((question) => (
                   <button
                     key={question.key}
                     type="button"
@@ -687,7 +808,7 @@ function MessagesInner() {
               </div>
 
               {/* Input Form */}
-              <form onSubmit={handleSendMessage} className="p-4 bg-white border-t border-slate-100 flex items-center gap-3">
+              <form onSubmit={handleSendMessage} className="shrink-0 p-4 bg-white border-t border-slate-100 flex items-center gap-3">
                 <input
                   ref={fileInputRef}
                   type="file"

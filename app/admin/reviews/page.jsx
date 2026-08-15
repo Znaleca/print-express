@@ -71,7 +71,7 @@ export default function AdminReviews() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
+      <main className="admin-page min-h-screen bg-[#F6F6F2] flex items-center justify-center font-sans text-slate-600">
         <div className="flex flex-col items-center gap-3">
           <Loader2 size={36} className="animate-spin text-[#EC008C]" />
           <p className="text-xs font-semibold uppercase tracking-wider">Loading reviews...</p>
@@ -81,15 +81,15 @@ export default function AdminReviews() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+    <main className="admin-page min-h-screen bg-[#F6F6F2] font-sans text-slate-900 pb-24">
       
       {/* Header Banner */}
-      <section className="bg-white border-b border-slate-200 py-8 px-4 sm:px-6 lg:px-8 relative shadow-sm">
+      <section className="relative overflow-hidden bg-[#1A1A1A] border-b border-white/10 py-8 px-4 text-white sm:px-6 lg:px-8">
         <div className="cmyk-bar absolute top-0 left-0 right-0" />
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Platform Reviews Moderation</h1>
-            <p className="mt-1 text-xs text-slate-500">Oversee customer feedback across all print shops, inspect hidden reviews, and enforce review standards.</p>
+            <h1 className="text-3xl font-black uppercase tracking-tight text-white">Review moderation</h1>
+            <p className="mt-2 text-xs text-white/65">Oversee customer feedback across all print shops and enforce review standards.</p>
           </div>
 
           <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">

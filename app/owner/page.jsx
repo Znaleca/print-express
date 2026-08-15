@@ -6,9 +6,7 @@ import { supabase } from "@/lib/supabaseClient";
 import {
   Activity,
   ArrowRight,
-  CheckCircle,
   Clock,
-  ShieldCheck,
   Star,
   TrendingUp,
   Zap,
@@ -16,6 +14,7 @@ import {
   Award,
   ShoppingBag
 } from "lucide-react";
+import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 
 const CustomTooltip = ({ active, payload, label }) => {
@@ -172,29 +171,22 @@ export default function OwnerOverviewPage() {
   }, [orders]);
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center font-sans p-8 text-slate-600">
-        <Activity className="mb-3 animate-spin text-[#EC008C]" size={36} />
-        <p className="text-xs font-semibold uppercase tracking-wider">Loading dashboard metrics...</p>
-      </div>
-    );
+    return <OwnerPageSkeleton rows={4} />;
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900 overflow-x-hidden pb-20">
+    <main className="owner-overview-page min-h-screen bg-[#F6F6F2] pb-20 font-sans text-slate-900">
       
       {/* Header Banner */}
-      <section className="bg-white border-b border-slate-200 py-5 px-4 sm:px-6 lg:px-8 relative shadow-sm">
-        <div className="cmyk-bar absolute top-0 left-0 right-0" />
-        <div className="max-w-[1600px] mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-9 pt-8 text-white sm:px-8 sm:pb-11 sm:pt-10 lg:px-10">
+        <div className="cmyk-bar absolute left-0 right-0 top-0" />
+        <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10" />
+        <div className="relative mx-auto flex max-w-6xl flex-col justify-between gap-6 md:flex-row md:items-end">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 text-slate-800 text-xs font-semibold mb-2">
-              <ShieldCheck size={14} className="text-[#00E5FF]" /> Shop Owner Dashboard
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
+            <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">
               {business?.name || "My Print Shop"}
             </h1>
-            <p className="mt-0.5 text-xs text-slate-500">
+            <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">
               Executive summary of sales revenue, active order queue, and best-selling items.
             </p>
           </div>
@@ -202,7 +194,7 @@ export default function OwnerOverviewPage() {
           <div className="flex gap-3">
             <button
               onClick={() => router.push("/owner/orders")}
-              className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-[#EC008C] transition-all shadow-sm flex items-center gap-2"
+              className="flex items-center gap-2 rounded-full bg-[#00FFFF] px-5 py-3 text-xs font-black text-[#1A1A1A] shadow-md transition-all hover:bg-[#FFF200]"
             >
               <ShoppingBag size={16} /> Manage Orders
             </button>
@@ -211,16 +203,16 @@ export default function OwnerOverviewPage() {
       </section>
 
       {/* Main Metrics & Content */}
-      <section className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-5 space-y-6">
+      <section className="mx-auto max-w-6xl space-y-6 px-4 pt-8 sm:px-8 lg:px-10">
         
         {/* STATS CARDS */}
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
           {stats.map((s) => (
-            <div key={s.label} className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col justify-between relative overflow-hidden">
+            <div key={s.label} className="relative flex flex-col justify-between overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm">
               <div className="cmyk-bar-sm absolute top-0 left-0 right-0" />
               <div className="flex items-start justify-between mb-4">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-500">{s.label}</span>
-                <div className="p-2 rounded-xl bg-slate-100 text-slate-800">
+                <div className="rounded-2xl bg-[#1A1A1A] p-2 text-[#00FFFF]">
                   <s.icon size={18} />
                 </div>
               </div>
@@ -233,21 +225,21 @@ export default function OwnerOverviewPage() {
         </div>
 
         {/* REVENUE RECHARTS CHART */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-sm">
+        <div className="rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-100">
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Revenue Analytics</h2>
+              <h2 className="text-xl font-black text-slate-900">Revenue analytics</h2>
               <p className="text-xs text-slate-500">Track earnings from completed print jobs over time.</p>
             </div>
 
-            <div className="flex gap-1.5 p-1 bg-slate-100 rounded-xl">
+            <div className="flex gap-1.5 rounded-2xl bg-[#ECECE8] p-1">
               {["Daily", "Weekly", "Monthly", "Yearly"].map((tf) => (
                 <button
                   key={tf}
                   onClick={() => setTimeframe(tf)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
                     timeframe === tf
-                      ? "bg-white text-slate-900 shadow-sm"
+                      ? "bg-[#1A1A1A] text-white shadow-sm"
                       : "text-slate-600 hover:text-slate-900"
                   }`}
                 >
@@ -285,7 +277,7 @@ export default function OwnerOverviewPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           
           {/* BEST SELLERS */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col">
+          <div className="flex flex-col rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm">
             <h2 className="text-base font-bold text-slate-900 mb-4 pb-3 border-b border-slate-100 flex items-center gap-2">
               <Award size={18} className="text-[#EAB308]" /> Best Selling Services & Products
             </h2>
@@ -317,7 +309,7 @@ export default function OwnerOverviewPage() {
           </div>
 
           {/* RECENT ORDERS */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col">
+          <div className="flex flex-col rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm">
             <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 <Clock size={18} className="text-[#EC008C]" /> Recent Orders

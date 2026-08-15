@@ -30,6 +30,7 @@ export default function AdminAccounts() {
   const [users, setUsers] = useState([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [categoryRequests, setCategoryRequests] = useState([]);
+  const [profileRequestComments, setProfileRequestComments] = useState({});
 
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
@@ -57,7 +58,7 @@ export default function AdminAccounts() {
     try {
       const { data: bizList } = await supabase
         .from("businesses")
-        .select(`id, name, status, created_at, owner_id,
+        .select(`id, name, description, products_summary, status, created_at, owner_id,
           business_documents (*)`)
         .order("created_at", { ascending: false });
 
@@ -70,7 +71,19 @@ export default function AdminAccounts() {
         .in("id", ownerIds);
 
       const profileMap = Object.fromEntries((profiles || []).map((p) => [p.id, p]));
-      setBusinesses(bizList.map((b) => ({ ...b, owner: profileMap[b.owner_id] || null })));
+      const { data: profileRequests } = await supabase
+        .from("business_profile_change_requests")
+        .select("id, business_id, requested_description, requested_products_summary, reason, status, admin_comment, created_at, reviewed_at")
+        .order("created_at", { ascending: false });
+      const requestsByBusiness = (profileRequests || []).reduce((map, request) => {
+        map[request.business_id] = [...(map[request.business_id] || []), request];
+        return map;
+      }, {});
+      setBusinesses(bizList.map((b) => ({
+        ...b,
+        owner: profileMap[b.owner_id] || null,
+        profile_change_requests: requestsByBusiness[b.id] || [],
+      })));
 
       const { data: requests } = await supabase
         .from("category_approval_requests")
@@ -171,9 +184,57 @@ export default function AdminAccounts() {
     }
   };
 
+  const handleProfileRequestAction = async (request, newStatus, business) => {
+    const actionKey = `profile-${request.id}`;
+    setActionLoading((prev) => ({ ...prev, [actionKey]: true }));
+    try {
+      const adminComment = profileRequestComments[request.id] || request.admin_comment || null;
+
+      if (newStatus === "APPROVED") {
+        const { error: businessError } = await supabase
+          .from("businesses")
+          .update({
+            description: request.requested_description,
+            products_summary: request.requested_products_summary,
+          })
+          .eq("id", business.id);
+        if (businessError) throw businessError;
+      }
+
+      const { error: requestError } = await supabase
+        .from("business_profile_change_requests")
+        .update({
+          status: newStatus,
+          admin_comment: adminComment,
+          reviewed_at: new Date().toISOString(),
+        })
+        .eq("id", request.id);
+      if (requestError) throw requestError;
+
+      setBusinesses((prev) => prev.map((item) => {
+        if (item.id !== business.id) return item;
+        return {
+          ...item,
+          description: newStatus === "APPROVED" ? request.requested_description : item.description,
+          products_summary: newStatus === "APPROVED" ? request.requested_products_summary : item.products_summary,
+          profile_change_requests: (item.profile_change_requests || []).map((itemRequest) => (
+            itemRequest.id === request.id
+              ? { ...itemRequest, status: newStatus, admin_comment: adminComment, reviewed_at: new Date().toISOString() }
+              : itemRequest
+          )),
+        };
+      }));
+      showToast(`Profile change request ${newStatus.toLowerCase()}.`);
+    } catch (err) {
+      showToast(err.message || "Failed to update profile change request.", "error");
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [actionKey]: false }));
+    }
+  };
+
   if (loadingBiz) {
     return (
-      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
+        <main className="admin-page min-h-screen bg-[#F6F6F2] flex items-center justify-center font-sans text-slate-600">
         <div className="flex flex-col items-center gap-3">
           <Loader2 size={36} className="animate-spin text-[#EC008C]" />
           <p className="text-xs font-semibold uppercase tracking-wider">Loading verification portal...</p>
@@ -185,8 +246,8 @@ export default function AdminAccounts() {
   return (
     <>
       {previewDocUrl && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm" onClick={() => setPreviewDocUrl(null)}>
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-2xl w-full p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="dialog-overlay" role="dialog" aria-modal="true" onClick={() => setPreviewDocUrl(null)}>
+          <div className="dialog-surface max-w-2xl w-full p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-sm text-slate-900">Document Reviewer</h3>
               <button onClick={() => setPreviewDocUrl(null)} className="p-1 text-slate-400 hover:text-slate-800"><X size={18} /></button>
@@ -200,41 +261,55 @@ export default function AdminAccounts() {
         </div>
       )}
 
-      <main className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+      <main className="admin-page min-h-screen bg-[#F6F6F2] font-sans text-slate-900 pb-24">
         
         {/* Header */}
-        <section className="bg-white border-b border-slate-200 py-8 px-4 sm:px-6 lg:px-8 relative shadow-sm">
+        <section className="relative overflow-hidden bg-[#1A1A1A] border-b border-white/10 py-8 px-4 text-white sm:px-6 lg:px-8">
           <div className="cmyk-bar absolute top-0 left-0 right-0" />
-          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="mx-auto flex max-w-7xl flex-col gap-5">
             <div>
-              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Verifications & Accounts</h1>
-              <p className="mt-1 text-xs text-slate-500">Review business document uploads, grant verification badges, and browse platform user accounts.</p>
+              <div className="mb-2 font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-[#00FFFF]">Admin workspace</div>
+              <h1 className="text-3xl font-black uppercase tracking-tight text-white">Verifications & accounts</h1>
+              <p className="mt-2 max-w-2xl text-xs text-white/65">Review business document uploads, grant verification badges, approve new categories, and browse platform users.</p>
             </div>
 
-            <div className="flex gap-2 border-b border-slate-200">
+            <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Admin account sections">
               <button
                 onClick={() => setActiveTab("verifications")}
-                className={`pb-3 text-xs font-bold transition-all relative ${
-                  activeTab === "verifications" ? "text-slate-900 border-b-2 border-[#EC008C]" : "text-slate-500 hover:text-slate-900"
+                className={`border px-3 py-2 text-xs font-bold transition-all ${
+                  activeTab === "verifications" ? "border-[#00FFFF] bg-[#00FFFF] text-[#1A1A1A]" : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
                 }`}
+                role="tab"
+                aria-selected={activeTab === "verifications"}
               >
                 Verification Requests ({businesses.length})
               </button>
               <button
                 onClick={() => setActiveTab("categories")}
-                className={`pb-3 text-xs font-bold transition-all relative ${
-                  activeTab === "categories" ? "text-slate-900 border-b-2 border-[#EC008C]" : "text-slate-500 hover:text-slate-900"
+                className={`border px-3 py-2 text-xs font-bold transition-all ${
+                  activeTab === "categories" ? "border-[#00FFFF] bg-[#00FFFF] text-[#1A1A1A]" : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
                 }`}
+                role="tab"
+                aria-selected={activeTab === "categories"}
               >
                 Category Approvals ({categoryRequests.filter((request) => request.status === "PENDING").length})
               </button>
               <button
                 onClick={() => setActiveTab("accounts")}
-                className={`pb-3 text-xs font-bold transition-all relative ${
-                  activeTab === "accounts" ? "text-slate-900 border-b-2 border-[#EC008C]" : "text-slate-500 hover:text-slate-900"
+                className={`border px-3 py-2 text-xs font-bold transition-all ${
+                  activeTab === "accounts" ? "border-[#00FFFF] bg-[#00FFFF] text-[#1A1A1A]" : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
                 }`}
+                role="tab"
+                aria-selected={activeTab === "accounts"}
               >
                 User Accounts Directory ({users.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => { fetchVerifications(); if (activeTab === "accounts") fetchUsers(); }}
+                className="ml-auto inline-flex items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-2 text-xs font-bold text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                <RefreshCcw size={13} /> Refresh
               </button>
             </div>
           </div>
@@ -253,6 +328,7 @@ export default function AdminAccounts() {
             <div className="space-y-4">
               {businesses.map((b) => {
                 const docs = b.business_documents || [];
+                const profileRequests = b.profile_change_requests || [];
                 const approvedDocs = docs.filter(d => d.status === "APPROVED").length;
                 const isExpanded = expandedId === b.id;
 
@@ -269,6 +345,16 @@ export default function AdminAccounts() {
                           </span>
                         </div>
                         <p className="text-xs text-slate-500 mt-0.5">Owner: {b.owner?.full_name || "Unknown"} ({b.owner?.email}) • {approvedDocs} of 4 docs approved</p>
+                        <div className="mt-3 grid max-w-4xl grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
+                          <div className="border-l-2 border-[#00C7C7] pl-2">
+                            <p className="font-black uppercase tracking-[0.12em] text-[#008F91]">Business background</p>
+                            <p className="mt-0.5 line-clamp-2 leading-relaxed text-slate-600">{b.description || "Not provided"}</p>
+                          </div>
+                          <div className="border-l-2 border-[#D1C500] pl-2">
+                            <p className="font-black uppercase tracking-[0.12em] text-[#8A8200]">Products &amp; services</p>
+                            <p className="mt-0.5 line-clamp-2 leading-relaxed text-slate-600">{b.products_summary || "Not provided"}</p>
+                          </div>
+                        </div>
                       </div>
 
                       <button className="p-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200">
@@ -277,7 +363,91 @@ export default function AdminAccounts() {
                     </div>
 
                     {isExpanded && (
-                      <div className="pt-4 border-t border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-4 border-t border-slate-100 pt-4">
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                          <div className="rounded-xl border border-slate-200 bg-white p-4">
+                            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-[#009FA0]">Business background</p>
+                            <p className="mt-2 text-xs leading-relaxed text-slate-600">{b.description || "Not provided"}</p>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-white p-4">
+                            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-[#C6B900]">Products &amp; services offered</p>
+                            <p className="mt-2 text-xs leading-relaxed text-slate-600">{b.products_summary || "Not provided"}</p>
+                          </div>
+                        </div>
+
+                        {profileRequests.length > 0 && (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <h4 className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Profile change requests</h4>
+                              <span className="text-[10px] font-semibold text-slate-400">{profileRequests.length} request{profileRequests.length === 1 ? "" : "s"}</span>
+                            </div>
+                            {profileRequests.map((request) => {
+                              const requestActionKey = `profile-${request.id}`;
+                              const isPending = request.status === "PENDING";
+                              return (
+                                <div key={request.id} className={`rounded-xl border p-4 ${
+                                  isPending ? "border-[#00C7C7]/40 bg-[#00C7C7]/[0.04]" : "border-slate-200 bg-slate-50"
+                                }`}>
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                      <p className="text-xs font-bold text-slate-900">Requested {new Date(request.created_at).toLocaleDateString()}</p>
+                                      <p className="mt-0.5 text-[11px] text-slate-500">Reason: {request.reason}</p>
+                                    </div>
+                                    <span className={`rounded-full px-2 py-1 text-[10px] font-black ${
+                                      request.status === "APPROVED" ? "bg-emerald-100 text-emerald-800" :
+                                      request.status === "REJECTED" ? "bg-rose-100 text-rose-800" :
+                                      "bg-amber-100 text-amber-800"
+                                    }`}>{request.status}</span>
+                                  </div>
+
+                                  <div className="mt-3 grid grid-cols-1 gap-2 text-[11px] md:grid-cols-2">
+                                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                      <p className="font-black uppercase tracking-[0.1em] text-[#008F91]">Requested background</p>
+                                      <p className="mt-1 leading-relaxed text-slate-600">{request.requested_description}</p>
+                                    </div>
+                                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                      <p className="font-black uppercase tracking-[0.1em] text-[#8A8200]">Requested products</p>
+                                      <p className="mt-1 leading-relaxed text-slate-600">{request.requested_products_summary}</p>
+                                    </div>
+                                  </div>
+
+                                  {isPending ? (
+                                    <div className="mt-3 space-y-2">
+                                      <input
+                                        type="text"
+                                        value={profileRequestComments[request.id] || ""}
+                                        onChange={(event) => setProfileRequestComments((current) => ({ ...current, [request.id]: event.target.value }))}
+                                        placeholder="Optional note for the owner..."
+                                        maxLength={300}
+                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-[#00C7C7]"
+                                      />
+                                      <div className="flex gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleProfileRequestAction(request, "APPROVED", b)}
+                                          disabled={actionLoading[requestActionKey]}
+                                          className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                                        >Approve and apply
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleProfileRequestAction(request, "REJECTED", b)}
+                                          disabled={actionLoading[requestActionKey]}
+                                          className="flex-1 rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white hover:bg-rose-700 disabled:opacity-50"
+                                        >Reject request
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : request.admin_comment ? (
+                                    <p className="mt-3 text-[11px] text-slate-500"><strong>Admin note:</strong> {request.admin_comment}</p>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                         {REQUIRED_DOC_TYPES.map((type) => {
                           const doc = docs.find(d => d.doc_type === type);
                           const meta = DOC_META[type] || { label: type };
@@ -345,6 +515,7 @@ export default function AdminAccounts() {
                             </div>
                           );
                         })}
+                        </div>
                       </div>
                     )}
                   </div>

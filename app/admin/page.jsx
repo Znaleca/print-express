@@ -85,7 +85,7 @@ export default function AdminDashboard() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
+      <main className="admin-page min-h-screen bg-[#F6F6F2] flex items-center justify-center font-sans text-slate-600">
         <div className="flex flex-col items-center gap-3">
           <Loader2 size={36} className="animate-spin text-[#EC008C]" />
           <p className="text-xs font-semibold uppercase tracking-wider">Loading admin panel...</p>
@@ -95,15 +95,15 @@ export default function AdminDashboard() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+    <main className="admin-page min-h-screen bg-[#F6F6F2] font-sans text-slate-900 pb-24">
       
       {/* Header Banner */}
-      <section className="bg-white border-b border-slate-200 py-5 px-4 sm:px-6 lg:px-8 relative shadow-sm">
+      <section className="relative overflow-hidden bg-[#1A1A1A] border-b border-white/10 py-8 px-4 text-white sm:px-6 lg:px-8">
         <div className="cmyk-bar absolute top-0 left-0 right-0" />
         <div className="max-w-[1600px] mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">System Admin Console</h1>
-            <p className="mt-0.5 text-xs text-slate-500">Review print shop verification requests, manage accounts, and moderate platform content.</p>
+            <h1 className="text-3xl font-black uppercase tracking-tight text-white">Admin console</h1>
+            <p className="mt-2 text-xs text-white/65">Review print shop verification requests, manage accounts, and moderate platform content.</p>
           </div>
         </div>
       </section>

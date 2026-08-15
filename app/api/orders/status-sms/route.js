@@ -3,21 +3,36 @@ import { getSupabaseAdminClient } from "@/lib/supabaseAdmin";
 import { normalizePhilippinePhone } from "@/lib/phone";
 
 const SMS_STATUS_LABELS = {
+  PLACED: "PLACED",
   PREPARING: "PREPARING",
   READY_TO_PICK_UP: "READY",
+  RIDER_ON_THE_WAY: "DELIVERY",
   COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
 };
 
 const buildSmsMessage = ({ statusLabel, order, business }) => {
   const orderCode = order.id.split("-")[0].toUpperCase();
   const shopName = business?.name || "your print shop";
 
+  if (statusLabel === "PLACED") {
+    return `Press & Present: Order #${orderCode} has been PLACED at ${shopName}. We will notify you when production starts.`;
+  }
+
   if (statusLabel === "PREPARING") {
     return `Press & Present: Order #${orderCode} is now PREPARING at ${shopName}. We will notify you when it is ready.`;
   }
 
   if (statusLabel === "READY") {
-    return `Press & Present: Order #${orderCode} is READY at ${shopName}. Please prepare your balance/payment if applicable.`;
+    return `Press & Present: Order #${orderCode} is READY FOR PICKUP at ${shopName}. Please prepare your balance/payment if applicable.`;
+  }
+
+  if (statusLabel === "DELIVERY") {
+    return `Press & Present: Order #${orderCode} is OUT FOR DELIVERY from ${shopName}.`;
+  }
+
+  if (statusLabel === "CANCELLED") {
+    return `Press & Present: Order #${orderCode} has been CANCELLED by ${shopName}. Please contact the shop for details.`;
   }
 
   return `Press & Present: Order #${orderCode} is COMPLETED. Thank you for ordering from ${shopName}.`;
@@ -62,7 +77,7 @@ export async function POST(request) {
 
     const { data: order, error: orderError } = await supabase
       .from("orders")
-      .select("id, business_id, customer_phone, total, balance_amount")
+      .select("id, business_id, status, customer_phone, total, balance_amount")
       .eq("id", orderId)
       .single();
 
@@ -80,6 +95,10 @@ export async function POST(request) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
+    if (order.status !== status) {
+      return NextResponse.json({ skipped: true, reason: "Order status has changed; refresh before sending an update." }, { status: 409 });
+    }
+
     const recipientPhone = normalizePhilippinePhone(order.customer_phone);
     const messageContent = buildSmsMessage({ statusLabel, order, business });
 
@@ -91,6 +110,20 @@ export async function POST(request) {
         orderId,
       });
       return NextResponse.json({ skipped: true, reason: "Order has no customer phone number" });
+    }
+
+    // Do not send duplicate provider requests when a realtime update, retry,
+    // or double-click invokes this endpoint more than once.
+    const { data: existingLog } = await supabase
+      .from("sms_notification_logs")
+      .select("id")
+      .eq("order_id", orderId)
+      .eq("message_content", messageContent)
+      .eq("status", "SENT")
+      .limit(1)
+      .maybeSingle();
+    if (existingLog) {
+      return NextResponse.json({ skipped: true, reason: "This status update was already sent." });
     }
 
     const apiKey = process.env.SEMAPHORE_API_KEY;

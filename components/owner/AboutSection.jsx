@@ -40,7 +40,7 @@ export default function AboutSection() {
         
         <div className="relative z-10 w-full max-w-7xl mx-auto flex flex-col items-center">
           <div className="inline-block bg-[#1A1A1A] text-white px-6 py-2 font-mono text-xs md:text-sm uppercase mb-12 tracking-[0.5em] font-bold">
-            Academic_Development // BSIT_Specialists_2026
+            Academic_Development // Information_Technology_Specialists_2026
           </div>
           
           <h2 className="text-8xl md:text-[10rem] lg:text-[14rem] font-black uppercase leading-[0.75] tracking-tighter mb-16">
@@ -64,7 +64,7 @@ export default function AboutSection() {
             </div>
 
             <div className="font-mono text-lg md:text-xl uppercase leading-relaxed text-gray-700 font-bold">
-              <p className="tracking-widest">// BSIT Capstone Thesis v1.0</p>
+              <p className="tracking-widest">// Bachelor of Science in Information Technology Capstone Thesis v1.0</p>
               <p className="tracking-widest">// Applied Information Technology</p>
               <p className="mt-4 text-sm md:text-base max-w-2xl mx-auto normal-case font-medium opacity-80">
                 Modernizing the local printing industry through intensive academic research and professional-grade software architecture.
@@ -130,7 +130,7 @@ export default function AboutSection() {
               <span className="mx-6 text-[#EC008C]">CARREON</span>
               <span className="mx-6 text-[#FFF200]">ROLDAN</span>
               <span className="mx-6 text-white">CHING</span>
-              <span className="mx-16 opacity-40">Batch_2026 // BSIT</span>
+              <span className="mx-16 opacity-40">Batch_2026 // Bachelor of Science in Information Technology</span>
             </div>
           ))}
         </div>

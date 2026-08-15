@@ -174,7 +174,7 @@ const printServices = [
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-[#1A1A1A] text-white font-sans selection:bg-[#00FFFF] selection:text-[#1A1A1A] overflow-x-hidden relative">
+    <main className="home-page min-h-screen bg-[#1A1A1A] text-white font-sans selection:bg-[#00FFFF] selection:text-[#1A1A1A] overflow-x-hidden relative">
 
       {/* ── 1. HERO SECTION (MINIMAL HIGH-IMPACT CANVAS) ── */}
       <section className="relative min-h-[calc(100vh-88px)] flex flex-col justify-between px-4 sm:px-6 md:px-10 lg:px-14 pt-10 pb-12 bg-[#1A1A1A] overflow-hidden border-b border-white/10">
@@ -330,7 +330,7 @@ export default function Home() {
       </section>
 
       {/* ── 3. HOW IT WORKS SECTION (CONNECTED FLOW PROCESS) ── */}
-      <section id="about" className="bg-[#1A1A1A] text-white px-4 sm:px-6 md:px-10 lg:px-14 py-12 sm:py-16 border-b border-white/10 relative overflow-hidden scroll-mt-16">
+      <section className="bg-[#1A1A1A] text-white px-4 sm:px-6 md:px-10 lg:px-14 py-12 sm:py-16 border-b border-white/10 relative overflow-hidden">
         <div className="max-w-[1600px] mx-auto space-y-10 relative z-10">
 
           <div className="space-y-3 text-left sm:text-center max-w-3xl mx-auto">

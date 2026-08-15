@@ -1,13 +1,28 @@
 import { NextResponse } from "next/server";
 import { sendResendEmail } from "@/lib/resendEmail";
+import { requireAdmin } from "@/lib/serverAuth";
+
+const escapeHtml = (value) => String(value || "").replace(/[&<>\"']/g, (character) => ({
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '\"': "&quot;",
+  "'": "&#39;",
+}[character]));
 
 export async function POST(request) {
   try {
+    const auth = await requireAdmin(request);
+    if (auth.error) return NextResponse.json({ error: auth.error }, { status: auth.status });
+
     const { ownerEmail, ownerName, businessName } = await request.json();
 
-    if (!ownerEmail || !businessName) {
+    if (!ownerEmail || !businessName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
+
+    const safeOwnerName = escapeHtml(ownerName || "Business Owner").slice(0, 120);
+    const safeBusinessName = escapeHtml(businessName).slice(0, 160);
 
     const { data, error } = await sendResendEmail({
       from: process.env.EMAIL_FROM || "Press & Present <noreply@pressandpresent.me>",
@@ -75,10 +90,10 @@ export async function POST(request) {
                         You're Approved!
                       </h1>
                       <p style="margin:0 0 20px;font-size:13px;text-transform:uppercase;line-height:1.8;color:#555555;letter-spacing:1px;">
-                        Hi ${ownerName || "Business Owner"},
+                        Hi ${safeOwnerName},
                       </p>
                       <p style="margin:0 0 20px;font-size:13px;text-transform:uppercase;line-height:1.8;color:#555555;letter-spacing:1px;">
-                        Great news! All verification documents for <strong style="color:#1A1A1A;">[${businessName}]</strong> have been reviewed and approved by our admin team.
+                        Great news! All verification documents for <strong style="color:#1A1A1A;">[${safeBusinessName}]</strong> have been reviewed and approved by our admin team.
                       </p>
                       
                       <!-- Approval Box -->

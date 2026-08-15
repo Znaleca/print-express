@@ -6,6 +6,7 @@
 -- 1) Extend businesses table with rich profile fields
 alter table public.businesses
   add column if not exists description   text,
+  add column if not exists products_summary text,
   add column if not exists address       text,
   add column if not exists phone         text,
   add column if not exists email         text,
@@ -58,6 +59,15 @@ using (
 );
 
 -- 4) Owner can update and read their own business
+grant select on public.businesses to anon, authenticated;
+
+drop policy if exists "Public can view approved businesses" on public.businesses;
+create policy "Public can view approved businesses"
+on public.businesses
+for select
+to anon, authenticated
+using (status = 'APPROVED');
+
 drop policy if exists "Owners can update own business" on public.businesses;
 create policy "Owners can update own business"
 on public.businesses

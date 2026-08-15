@@ -64,24 +64,14 @@ DROP POLICY IF EXISTS "Admins can view all documents" ON public.business_documen
 CREATE POLICY "Admins can view all documents"
   ON public.business_documents FOR SELECT
   TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.profiles
-      WHERE id = auth.uid() AND role = 'ADMIN'
-    )
-  );
+  USING (public.is_admin());
 
 -- 7) Admins can update document status and comments
 DROP POLICY IF EXISTS "Admins can update all documents" ON public.business_documents;
 CREATE POLICY "Admins can update all documents"
   ON public.business_documents FOR UPDATE
   TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.profiles
-      WHERE id = auth.uid() AND role = 'ADMIN'
-    )
-  );
+  USING (public.is_admin());
 
 -- 8) updated_at auto-trigger
 CREATE OR REPLACE FUNCTION update_business_documents_updated_at()

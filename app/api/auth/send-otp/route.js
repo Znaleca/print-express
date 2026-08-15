@@ -8,19 +8,37 @@ export async function POST(request) {
     const supabase = getSupabaseAdminClient();
 
     const { email, type, fullName } = await request.json();
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const normalizedType = String(type || "").trim().toLowerCase();
 
-    if (!email || !type) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
+    }
+    if (!["signup", "reset"].includes(normalizedType)) {
       return NextResponse.json({ error: "Missing email or type" }, { status: 400 });
     }
 
     // 0. Check if user exists
-    const { data: existingUserId } = await supabase.rpc("get_user_id_by_email", { lookup_email: email });
+    const { data: existingUserId } = await supabase.rpc("get_user_id_by_email", { lookup_email: normalizedEmail });
     
-    if (type === "signup" && existingUserId) {
+    if (normalizedType === "signup" && existingUserId) {
       return NextResponse.json({ error: "This email is already taken." }, { status: 400 });
     }
-    if (type === "reset" && !existingUserId) {
+    if (normalizedType === "reset" && !existingUserId) {
       return NextResponse.json({ error: "No account found with this email." }, { status: 404 });
+    }
+
+    // Keep OTP requests bounded on the free tier and prevent mailbox abuse.
+    const oneMinuteAgo = new Date(Date.now() - 60_000).toISOString();
+    const { data: recentCodes } = await supabase
+      .from("otp_verifications")
+      .select("id")
+      .eq("email", normalizedEmail)
+      .eq("type", normalizedType)
+      .gte("created_at", oneMinuteAgo)
+      .limit(1);
+    if (recentCodes?.length) {
+      return NextResponse.json({ error: "Please wait a minute before requesting another code." }, { status: 429 });
     }
 
     // 1. Generate 6-digit code
@@ -31,16 +49,16 @@ export async function POST(request) {
     await supabase
       .from("otp_verifications")
       .delete()
-      .eq("email", email)
-      .eq("type", type);
+      .eq("email", normalizedEmail)
+      .eq("type", normalizedType);
 
     // 3. Save new code
     const { error: dbError } = await supabase
       .from("otp_verifications")
       .insert({
-        email,
+        email: normalizedEmail,
         otp_code: otpCode,
-        type,
+        type: normalizedType,
         expires_at: expiresAt,
       });
 
@@ -50,16 +68,23 @@ export async function POST(request) {
     }
 
     // 4. Send Email via Resend
-    const subject = type === "signup" ? "Your Verification Code" : "Password Reset Code";
-    const headerTitle = type === "signup" ? "Verify_Account" : "Reset_Password";
-    const title = type === "signup" ? "Welcome aboard!" : "Reset your password";
-    const actionText = type === "signup" 
+    const subject = normalizedType === "signup" ? "Your Verification Code" : "Password Reset Code";
+    const headerTitle = normalizedType === "signup" ? "Verify_Account" : "Reset_Password";
+    const title = normalizedType === "signup" ? "Welcome aboard!" : "Reset your password";
+    const actionText = normalizedType === "signup"
       ? "Use the code below to verify your email address and complete your registration." 
       : "Use the code below to securely reset your password.";
+    const safeFullName = String(fullName || "").trim().slice(0, 120).replace(/[&<>\"']/g, (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '\"': "&quot;",
+      "'": "&#39;",
+    }[character]));
 
     const { error: emailError } = await sendResendEmail({
       from: process.env.EMAIL_FROM || "Press & Present <noreply@pressandpresent.me>",
-      to: [email],
+      to: [normalizedEmail],
       subject: `[Press & Present] ${subject}: ${otpCode}`,
       html: `
         <!DOCTYPE html>
@@ -112,7 +137,7 @@ export async function POST(request) {
                       <h1 style="margin:0 0 24px;font-size:32px;font-weight:900;text-transform:uppercase;letter-spacing:-2px;line-height:1;color:#1A1A1A;font-style:italic;">
                         ${title}
                       </h1>
-                      ${fullName ? `<p style="margin:0 0 20px;font-size:13px;text-transform:uppercase;line-height:1.8;color:#555555;letter-spacing:1px;">Hi ${fullName},</p>` : ''}
+                      ${safeFullName ? `<p style="margin:0 0 20px;font-size:13px;text-transform:uppercase;line-height:1.8;color:#555555;letter-spacing:1px;">Hi ${safeFullName},</p>` : ''}
                       <p style="margin:0 0 28px;font-size:13px;text-transform:uppercase;line-height:1.8;color:#555555;letter-spacing:1px;">
                         ${actionText}
                       </p>

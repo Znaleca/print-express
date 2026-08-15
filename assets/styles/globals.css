@@ -1,6 +1,19 @@
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,600&family=Playfair+Display:ital,wght@0,600;0,700;0,900;1,400;1,700&family=Space+Grotesk:wght@500;700&display=swap');
 @import "tailwindcss";
 @import "leaflet/dist/leaflet.css";
+@import "../../components/ProfileCard.css";
+@import "../../components/PillNav.css";
+
+:root {
+  --brand-ink: #1A1A1A;
+  --brand-paper: #F6F6F2;
+  --brand-soft: #ECECE8;
+  --brand-line: #D8D6CE;
+  --brand-muted: #676762;
+  --brand-cyan: #00FFFF;
+  --brand-magenta: #EC008C;
+  --brand-yellow: #FFF200;
+}
 
 .font-serif-brand {
   font-family: 'Playfair Display', Georgia, serif;
@@ -55,15 +68,342 @@
   animation: scaleIn 0.2s ease-out both;
 }
 
+/* Shared shadcn-style dialog primitives used across the app. */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: linear-gradient(
+    180deg,
+    rgb(15 23 42 / 0.7) 0%,
+    rgb(15 23 42 / 0.52) 38%,
+    rgb(15 23 42 / 0.28) 72%,
+    rgb(15 23 42 / 0.22) 100%
+  );
+  backdrop-filter: blur(9px) saturate(0.9);
+  -webkit-backdrop-filter: blur(9px) saturate(0.9);
+  animation: fadeIn 0.18s ease-out both;
+}
+
+.dialog-surface {
+  border: 1px solid var(--brand-line);
+  border-radius: 1.5rem;
+  background: rgb(246 246 242 / 0.96);
+  box-shadow: 0 24px 70px rgb(26 26 26 / 0.2);
+  animation: scaleIn 0.2s ease-out both;
+}
+
+.attachment-dialog {
+  border-color: rgb(255 255 255 / 0.18);
+  background: rgb(26 26 26 / 0.94);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 0.4);
+}
+
+.dialog-header {
+  border-bottom: 1px solid var(--brand-line);
+  padding: 1.25rem 1.5rem;
+}
+
+.dialog-footer {
+  display: flex;
+  gap: 0.75rem;
+  border-top: 1px solid var(--brand-line);
+  background: var(--brand-paper);
+  padding: 1.25rem 1.5rem;
+}
+
+.dialog-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  padding: 0.5rem;
+  color: var(--brand-muted);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.dialog-close:hover {
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 html {
   scroll-behavior: smooth;
 }
 
 body {
   font-family: var(--font-sans);
+  background: var(--brand-paper);
+  color: var(--brand-ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.011em;
+}
+
+/*
+ * Shared application skin
+ *
+ * The landing page is intentionally a full-bleed composition. Every other
+ * route uses these neutral-surface rules to inherit the same paper, ink, and
+ * CMYK accent language without changing the landing page's dark sections.
+ */
+.app-route-shell > :not(.home-page) {
+  background-color: var(--brand-paper);
+  color: var(--brand-ink);
+}
+
+.app-route-shell > :not(.home-page) [class~="bg-slate-50"] {
+  background-color: var(--brand-paper) !important;
+}
+
+.app-route-shell > :not(.home-page) [class~="bg-slate-100"] {
+  background-color: var(--brand-soft) !important;
+}
+
+.app-route-shell > :not(.home-page) [class~="text-slate-900"] {
+  color: var(--brand-ink) !important;
+}
+
+.app-route-shell > :not(.home-page) [class~="text-slate-800"] {
+  color: #282824 !important;
+}
+
+.app-route-shell > :not(.home-page) [class~="text-slate-700"],
+.app-route-shell > :not(.home-page) [class~="text-slate-600"] {
+  color: #4E4E49 !important;
+}
+
+.app-route-shell > :not(.home-page) [class~="text-slate-500"],
+.app-route-shell > :not(.home-page) [class~="text-slate-400"] {
+  color: var(--brand-muted) !important;
+}
+
+.app-route-shell > :not(.home-page) [class~="border-slate-200"],
+.app-route-shell > :not(.home-page) [class~="border-slate-100"] {
+  border-color: var(--brand-line) !important;
+}
+
+.app-route-shell > :not(.home-page) input,
+.app-route-shell > :not(.home-page) textarea,
+.app-route-shell > :not(.home-page) select {
+  border-color: var(--brand-line);
+  background-color: #fff;
+  color: var(--brand-ink);
+}
+
+.app-route-shell > :not(.home-page) input:focus,
+.app-route-shell > :not(.home-page) textarea:focus,
+.app-route-shell > :not(.home-page) select:focus {
+  border-color: var(--brand-magenta);
+  box-shadow: 0 0 0 3px rgb(236 0 140 / 0.14);
+  outline: none;
+}
+
+.app-route-shell > .browse-page .browse-search,
+.app-route-shell > .browse-page .browse-sort {
+  background-color: rgb(255 255 255 / 0.1) !important;
+  border-color: rgb(255 255 255 / 0.2) !important;
+  color: #fff !important;
+}
+
+.app-route-shell > .browse-page .browse-search::placeholder {
+  color: rgb(255 255 255 / 0.45) !important;
+}
+
+.app-route-shell > .login-page,
+.app-route-shell > .signup-page {
+  background-color: var(--brand-ink) !important;
+}
+
+.app-route-shell > .shops-page .shops-search {
+  background-color: rgb(255 255 255 / 0.1) !important;
+  border-color: rgb(255 255 255 / 0.2) !important;
+  color: #fff !important;
+}
+
+.app-route-shell > .shops-page .shops-search::placeholder {
+  color: rgb(255 255 255 / 0.45) !important;
+}
+
+.app-route-shell > :not(.home-page) [class*="shadow-sm"],
+.app-route-shell > :not(.home-page) [class*="shadow-md"] {
+  box-shadow: 0 8px 24px rgb(26 26 26 / 0.06);
+}
+
+.app-route-shell > :not(.home-page) [class*="shadow-xl"],
+.app-route-shell > :not(.home-page) [class*="shadow-2xl"] {
+  box-shadow: 0 18px 42px rgb(26 26 26 / 0.1);
+}
+
+.app-route-shell > :not(.home-page) h1,
+.app-route-shell > :not(.home-page) h2,
+.app-route-shell > :not(.home-page) h3 {
+  letter-spacing: -0.035em;
+}
+
+.app-route-shell > :not(.home-page) button,
+.app-route-shell > :not(.home-page) a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Owner portal shell: keep the navigation dark, but make every content page light. */
+:is(
+  .owner-shop-page,
+  .owner-services-page,
+  .owner-orders-page,
+  .owner-reviews-page,
+  .owner-documents-page,
+  .owner-overview-page,
+  .owner-messages-page,
+  .account-settings-page
+) {
+  background-color: var(--brand-paper) !important;
+  color: var(--brand-ink) !important;
+}
+
+:is(
+  .owner-shop-page,
+  .owner-services-page,
+  .owner-orders-page,
+  .owner-reviews-page,
+  .owner-documents-page,
+  .owner-overview-page,
+  .account-settings-page
+) > section:first-child,
+.owner-messages-page > div:first-child {
+  background-color: #ffffff !important;
+  border-bottom: 1px solid var(--brand-line);
+  color: var(--brand-ink) !important;
+}
+
+:is(
+  .owner-shop-page,
+  .owner-services-page,
+  .owner-orders-page,
+  .owner-reviews-page,
+  .owner-documents-page,
+  .owner-overview-page,
+  .account-settings-page
+) > section:first-child [class~="text-white"],
+.owner-messages-page > div:first-child [class~="text-white"] {
+  color: var(--brand-ink) !important;
+}
+
+:is(
+  .owner-shop-page,
+  .owner-services-page,
+  .owner-orders-page,
+  .owner-reviews-page,
+  .owner-documents-page,
+  .owner-overview-page,
+  .account-settings-page
+) > section:first-child [class*="text-white/"],
+.owner-messages-page > div:first-child [class*="text-white/"] {
+  color: var(--brand-muted) !important;
+}
+
+:is(
+  .owner-shop-page,
+  .owner-services-page,
+  .owner-orders-page,
+  .owner-reviews-page,
+  .owner-documents-page,
+  .owner-overview-page,
+  .account-settings-page
+) > section:first-child [class*="bg-white/10"] {
+  background-color: var(--brand-soft) !important;
+  color: var(--brand-ink) !important;
+}
+
+:is(
+  .owner-shop-page,
+  .owner-services-page,
+  .owner-orders-page,
+  .owner-reviews-page,
+  .owner-documents-page,
+  .owner-overview-page,
+  .account-settings-page
+) > section:first-child [class*="ring-white"] {
+  --tw-ring-color: var(--brand-line) !important;
+}
+
+/* Normalize legacy communication screens to the same friendly print-brand
+ * language used by the landing page. */
+.messages-page,
+.owner-messages-page {
+  letter-spacing: -0.011em;
+}
+
+.messages-page .font-mono,
+.owner-messages-page .font-mono {
+  font-family: var(--font-sans) !important;
+  letter-spacing: -0.011em !important;
+}
+
+.messages-page .uppercase,
+.owner-messages-page .uppercase {
+  text-transform: none !important;
+}
+
+.messages-page .italic,
+.owner-messages-page .italic {
+  font-style: normal !important;
+}
+
+.messages-page [class*="border-4"],
+.messages-page [class*="border-2"],
+.owner-messages-page [class*="border-4"],
+.owner-messages-page [class*="border-2"] {
+  border-width: 1px !important;
+}
+
+.messages-page [class*="shadow-["],
+.owner-messages-page [class*="shadow-["] {
+  box-shadow: 0 8px 24px rgb(26 26 26 / 0.08) !important;
+}
+
+.owner-doc-review-page .font-mono {
+  font-family: var(--font-sans) !important;
+  letter-spacing: -0.011em !important;
+}
+
+.owner-doc-review-page .uppercase {
+  text-transform: none !important;
+}
+
+.owner-doc-review-page .italic {
+  font-style: normal !important;
+}
+
+.owner-doc-review-page [class*="border-4"],
+.owner-doc-review-page [class*="border-2"] {
+  border-width: 1px !important;
+}
+
+.owner-doc-review-page [class*="shadow-["] {
+  box-shadow: 0 8px 24px rgb(26 26 26 / 0.08) !important;
+}
+
+.admin-page > section:first-child h1 {
+  color: #ffffff !important;
+}
+
+.admin-page > section.admin-light-header h1 {
+  color: var(--brand-ink) !important;
+}
+
+::selection {
+  background: var(--brand-cyan);
+  color: var(--brand-ink);
 }
 
 h1,
@@ -141,6 +481,41 @@ h6 {
 .cmyk-bar-sm>div:nth-child(4) {
   flex: 1;
   background-color: #1A1A1A;
+}
+
+.pill-nav-mobile-account {
+  display: grid;
+  gap: .65rem;
+  margin: .65rem 1rem 1rem;
+  padding: .9rem;
+  border: 1px solid var(--brand-line);
+  border-radius: 18px;
+  background: #fff;
+}
+
+.pill-nav-account-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: .6rem .85rem;
+  border: 1px solid var(--brand-line);
+  border-radius: 12px;
+  background: var(--brand-paper);
+  color: var(--brand-ink);
+  font-size: .8rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.pill-nav-account-link-primary { border-color: var(--brand-magenta); background: var(--brand-magenta); color: #fff; }
+.pill-nav-account-link-danger { border-color: #fecdd3; background: #fff1f2; color: #be123c; }
+
+.public-header-layout { grid-template-columns: 1fr auto 1fr; }
+
+@media (max-width: 1023px) {
+  .public-header-layout { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .public-header-layout > :nth-child(2) { width: 100%; justify-self: stretch; }
 }
 
 .brand-wordmark {

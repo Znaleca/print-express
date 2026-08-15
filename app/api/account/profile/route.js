@@ -26,14 +26,27 @@ export async function PATCH(request) {
     }
 
     const cleanName = String(fullName || "").trim();
-    if (!cleanName) {
-      return NextResponse.json({ error: "Name cannot be empty." }, { status: 400 });
+    if (cleanName.length < 2 || cleanName.length > 120) {
+      return NextResponse.json({ error: "Name must be between 2 and 120 characters." }, { status: 400 });
     }
+
+    // Never allow a client-provided user_metadata.role to overwrite the
+    // database role. The profile table is the source of truth for access.
+    const { data: currentProfile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle();
+    const metadataRole = user.user_metadata?.role;
+    const preservedRole = ["CUSTOMER", "BUSINESS_OWNER", "ADMIN"].includes(currentProfile?.role)
+      ? currentProfile.role
+      : (["CUSTOMER", "BUSINESS_OWNER"].includes(metadataRole) ? metadataRole : "CUSTOMER");
 
     const nextMetadata = {
       ...(user.user_metadata || {}),
       full_name: cleanName,
       phone: normalizedPhone,
+      role: preservedRole,
     };
 
     const { error: authError } = await supabase.auth.admin.updateUserById(user.id, {
@@ -48,7 +61,7 @@ export async function PATCH(request) {
         email: user.email,
         full_name: cleanName,
         phone: normalizedPhone,
-        role: nextMetadata.role || "CUSTOMER",
+        role: preservedRole,
         updated_at: new Date().toISOString(),
       }, { onConflict: "id" });
     if (profileError) throw profileError;

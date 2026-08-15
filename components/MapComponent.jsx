@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline, CircleMarker } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from "react-leaflet";
 import L from "leaflet";
 import { useRouter } from "next/navigation";
 import { Star, ChevronRight, MapPin } from "lucide-react";
@@ -38,33 +38,113 @@ const createCmykIcon = (color = "#00FFFF", isClosed = false) => {
   });
 };
 
+const createUserLocationIcon = () => new L.DivIcon({
+  className: "user-location-marker-container",
+  html: `
+    <div style="
+      width: 34px;
+      height: 34px;
+      background: #FFF200;
+      border: 3px solid #1A1A1A;
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      box-shadow: 0 4px 14px rgb(26 26 26 / 0.3), 0 0 0 7px rgb(255 242 0 / 0.22);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    ">
+      <div style="
+        width: 10px;
+        height: 10px;
+        background: #1A1A1A;
+        border-radius: 50%;
+        transform: rotate(45deg);
+      "></div>
+    </div>
+  `,
+  iconSize: [34, 34],
+  iconAnchor: [17, 34],
+  popupAnchor: [0, -36],
+});
+
+// React-Leaflet removes its map on unmount. Explicitly removing the instance
+// here as well protects Fast Refresh/Strict Mode from reusing a DOM node that
+// still carries Leaflet's internal _leaflet_id.
+function SafeMapContainer({ children, ...props }) {
+  const mapRef = useRef(null);
+
+  useEffect(() => () => {
+    const map = mapRef.current;
+    try {
+      const container = map?.getContainer?.();
+      map?.remove?.();
+      if (container?._leaflet_id) delete container._leaflet_id;
+    } catch {
+      // Leaflet may already have removed the map during React cleanup.
+    } finally {
+      mapRef.current = null;
+    }
+  }, []);
+
+  return <MapContainer ref={mapRef} {...props}>{children}</MapContainer>;
+}
+
 function MapController({ center, selectedBusinessId, markerRefs, routePoints }) {
   const map = useMap();
 
   useEffect(() => {
     if (!map || !center) return;
 
-    map.invalidateSize();
+    const isMapReady = () => {
+      try {
+        const container = map.getContainer?.();
+        return Boolean(map._loaded && container?.isConnected && container?._leaflet_id);
+      } catch {
+        return false;
+      }
+    };
+
+    if (!isMapReady()) return;
+
+    try {
+      map.invalidateSize({ pan: false });
+    } catch {
+      return undefined;
+    }
     let moveTimer;
-    if (routePoints?.length === 2) {
+    if (selectedBusinessId) {
       moveTimer = setTimeout(() => {
-        map.fitBounds(routePoints, { padding: [48, 48], maxZoom: 15 });
+        if (!isMapReady()) return;
+        try {
+          map.flyTo(center, 16, { duration: 1.2, easeLinearity: 0.25 });
+        } catch { /* map was disposed during a route change */ }
+      }, 50);
+    } else if (routePoints?.length === 2) {
+      moveTimer = setTimeout(() => {
+        if (!isMapReady()) return;
+        try {
+          map.fitBounds(routePoints, { padding: [48, 48], maxZoom: 15 });
+        } catch { /* map was disposed during a route change */ }
       }, 80);
     } else {
-      const zoomLevel = selectedBusinessId ? 16 : 13;
       moveTimer = setTimeout(() => {
-        map.flyTo(center, zoomLevel, {
-          duration: 1.2,
-          easeLinearity: 0.25,
-        });
+        if (!isMapReady()) return;
+        try {
+          map.flyTo(center, 13, { duration: 1.2, easeLinearity: 0.25 });
+        } catch { /* map was disposed during a route change */ }
       }, 50);
     }
 
     let popupTimer;
     if (selectedBusinessId && markerRefs.current[selectedBusinessId]) {
       popupTimer = setTimeout(() => {
-        markerRefs.current[selectedBusinessId].openPopup();
-      }, routePoints?.length === 2 ? 350 : 600);
+        if (!isMapReady()) return;
+        const marker = markerRefs.current[selectedBusinessId];
+        if (marker?._map !== map) return;
+        try {
+          marker.openPopup();
+        } catch { /* marker was disposed during a route change */ }
+      }, 600);
     }
 
     return () => {
@@ -79,8 +159,6 @@ function MapController({ center, selectedBusinessId, markerRefs, routePoints }) 
 export default function MapComponent({ businesses, selectedBusinessId, userLocation, nearestBusinessId }) {
   const router = useRouter();
   const markerRefs = useRef({});
-  const mapRef = useRef(null);
-  const [mapKey] = useState(() => new Date().getTime());
   const [isMounted, setIsMounted] = useState(false);
   const defaultCenter = [14.6806, 120.5375];
 
@@ -97,22 +175,11 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
     : null;
   const center = selected ? [selected.lat, selected.lng] : userLocation ? [userLocation.lat, userLocation.lng] : defaultCenter;
 
-  useEffect(() => {
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
-  }, []);
-
   if (!isMounted) return <div className="w-full h-full bg-slate-100 animate-pulse" />;
 
   return (
     <div className="w-full h-full relative bg-slate-200">
-      <MapContainer
-        key={mapKey}
-        ref={mapRef}
+      <SafeMapContainer
         center={defaultCenter}
         zoom={13}
         scrollWheelZoom={true}
@@ -132,13 +199,13 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
         />
 
         {userLocation && (
-          <CircleMarker
-            center={[userLocation.lat, userLocation.lng]}
-            radius={8}
-            pathOptions={{ color: "#1A1A1A", fillColor: "#FFF200", fillOpacity: 1, weight: 3 }}
+          <Marker
+            position={[userLocation.lat, userLocation.lng]}
+            icon={createUserLocationIcon()}
+            zIndexOffset={1000}
           >
-            <Popup closeButton={false}>Your location</Popup>
-          </CircleMarker>
+            <Popup closeButton={false}>Your exact location</Popup>
+          </Marker>
         )}
 
         {routePoints && (
@@ -158,11 +225,15 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
               position={[b.lat, b.lng]}
               icon={createCmykIcon(isSelected ? "#EC008C" : isNearest ? "#FFF200" : "#00FFFF", isClosed)}
               ref={(el) => {
-                if (el) markerRefs.current[b.id] = el;
+                if (el) {
+                  markerRefs.current[b.id] = el;
+                } else {
+                  delete markerRefs.current[b.id];
+                }
               }}
             >
-              <Popup closeButton={false} className="clean-map-popup">
-                <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xl min-w-[240px] text-slate-900 overflow-hidden relative">
+              <Popup closeButton={false} autoPanPaddingTop={96} autoPanPaddingBottom={32} className="clean-map-popup">
+                <div className="w-full min-w-0 max-w-[360px] overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 text-slate-900 shadow-xl">
                   <div className="cmyk-bar absolute top-0 left-0 right-0" />
                   
                   <div className="flex items-start justify-between gap-2 mb-1.5 pt-1">
@@ -205,7 +276,7 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
             </Marker>
           );
         })}
-      </MapContainer>
+      </SafeMapContainer>
 
       <style jsx global>{`
         .clean-map-popup .leaflet-popup-content-wrapper {
@@ -220,7 +291,8 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
         }
         .clean-map-popup .leaflet-popup-content {
           margin: 0 !important;
-          width: auto !important;
+          width: min(360px, calc(100vw - 48px)) !important;
+          max-width: calc(100vw - 48px) !important;
         }
       `}</style>
     </div>

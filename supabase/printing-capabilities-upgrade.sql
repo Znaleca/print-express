@@ -118,21 +118,45 @@ ALTER TABLE public.order_documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.category_approval_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sms_notification_logs ENABLE ROW LEVEL SECURITY;
 
--- Allow public read access to active pricing rules & proofs
+-- Public pricing is restricted to active rules for approved businesses.
 DROP POLICY IF EXISTS "Public can view pricing rules" ON public.service_pricing_rules;
-CREATE POLICY "Public can view pricing rules" ON public.service_pricing_rules FOR SELECT USING (true);
+CREATE POLICY "Public can view pricing rules" ON public.service_pricing_rules FOR SELECT
+USING (
+  active = true
+  AND business_id IN (SELECT id FROM public.businesses WHERE status = 'APPROVED')
+);
 
 DROP POLICY IF EXISTS "Public can view design proofs" ON public.design_proofs;
-CREATE POLICY "Public can view design proofs" ON public.design_proofs FOR SELECT USING (true);
+CREATE POLICY "Participants can view design proofs" ON public.design_proofs FOR SELECT TO authenticated
+USING (
+  uploaded_by = auth.uid()
+  OR order_id IN (
+    SELECT o.id
+    FROM public.orders o
+    WHERE o.customer_id = auth.uid()
+       OR o.business_id IN (SELECT id FROM public.businesses WHERE owner_id = auth.uid())
+  )
+  OR conversation_id IN (
+    SELECT c.id
+    FROM public.chat_conversations c
+    WHERE c.customer_id = auth.uid()
+       OR c.business_id IN (SELECT id FROM public.businesses WHERE owner_id = auth.uid())
+  )
+);
 
 DROP POLICY IF EXISTS "Owners can edit pricing rules" ON public.service_pricing_rules;
-CREATE POLICY "Owners can edit pricing rules" ON public.service_pricing_rules FOR ALL USING (true);
+CREATE POLICY "Owners can edit pricing rules" ON public.service_pricing_rules FOR ALL
+USING (business_id IN (SELECT id FROM public.businesses WHERE owner_id = auth.uid()))
+WITH CHECK (business_id IN (SELECT id FROM public.businesses WHERE owner_id = auth.uid()));
 
 DROP POLICY IF EXISTS "Users can insert proofs" ON public.design_proofs;
-CREATE POLICY "Users can insert proofs" ON public.design_proofs FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can insert proofs" ON public.design_proofs FOR INSERT TO authenticated
+WITH CHECK (uploaded_by = auth.uid());
 
 DROP POLICY IF EXISTS "Users can update proofs" ON public.design_proofs;
-CREATE POLICY "Users can update proofs" ON public.design_proofs FOR UPDATE USING (true);
+CREATE POLICY "Users can update proofs" ON public.design_proofs FOR UPDATE TO authenticated
+USING (uploaded_by = auth.uid())
+WITH CHECK (uploaded_by = auth.uid());
 
 DROP POLICY IF EXISTS "Owners can create category approval requests" ON public.category_approval_requests;
 CREATE POLICY "Owners can create category approval requests"
@@ -158,15 +182,5 @@ DROP POLICY IF EXISTS "Admins can manage category approval requests" ON public.c
 CREATE POLICY "Admins can manage category approval requests"
 ON public.category_approval_requests FOR ALL
 TO authenticated
-USING (
-  EXISTS (
-    SELECT 1 FROM public.profiles
-    WHERE id = auth.uid() AND role = 'ADMIN'
-  )
-)
-WITH CHECK (
-  EXISTS (
-    SELECT 1 FROM public.profiles
-    WHERE id = auth.uid() AND role = 'ADMIN'
-  )
-);
+USING (public.is_admin())
+WITH CHECK (public.is_admin());

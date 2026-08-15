@@ -26,7 +26,7 @@ export default function LiveChatWidget() {
   }, []);
 
   useEffect(() => {
-    if (!user || role === "BUSINESS_OWNER" || role === "SUPER_ADMIN") return;
+    if (!user || role === "BUSINESS_OWNER" || role === "ADMIN") return;
 
     const fetchUnread = async () => {
       const { data: convs } = await supabase
@@ -61,7 +61,7 @@ export default function LiveChatWidget() {
     };
   }, [user, role]);
 
-  if (pathname === "/messages" || role === "BUSINESS_OWNER" || role === "SUPER_ADMIN" || !user) return null;
+  if (pathname === "/messages" || role === "BUSINESS_OWNER" || role === "ADMIN" || !user) return null;
 
   return (
     <Link
@@ -69,7 +69,7 @@ export default function LiveChatWidget() {
       className="fixed bottom-6 right-6 z-[999] group transition-transform hover:scale-105"
       aria-label="Open Messages"
     >
-      <div className="flex items-center gap-2.5 bg-slate-900 text-white pl-4 pr-5 py-3 rounded-full shadow-lg border border-slate-800 hover:bg-[#EC008C] transition-colors relative">
+      <div className="relative flex items-center gap-2.5 rounded-full border border-white/15 bg-[#1A1A1A] py-3 pl-4 pr-5 text-white shadow-lg transition-colors hover:bg-[#EC008C]">
         <MessageSquare size={20} className="text-[#00FFFF] group-hover:text-white transition-colors" />
         <span className="text-xs font-bold tracking-wide">Messages</span>
         {unread > 0 && (

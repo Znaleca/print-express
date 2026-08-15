@@ -1,0 +1,279 @@
+.pc-card-wrapper {
+  --pointer-x: 50%;
+  --pointer-y: 50%;
+  --pointer-from-center: 0;
+  --pointer-from-top: 0.5;
+  --pointer-from-left: 0.5;
+  --rotate-x: 0deg;
+  --rotate-y: 0deg;
+  --background-x: 50%;
+  --background-y: 50%;
+  --inner-gradient: linear-gradient(145deg, rgba(0,255,255,.25), rgba(236,0,140,.22), rgba(255,242,0,.16));
+  --behind-glow-color: rgba(0, 255, 255, .58);
+  --behind-glow-size: 58%;
+  position: relative;
+  width: 100%;
+  max-width: 330px;
+  perspective: 900px;
+  transform: translateZ(0);
+}
+
+.pc-behind {
+  position: absolute;
+  inset: 8% -5% -4%;
+  pointer-events: none;
+  background: radial-gradient(circle at var(--pointer-x) var(--pointer-y), var(--behind-glow-color) 0, transparent var(--behind-glow-size));
+  filter: blur(38px) saturate(1.15);
+  opacity: .26;
+  transition: opacity .25s ease;
+}
+
+.pc-card-wrapper:hover .pc-behind,
+.pc-card-wrapper.active .pc-behind { opacity: .72; }
+
+.pc-card-shell { position: relative; z-index: 1; }
+
+.pc-card {
+  position: relative;
+  width: 100%;
+  aspect-ratio: .76;
+  background: transparent;
+  transform-style: preserve-3d;
+  box-shadow: 0 18px 38px rgba(26,26,26,.16);
+  transform: translateZ(0) rotateX(0) rotateY(0);
+  transition: transform .35s ease, box-shadow .35s ease;
+}
+
+.pc-card-face {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.22);
+  border-radius: 24px;
+  backface-visibility: hidden;
+}
+
+.pc-card-front,
+.pc-card-back {
+  background: #1a1a1a;
+}
+
+.pc-card-front::before,
+.pc-card-back::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 8;
+  height: 6px;
+  background: linear-gradient(90deg, #00ffff 0 25%, #ec008c 25% 50%, #fff200 50% 75%, #1a1a1a 75%);
+}
+
+.pc-card-wrapper:hover .pc-card,
+.pc-card-wrapper.active .pc-card {
+  box-shadow: 0 26px 54px rgba(26,26,26,.28);
+  transform: translateZ(0) rotateX(var(--rotate-y)) rotateY(var(--rotate-x));
+}
+
+.pc-card.is-flipped,
+.pc-card-wrapper:hover .pc-card.is-flipped,
+.pc-card-wrapper.active .pc-card.is-flipped {
+  transform: translateZ(0) rotateY(180deg);
+}
+
+.pc-card[role="button"] { cursor: pointer; }
+.pc-card[role="button"]:focus-visible { outline: 3px solid #00ffff; outline-offset: 5px; }
+
+.pc-inside,
+.pc-content,
+.pc-shine,
+.pc-glare { position: absolute; inset: 0; }
+
+.pc-inside { overflow: hidden; background: #1a1a1a; }
+
+.pc-shine {
+  z-index: 3;
+  background:
+    radial-gradient(circle at var(--pointer-x) var(--pointer-y), rgba(255,255,255,.34), transparent 28%),
+    linear-gradient(125deg, rgba(0,255,255,.16), transparent 35%, rgba(236,0,140,.2) 65%, rgba(255,242,0,.12));
+  mix-blend-mode: screen;
+  opacity: .7;
+  transition: opacity .25s ease;
+}
+
+.pc-card-wrapper:hover .pc-shine,
+.pc-card-wrapper.active .pc-shine { opacity: 1; }
+
+.pc-glare {
+  z-index: 4;
+  background: radial-gradient(circle at var(--pointer-x) var(--pointer-y), rgba(255,255,255,.28), transparent 42%);
+  mix-blend-mode: soft-light;
+  pointer-events: none;
+}
+
+.pc-avatar-content { z-index: 1; overflow: hidden; }
+
+.pc-avatar-frame {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.pc-avatar-content::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(180deg, rgba(26,26,26,.08) 25%, rgba(26,26,26,.2) 48%, rgba(26,26,26,.92) 100%);
+  pointer-events: none;
+}
+
+.pc-avatar-content .avatar {
+  z-index: 0;
+  object-fit: cover;
+  object-position: center top;
+  transform: translateX(calc((var(--pointer-from-left) - .5) * 7px)) scale(1.04);
+  filter: saturate(.85) contrast(1.03);
+  transition: transform .18s ease-out, filter .25s ease;
+}
+
+.avatar-shape-circle .pc-card-front .pc-inside {
+  background: linear-gradient(145deg, #101010, #252525 58%, #111);
+}
+
+.avatar-shape-circle .pc-card-front .pc-shine {
+  opacity: .08;
+  filter: grayscale(1);
+}
+
+.avatar-shape-circle .pc-card-front .pc-details p { color: #d4d4d4; }
+
+.avatar-shape-circle .pc-avatar-content .avatar {
+  filter: grayscale(1) saturate(0) contrast(1.05);
+}
+
+.avatar-shape-circle:hover .pc-card-front .pc-inside,
+.avatar-shape-circle.active .pc-card-front .pc-inside {
+  background-image: var(--inner-gradient);
+}
+
+.avatar-shape-circle:hover .pc-card-front .pc-shine,
+.avatar-shape-circle.active .pc-card-front .pc-shine { opacity: .9; }
+
+.avatar-shape-circle:hover .pc-avatar-content .avatar,
+.avatar-shape-circle.active .pc-avatar-content .avatar {
+  filter: grayscale(0) saturate(1.08) contrast(1.06);
+}
+
+.avatar-shape-circle .pc-avatar-frame {
+  z-index: 2;
+  top: 42%;
+  right: 28%;
+  bottom: auto;
+  left: 28%;
+  aspect-ratio: 1;
+  border: 4px solid rgba(255, 255, 255, .92);
+  border-radius: 50%;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, .28), 0 0 0 6px rgba(0, 255, 255, .15);
+}
+
+.avatar-shape-circle .pc-avatar-content .avatar {
+  transform: translateX(calc((var(--pointer-from-left) - .5) * 5px)) scale(1.04);
+}
+
+.pc-card-wrapper:hover .pc-avatar-content .avatar,
+.pc-card-wrapper.active .pc-avatar-content .avatar {
+  filter: saturate(1.08) contrast(1.06);
+}
+
+.pc-details-content { z-index: 5; pointer-events: none; }
+
+.pc-details {
+  position: absolute;
+  top: 30px;
+  left: 28px;
+  right: 28px;
+  text-align: left;
+}
+
+.pc-details h3 {
+  margin: 0;
+  color: #fff;
+  font-size: clamp(1.45rem, 2.5vw, 2rem);
+  font-weight: 800;
+  line-height: .98;
+  letter-spacing: -.045em;
+}
+
+.pc-details p {
+  margin: 10px 0 0;
+  color: #00ffff;
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .16em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.pc-user-info {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  left: 18px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 62px;
+  padding: 9px 11px;
+  border: 1px solid rgba(255,255,255,.22);
+  border-radius: 14px;
+  background: rgba(26,26,26,.54);
+  backdrop-filter: blur(14px);
+  pointer-events: auto;
+}
+
+.pc-user-details { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.pc-mini-avatar { position: relative; width: 38px; height: 38px; flex: 0 0 auto; overflow: hidden; border: 1px solid rgba(255,255,255,.35); border-radius: 50%; }
+.pc-mini-avatar img { object-fit: cover; }
+.pc-user-text { min-width: 0; }
+.pc-handle, .pc-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-handle { color: #fff; font-size: .76rem; font-weight: 800; }
+.pc-status { margin-top: 3px; color: rgba(255,255,255,.68); font-size: .65rem; }
+.pc-contact-btn { border: 1px solid rgba(0,255,255,.6); border-radius: 999px; background: transparent; color: #00ffff; padding: 7px 9px; font-size: .62rem; font-weight: 800; white-space: nowrap; }
+.pc-contact-btn:hover { background: #00ffff; color: #1a1a1a; }
+
+.pc-card-back {
+  display: flex;
+  align-items: flex-end;
+  padding: 30px 28px;
+  transform: rotateY(180deg);
+  color: #fff;
+}
+
+.pc-card-back::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 85% 15%, rgba(0,255,255,.18), transparent 28%), linear-gradient(145deg, #171717, #2a2a2a);
+}
+
+.pc-back-inner { position: relative; z-index: 1; width: 100%; }
+.pc-back-kicker { margin: 0 0 14px; color: #00ffff; font-size: .65rem; font-weight: 800; letter-spacing: .18em; }
+.pc-back-inner h3 { margin: 0; font-size: clamp(1.35rem, 2.4vw, 1.9rem); font-weight: 800; line-height: 1.05; letter-spacing: -.04em; }
+.pc-back-description { margin: 14px 0 0; color: rgba(255,255,255,.72); font-size: .78rem; line-height: 1.5; }
+.pc-back-list { display: grid; gap: 9px; margin: 20px 0 0; padding: 0; list-style: none; }
+.pc-back-list li { position: relative; padding-left: 16px; color: rgba(255,255,255,.92); font-size: .74rem; line-height: 1.35; }
+.pc-back-list li::before { content: ""; position: absolute; top: .52em; left: 0; width: 7px; height: 7px; border-radius: 50%; background: #ec008c; }
+.pc-back-hint { display: block; margin-top: 24px; color: rgba(255,255,255,.5); font-size: .62rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+
+@media (max-width: 640px) {
+  .pc-card-wrapper { max-width: 350px; margin-inline: auto; }
+  .pc-card { aspect-ratio: .8; }
+  .pc-details { top: 26px; left: 24px; right: 24px; }
+  .pc-user-info { right: 14px; bottom: 14px; left: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-card, .pc-card-wrapper .pc-avatar-content .avatar, .pc-shine { transition: none; }
+}

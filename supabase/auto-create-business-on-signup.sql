@@ -20,15 +20,20 @@ set search_path = public
 as $$
 declare
   requested_business_name text;
+  requested_business_background text;
+  requested_products_summary text;
 begin
   if new.role = 'BUSINESS_OWNER' then
-    select coalesce(nullif(trim((u.raw_user_meta_data ->> 'business_name')), ''), nullif(trim(new.full_name), '') || '''s Business', 'Pending Business')
-    into requested_business_name
+    select
+      coalesce(nullif(trim((u.raw_user_meta_data ->> 'business_name')), ''), nullif(trim(new.full_name), '') || '''s Business', 'Pending Business'),
+      nullif(trim((u.raw_user_meta_data ->> 'business_background')), ''),
+      nullif(trim((u.raw_user_meta_data ->> 'products_summary')), '')
+    into requested_business_name, requested_business_background, requested_products_summary
     from auth.users u
     where u.id = new.id;
 
-    insert into public.businesses (owner_id, name, status)
-    values (new.id, requested_business_name, 'PENDING')
+    insert into public.businesses (owner_id, name, description, products_summary, status)
+    values (new.id, requested_business_name, requested_business_background, requested_products_summary, 'PENDING')
     on conflict do nothing;
   end if;
 

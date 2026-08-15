@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
+import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
 import {
   Store, Save, Loader2, CheckCircle, AlertCircle,
   UploadCloud, ImageOff, X, Printer, QrCode, Power, MapPin, CheckCircle2, ShieldCheck
@@ -12,19 +14,21 @@ const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker")
 
 const FIELDS = [
   { key: "name", label: "Business Name", type: "text", placeholder: "e.g. Apex Print Studio" },
-  { key: "description", label: "Description", type: "area", placeholder: "Describe your printing shop and available machinery..." },
+  { key: "description", label: "Business Background", type: "area", placeholder: "Tell customers when you started, what you specialize in, and what makes your shop reliable...", maxLength: 800 },
+  { key: "products_summary", label: "Products & Services Offered", type: "area", placeholder: "e.g. Business cards, flyers, posters, tarpaulins, stickers, photo printing, and rush orders...", maxLength: 500 },
   { key: "phone", label: "Phone Number", type: "text", placeholder: "+63 912 345 6789" },
   { key: "email", label: "Business Email", type: "email", placeholder: "contact@yourshop.com" },
   { key: "website", label: "Website URL", type: "url", placeholder: "https://yourshop.com" },
 ];
 
+const ADMIN_MANAGED_PROFILE_FIELDS = new Set(["description", "products_summary"]);
+
 const BUCKET = "shop-logos";
-const MAX_MB = 2;
-const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"];
+const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 export default function ShopProfilePage() {
   const [form, setForm] = useState({
-    name: "", description: "", address: "",
+    name: "", description: "", products_summary: "", address: "",
     phone: "", email: "", website: "", logo_url: "", qr_url: "",
     lat: null, lng: null,
     min_downpayment_percent: 30,
@@ -58,7 +62,7 @@ export default function ShopProfilePage() {
 
       const { data: biz } = await supabase
         .from("businesses")
-        .select("id, name, description, address, phone, email, website, logo_url, qr_url, lat, lng, min_downpayment_percent, is_open")
+        .select("id, name, description, products_summary, address, phone, email, website, logo_url, qr_url, lat, lng, min_downpayment_percent, is_open")
         .eq("owner_id", user.id)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -69,6 +73,7 @@ export default function ShopProfilePage() {
         const loadedForm = {
           name: biz.name || "",
           description: biz.description || "",
+          products_summary: biz.products_summary || "",
           address: biz.address || "",
           phone: biz.phone || "",
           email: biz.email || "",
@@ -117,35 +122,48 @@ export default function ShopProfilePage() {
 
   const handleLogoSelected = async (file) => {
     if (!file) return;
-    if (!ALLOWED.includes(file.type)) return setLogoError("Supported formats: PNG, JPG, WebP, SVG.");
-    if (file.size > MAX_MB * 1024 * 1024) return setLogoError("Image must be under 2MB.");
+    if (!ALLOWED.includes(file.type)) return setLogoError("Supported formats: PNG, JPG, or WebP.");
 
-    setLogoError(null);
-    setLogoFile(file);
-    setLogoPreview(URL.createObjectURL(file));
+    try {
+      const optimized = await optimizeImageForUpload(file);
+      setLogoError(null);
+      setLogoFile(optimized);
+      setLogoPreview(URL.createObjectURL(optimized));
+    } catch (error) {
+      setLogoError(error.message || "Could not optimize this image.");
+    }
   };
 
   const handleQrSelected = async (file) => {
     if (!file) return;
-    if (!ALLOWED.includes(file.type)) return setQrError("Supported formats: PNG, JPG, WebP, SVG.");
-    if (file.size > MAX_MB * 1024 * 1024) return setQrError("Image must be under 2MB.");
+    if (!ALLOWED.includes(file.type)) return setQrError("Supported formats: PNG, JPG, or WebP.");
 
-    setQrError(null);
-    setQrFile(file);
-    setQrPreview(URL.createObjectURL(file));
+    try {
+      const optimized = await optimizeImageForUpload(file);
+      setQrError(null);
+      setQrFile(optimized);
+      setQrPreview(URL.createObjectURL(optimized));
+    } catch (error) {
+      setQrError(error.message || "Could not optimize this image.");
+    }
   };
 
   const uploadFileToBucket = async (file, prefix) => {
-    const ext = file.name.split(".").pop();
-    const fileName = `${prefix}_${businessId}_${Date.now()}.${ext}`;
+    const optimized = await optimizeImageForUpload(file);
+    const ext = getUploadExtension(optimized);
+    const fileName = `${businessId}/${prefix}_${Date.now()}.${ext}`;
     const { error: uploadErr } = await supabase.storage
-      .from("chat-images")
-      .upload(fileName, file, { upsert: true });
+      .from(IMAGE_BUCKET)
+      .upload(fileName, optimized, {
+        upsert: true,
+        cacheControl: "31536000",
+        contentType: optimized.type,
+      });
 
     if (uploadErr) throw uploadErr;
 
     const { data: { publicUrl } } = supabase.storage
-      .from("chat-images")
+      .from(IMAGE_BUCKET)
       .getPublicUrl(fileName);
 
     return publicUrl;
@@ -178,6 +196,7 @@ export default function ShopProfilePage() {
       const payload = {
         name: form.name,
         description: form.description,
+        products_summary: form.products_summary,
         address: form.address,
         phone: form.phone,
         email: form.email,
@@ -213,7 +232,7 @@ export default function ShopProfilePage() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
+      <main className="owner-shop-page min-h-screen bg-[#F6F6F2] flex items-center justify-center font-sans text-slate-600">
         <div className="flex flex-col items-center gap-3">
           <Loader2 size={36} className="animate-spin text-[#EC008C]" />
           <p className="text-xs font-semibold uppercase tracking-wider">Loading shop settings...</p>
@@ -223,15 +242,16 @@ export default function ShopProfilePage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+    <main className="owner-shop-page min-h-screen bg-[#F6F6F2] font-sans text-slate-900 pb-20">
       
       {/* Header Banner */}
-      <section className="bg-white border-b border-slate-200 py-8 px-4 sm:px-6 lg:px-8 relative shadow-sm">
+      <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-10 pt-8 text-white sm:px-8 sm:pb-12 sm:pt-10 lg:px-10">
         <div className="cmyk-bar absolute top-0 left-0 right-0" />
-        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10" />
+        <div className="relative mx-auto flex max-w-6xl flex-col justify-between gap-6 md:flex-row md:items-end">
           <div>
-            <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Shop Profile & Settings</h1>
-            <p className="mt-1 text-xs text-slate-500">General business information lives here: contact details, shop description, map location, payment QR code, and open status.</p>
+            <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">My shop</h1>
+            <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">Keep your storefront, contact details, payment instructions, and map pin ready for customers.</p>
           </div>
 
           {/* Open/Closed Toggle Button */}
@@ -239,8 +259,8 @@ export default function ShopProfilePage() {
             <button
               onClick={handleToggleOpen}
               disabled={togglingOpen}
-              className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all shadow-sm ${
-                isOpen ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-slate-800 text-white hover:bg-slate-900"
+              className={`flex items-center gap-2 rounded-full px-5 py-3 text-xs font-black transition-all shadow-md ${
+                isOpen ? "bg-[#00FFFF] text-[#1A1A1A] hover:bg-[#FFF200]" : "bg-white/10 text-white ring-1 ring-white/20 hover:bg-[#EC008C]"
               }`}
             >
               <Power size={14} /> {isOpen ? "Shop is Open" : "Shop is Closed"}
@@ -259,21 +279,22 @@ export default function ShopProfilePage() {
       )}
 
       {/* Form Container */}
-      <section className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
+      <section className="mx-auto max-w-6xl px-4 pt-8 sm:px-8 lg:px-10">
         <form onSubmit={handleSubmit} className="space-y-8">
           
           {/* Logo & QR Code Section */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             
             {/* Logo Upload Card */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-4">Shop Logo</h2>
+            <div className="relative overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
+              <div className="cmyk-bar-sm absolute left-0 right-0 top-0" />
+              <h2 className="mb-5 text-lg font-black text-slate-900">Storefront identity</h2>
               <div className="flex items-center gap-4">
                 {logoPreview ? (
-                  <img src={logoPreview} alt="Logo" className="w-20 h-20 object-cover rounded-xl border border-slate-200 shrink-0" />
+                  <img src={logoPreview} alt="Logo" className="h-28 w-28 shrink-0 rounded-2xl border border-[#D8D6CE] object-cover" />
                 ) : (
-                  <div className="w-20 h-20 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 shrink-0">
-                    <Store size={28} />
+                  <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-2xl border border-[#D8D6CE] bg-[#ECECE8] text-slate-400">
+                    <Store size={34} />
                   </div>
                 )}
                 <div className="flex-1">
@@ -287,25 +308,26 @@ export default function ShopProfilePage() {
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-semibold transition-colors mb-1"
+                    className="mb-1 rounded-full bg-[#1A1A1A] px-4 py-2.5 text-xs font-black text-white transition-colors hover:bg-[#EC008C]"
                   >
                     Select Logo Image
                   </button>
-                  <p className="text-[11px] text-slate-400">PNG, JPG, WebP up to 2MB</p>
+                  <p className="text-[11px] text-slate-400">PNG, JPG, WebP · optimized to 5MB max</p>
                   {logoError && <p className="text-xs text-rose-600 font-medium mt-1">{logoError}</p>}
                 </div>
               </div>
             </div>
 
             {/* QR Code Upload Card */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-4">Downpayment Payment QR</h2>
+            <div className="relative overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
+              <div className="cmyk-bar-sm absolute left-0 right-0 top-0" />
+              <h2 className="mb-5 text-lg font-black text-slate-900">Payment details</h2>
               <div className="flex items-center gap-4">
                 {qrPreview ? (
-                  <img src={qrPreview} alt="QR Code" className="w-20 h-20 object-cover rounded-xl border border-slate-200 shrink-0" />
+                  <img src={qrPreview} alt="QR Code" className="h-28 w-28 shrink-0 rounded-2xl border border-[#D8D6CE] object-cover" />
                 ) : (
-                  <div className="w-20 h-20 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 shrink-0">
-                    <QrCode size={28} />
+                  <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-2xl border border-[#D8D6CE] bg-[#ECECE8] text-slate-400">
+                    <QrCode size={34} />
                   </div>
                 )}
                 <div className="flex-1">
@@ -319,11 +341,11 @@ export default function ShopProfilePage() {
                   <button
                     type="button"
                     onClick={() => qrInputRef.current?.click()}
-                    className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-semibold transition-colors mb-1"
+                    className="mb-1 rounded-full bg-[#1A1A1A] px-4 py-2.5 text-xs font-black text-white transition-colors hover:bg-[#EC008C]"
                   >
                     Select QR Image
                   </button>
-                  <p className="text-[11px] text-slate-400">GCash / Maya QR image</p>
+                  <p className="text-[11px] text-slate-400">GCash / Maya QR image · optimized to 5MB max</p>
                   {qrError && <p className="text-xs text-rose-600 font-medium mt-1">{qrError}</p>}
                 </div>
               </div>
@@ -332,21 +354,39 @@ export default function ShopProfilePage() {
           </div>
 
           {/* Business Information Fields */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-5">
-            <h2 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-3">General Business Information</h2>
+          <div className="space-y-5 rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
+            <div className="border-b border-slate-100 pb-4">
+              <h2 className="text-xl font-black text-slate-900">Business information</h2>
+              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
+                Give customers a quick, honest overview of your shop. Your background and product summary appear on your public profile.
+              </p>
+            </div>
 
             {FIELDS.map((f) => (
               <div key={f.key}>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">{f.label}</label>
                 {f.type === "area" ? (
-                  <textarea
-                    name={f.key}
-                    value={form[f.key]}
-                    onChange={handleChange}
-                    rows={3}
-                    placeholder={f.placeholder}
-                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-[#00FFFF]"
-                  />
+                  <>
+                    {ADMIN_MANAGED_PROFILE_FIELDS.has(f.key) ? (
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-relaxed text-slate-700">
+                        {form[f.key] || "Not provided yet."}
+                      </div>
+                    ) : (
+                      <textarea
+                        name={f.key}
+                        value={form[f.key]}
+                        onChange={handleChange}
+                        rows={3}
+                        placeholder={f.placeholder}
+                        className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3 text-xs outline-none focus:ring-2 focus:ring-[#00FFFF]"
+                      />
+                    )}
+                    {(f.key === "description" || f.key === "products_summary") && (
+                      <p className="mt-1 text-[11px] text-slate-400">
+                        Read-only after submission · Request changes from the <Link href="/owner/documents" className="font-bold text-[#C40075] hover:underline">Documents</Link> page.
+                      </p>
+                    )}
+                  </>
                 ) : (
                   <input
                     type={f.type}
@@ -354,7 +394,7 @@ export default function ShopProfilePage() {
                     value={form[f.key]}
                     onChange={handleChange}
                     placeholder={f.placeholder}
-                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-[#00FFFF]"
+                    className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3 text-xs outline-none focus:ring-2 focus:ring-[#00FFFF]"
                   />
                 )}
               </div>
@@ -369,15 +409,15 @@ export default function ShopProfilePage() {
                 name="min_downpayment_percent"
                 value={form.min_downpayment_percent}
                 onChange={handleChange}
-                className="w-full max-w-xs px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#EC008C]"
+                className="w-full max-w-xs rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3 text-xs font-bold outline-none focus:ring-2 focus:ring-[#EC008C]"
               />
               <p className="text-[11px] text-slate-400 mt-1">Default minimum downpayment required at checkout (e.g. 30%).</p>
             </div>
           </div>
 
           {/* Location Picker Map Card */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-4">
-            <h2 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-3">Shop Address & Map Location</h2>
+          <div className="space-y-4 rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
+            <h2 className="border-b border-slate-100 pb-4 text-xl font-black text-slate-900">Location</h2>
             
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">Address Text</label>
@@ -387,13 +427,13 @@ export default function ShopProfilePage() {
                 value={form.address}
                 onChange={handleChange}
                 placeholder="e.g. 123 Main St, City"
-                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-[#00FFFF]"
+                className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3 text-xs outline-none focus:ring-2 focus:ring-[#00FFFF]"
               />
             </div>
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-2">Pin Map Location</label>
-              <div className="h-[320px] rounded-xl border border-slate-200 overflow-hidden relative">
+              <div className="relative h-[420px] overflow-hidden rounded-2xl border border-[#D8D6CE]">
                 <LocationPicker
                   lat={form.lat}
                   lng={form.lng}
@@ -408,7 +448,7 @@ export default function ShopProfilePage() {
             <button
               type="submit"
               disabled={saving}
-              className="px-8 py-3.5 bg-slate-900 text-white rounded-xl font-bold text-xs uppercase tracking-wider hover:bg-[#EC008C] transition-all shadow-md disabled:opacity-50 flex items-center gap-2"
+              className="flex items-center gap-2 rounded-full bg-[#1A1A1A] px-8 py-4 text-xs font-black uppercase tracking-wider text-white shadow-md transition-all hover:bg-[#EC008C] disabled:opacity-50"
             >
               {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
               Save Shop Profile

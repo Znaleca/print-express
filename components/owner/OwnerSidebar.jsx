@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import BrandMark from "@/components/BrandMark";
 import {
   BarChart2,
   Store,
@@ -13,7 +14,10 @@ import {
   Printer,
   Star,
   FileText,
-  Lock
+  Lock,
+  Settings,
+  LogOut,
+  Loader2
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -26,7 +30,18 @@ const NAV_ITEMS = [
   { href: "/owner/documents", label: "Documents",  icon: FileText,      badge: null },
 ];
 
-export default function OwnerSidebar({ businessName, isOpen, onToggle, isVerified = true, pendingOrders = 0, unreadMessages = 0 }) {
+export default function OwnerSidebar({
+  businessName,
+  ownerDisplayName,
+  ownerEmail,
+  isOpen,
+  onToggle,
+  onSignOut,
+  signingOut = false,
+  isVerified = true,
+  pendingOrders = 0,
+  unreadMessages = 0,
+}) {
   const pathname = usePathname();
 
   const getBadgeCount = (key) => {
@@ -37,31 +52,27 @@ export default function OwnerSidebar({ businessName, isOpen, onToggle, isVerifie
 
   return (
     <aside
-      className={`relative h-screen bg-slate-900 text-white border-r border-slate-800 transition-all duration-300 ease-in-out flex flex-col z-50
-        ${isOpen ? "w-64" : "w-20"}`}
+      className={`relative z-50 h-screen shrink-0 overflow-visible bg-[#1A1A1A] text-white border-r border-[#2D2D2D] transition-all duration-300 ease-in-out flex flex-col
+        ${isOpen ? "w-72" : "w-20"}`}
     >
       <div className="cmyk-bar" />
 
       {/* Toggle Arrow */}
       <button
         onClick={onToggle}
-        className="absolute -right-3.5 top-12 z-50 flex h-7 w-7 items-center justify-center rounded-full border border-slate-700 bg-slate-800 text-white shadow-md hover:bg-slate-700 transition-all"
+        className="absolute -right-3.5 top-1/2 z-50 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-[#55554F] bg-[#2A2A2A] text-white opacity-100 shadow-md backdrop-blur-none transition-all hover:bg-[#00FFFF] hover:text-[#1A1A1A]"
       >
         {isOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
       </button>
 
       {/* Brand Header */}
-      <div className="p-5 mb-4 border-b border-slate-800">
+      <div className="mb-4 overflow-hidden border-b border-[#2D2D2D] p-5">
         <div className="flex items-center gap-3">
-          <div className="flex-shrink-0 flex h-10 w-10 items-center justify-center rounded-xl bg-white text-slate-950 font-black text-sm">
-            <span className="text-[#00E5FF]">P</span>
-            <span className="text-[#EC008C]">-</span>
-            <span className="text-[#EAB308]">P</span>
-          </div>
+          <BrandMark className={`h-10 max-w-full shrink-0 ${isOpen ? "w-[72px]" : "w-10 text-sm"}`} />
           {isOpen && (
             <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-semibold text-slate-400">Shop Dashboard</p>
-              <p className="truncate font-bold text-sm text-white">
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#00FFFF]">Owner workspace</p>
+              <p className="whitespace-normal break-words text-sm font-black leading-tight text-white">
                 {businessName || "My Shop"}
               </p>
             </div>
@@ -80,16 +91,16 @@ export default function OwnerSidebar({ businessName, isOpen, onToggle, isVerifie
             <Link
               key={href}
               href={href}
-              className={`relative flex items-center justify-between px-3.5 py-2.5 rounded-xl transition-all group text-xs font-semibold
+              className={`relative flex items-center justify-between rounded-2xl px-3.5 py-3 transition-all group text-xs font-semibold
                 ${isActive
-                  ? "bg-slate-800 text-white font-bold"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                  ? "bg-[#00FFFF] text-[#1A1A1A] font-black"
+                  : "text-white/55 hover:bg-white/5 hover:text-white"
                 }
                 ${isLocked ? "opacity-60" : ""}`}
             >
               <div className="flex items-center gap-3">
                 <div className="relative flex-shrink-0">
-                  <Icon size={18} className={isActive ? "text-[#00FFFF]" : ""} />
+                  <Icon size={18} className={isActive ? "text-[#1A1A1A]" : ""} />
                   {count > 0 && !isOpen && (
                     <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-[#EC008C] text-white text-[9px] font-bold">
                       {count > 99 ? "99+" : count}
@@ -117,6 +128,36 @@ export default function OwnerSidebar({ businessName, isOpen, onToggle, isVerifie
           );
         })}
       </nav>
+
+      {/* Owner account actions */}
+      <div className="mt-auto border-t border-[#2D2D2D] p-3">
+        {isOpen && (
+          <div className="mb-3 rounded-2xl bg-white/5 px-3 py-3">
+            <p className="truncate text-xs font-black text-white">{ownerDisplayName || "Shop owner"}</p>
+            <p className="mt-1 truncate text-[10px] text-white/45">{ownerEmail || "Owner account"}</p>
+          </div>
+        )}
+
+        <Link
+          href="/owner/account-settings"
+          title="Account settings"
+          className={`mb-1 flex items-center gap-3 rounded-2xl px-3.5 py-3 text-xs font-semibold text-white/55 transition-colors hover:bg-white/5 hover:text-white ${!isOpen ? "justify-center" : ""}`}
+        >
+          <Settings size={18} />
+          {isOpen && <span>Account settings</span>}
+        </Link>
+
+        <button
+          type="button"
+          onClick={onSignOut}
+          disabled={signingOut}
+          title="Sign out"
+          className={`flex w-full items-center gap-3 rounded-2xl px-3.5 py-3 text-left text-xs font-black text-[#EC008C] transition-colors hover:bg-[#EC008C]/10 disabled:cursor-not-allowed disabled:opacity-60 ${!isOpen ? "justify-center" : ""}`}
+        >
+          {signingOut ? <Loader2 size={18} className="animate-spin" /> : <LogOut size={18} />}
+          {isOpen && <span>{signingOut ? "Signing out..." : "Sign out"}</span>}
+        </button>
+      </div>
     </aside>
   );
 }

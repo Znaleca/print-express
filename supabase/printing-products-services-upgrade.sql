@@ -38,10 +38,18 @@ ALTER TABLE public.inventory_movements ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies for New Tables
 DROP POLICY IF EXISTS "Public can view pricing rules" ON public.service_pricing_rules;
-CREATE POLICY "Public can view pricing rules" ON public.service_pricing_rules FOR SELECT USING (true);
+CREATE POLICY "Public can view pricing rules" ON public.service_pricing_rules FOR SELECT
+USING (
+  active = true
+  AND business_id IN (SELECT id FROM public.businesses WHERE status = 'APPROVED')
+);
 
 DROP POLICY IF EXISTS "Owners can edit pricing rules" ON public.service_pricing_rules;
-CREATE POLICY "Owners can edit pricing rules" ON public.service_pricing_rules FOR ALL USING (true);
+CREATE POLICY "Owners can edit pricing rules" ON public.service_pricing_rules FOR ALL
+USING (business_id IN (SELECT id FROM public.businesses WHERE owner_id = auth.uid()))
+WITH CHECK (business_id IN (SELECT id FROM public.businesses WHERE owner_id = auth.uid()));
 
 DROP POLICY IF EXISTS "Owners can manage inventory movements" ON public.inventory_movements;
-CREATE POLICY "Owners can manage inventory movements" ON public.inventory_movements FOR ALL USING (true);
+CREATE POLICY "Owners can manage inventory movements" ON public.inventory_movements FOR ALL
+USING (business_id IN (SELECT id FROM public.businesses WHERE owner_id = auth.uid()))
+WITH CHECK (business_id IN (SELECT id FROM public.businesses WHERE owner_id = auth.uid()));

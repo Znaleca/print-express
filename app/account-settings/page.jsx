@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { User, Lock, Mail, Save, Loader2, ShieldCheck, AlertTriangle, Phone } from "lucide-react";
 import { normalizePhilippinePhone } from "@/lib/phone";
+import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
 
-export default function AccountSettingsPage() {
+export default function AccountSettingsPage({ isOwnerPortal = false, portalRole = "customer" } = {}) {
   const router = useRouter();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -35,9 +36,14 @@ export default function AccountSettingsPage() {
       setEmail(user.email || "");
       const { data: profile } = await supabase
         .from("profiles")
-        .select("full_name, phone")
+        .select("full_name, phone, role")
         .eq("id", user.id)
         .maybeSingle();
+
+      if (!isOwnerPortal && (profile?.role === "BUSINESS_OWNER" || user.user_metadata?.role === "BUSINESS_OWNER")) {
+        router.replace("/owner/account-settings");
+        return;
+      }
 
       setFullName(profile?.full_name || user.user_metadata?.full_name || "");
       setPhone(profile?.phone || user.user_metadata?.phone || "");
@@ -110,86 +116,64 @@ export default function AccountSettingsPage() {
   };
 
   if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-80px)] bg-[#1A1A1A] text-[#00FFFF] font-mono">
-        <Loader2 className="animate-spin mb-4" size={48} />
-        <p className="uppercase tracking-[0.4em] text-[10px] font-black">Syncing_Identity_Core...</p>
-      </div>
-    );
+    return <OwnerPageSkeleton rows={2} />;
   }
 
   return (
-    <main className="min-h-screen w-full bg-[#FDFDFD] font-sans overflow-x-hidden">
-      <section className="relative px-4 pb-16 pt-6 md:px-8 md:pt-8">
-        <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
-        <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
-        <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
+    <main className="account-settings-page min-h-screen w-full overflow-x-hidden bg-[#F6F6F2] font-sans">
+      <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-12 pt-8 text-white sm:px-8 sm:pb-14 sm:pt-10 lg:px-10">
+        <div className="cmyk-bar absolute left-0 right-0 top-0" />
+        <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10" />
 
-        <div className="relative max-w-[1400px] mx-auto space-y-8">
+        <div className="relative mx-auto max-w-6xl space-y-8">
           {/* HEADER SECTION */}
-          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b-8 border-[#1A1A1A] pb-6">
+          <div className="flex flex-col justify-between gap-6 md:flex-row md:items-end">
             <div>
-              <div className="flex items-center gap-2 mb-4">
-                <div className="flex gap-1">
-                  <div className="w-4 h-1 bg-[#00FFFF]" />
-                  <div className="w-4 h-1 bg-[#EC008C]" />
-                  <div className="w-4 h-1 bg-[#FFF200]" />
-                </div>
-                <span className="font-mono text-[9px] uppercase tracking-[0.5em] text-gray-400">Settings_v1.0</span>
-              </div>
-              <h1 className="text-5xl md:text-7xl font-black uppercase italic tracking-tighter leading-none mb-6">
-                Account Settings
-              </h1>
+              <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">Settings</h1>
+              <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">
+                {portalRole === "admin" ? "Manage your administrator profile and keep your account secure." : portalRole === "owner" ? "Manage your shop owner profile and keep your account secure." : "Manage your profile and keep your account secure."}
+              </p>
               
               <div className="flex flex-wrap items-center gap-6">
-                <div className="flex items-center gap-2 bg-[#1A1A1A] text-white px-4 py-2 font-mono text-[10px] uppercase tracking-widest font-black shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]">
-                  <ShieldCheck size={14} className="text-[#00FFFF]" /> Access_Level: {user.user_metadata?.role || "CUSTOMER"}
+                <div className="mt-5 flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest text-white ring-1 ring-white/15">
+                  <ShieldCheck size={14} className="text-[#00FFFF]" /> Account role · {user.user_metadata?.role || "CUSTOMER"}
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="border-4 border-[#1A1A1A] bg-[#1A1A1A] py-4">
-            <div className="flex items-center gap-6 px-5 font-mono text-[10px] font-black uppercase tracking-[0.35em] text-white md:px-6">
-              <span className="text-[#00FFFF]">Cyan</span>
-              <span className="text-[#EC008C]">Magenta</span>
-              <span className="text-[#FFF200]">Yellow</span>
-              <span>Black</span>
-            </div>
-          </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           {/* PROFILE SETTINGS */}
-          <section className="bg-white border-4 border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(255,242,0,1)] relative overflow-hidden group">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-[#FFF200] opacity-20 transform translate-x-8 -translate-y-8 group-hover:scale-150 transition-transform duration-700" />
+          <section className="relative overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white shadow-sm group">
+            <div className="cmyk-bar-sm absolute left-0 right-0 top-0" />
             
-            <div className="bg-[#1A1A1A] text-white px-6 py-4 flex items-center gap-3 border-b-4 border-[#1A1A1A]">
+            <div className="flex items-center gap-3 border-b border-[#D8D6CE] bg-white px-6 py-5">
               <User size={20} className="text-[#FFF200]" />
-              <h2 className="font-black uppercase italic tracking-widest text-lg">Profile Details</h2>
+              <h2 className="text-xl font-black text-[#1A1A1A]">Profile details</h2>
             </div>
 
             <form onSubmit={handleUpdateProfile} className="p-6 md:p-8 space-y-6 relative z-10">
               {profileMessage.text && (
-                <div className={`p-4 border-2 font-mono text-[10px] uppercase font-bold flex items-center gap-3 ${profileMessage.type === 'error' ? 'bg-white text-[#EC008C] border-[#EC008C]' : 'bg-[#1A1A1A] text-[#00FFFF] border-[#1A1A1A]'}`}>
+                <div className={`rounded-xl border px-4 py-3 text-xs font-semibold flex items-center gap-3 ${profileMessage.type === 'error' ? 'bg-pink-50 text-[#EC008C] border-pink-200' : 'bg-[#1A1A1A] text-[#00FFFF] border-[#1A1A1A]'}`}>
                   {profileMessage.type === 'error' ? <AlertTriangle size={16} /> : <ShieldCheck size={16} />} 
                   {profileMessage.text}
                 </div>
               )}
 
               <div className="space-y-2">
-                <label className="font-mono text-[10px] uppercase font-black tracking-widest text-zinc-500 flex items-center gap-2">
-                  <Mail size={12} /> Email_Address (Cannot be changed)
+                <label className="text-xs font-semibold text-slate-600 flex items-center gap-2">
+                  <Mail size={13} /> Email address · cannot be changed
                 </label>
                 <input 
                   type="email" 
                   value={email} 
                   disabled
-                  className="w-full bg-[#F4F4F1] border-2 border-[#1A1A1A]/20 p-4 font-mono text-sm uppercase text-zinc-500 cursor-not-allowed opacity-70"
+                  className="w-full rounded-xl border border-[#D8D6CE] bg-[#F6F6F2] px-4 py-3 text-sm text-slate-500 cursor-not-allowed opacity-70"
                 />
               </div>
 
               <div className="space-y-2">
-                <label className="font-mono text-[10px] uppercase font-black tracking-widest flex items-center gap-2">
+                <label className="text-xs font-semibold text-slate-600 flex items-center gap-2">
                   <User size={12} className="text-[#EC008C]" /> Nickname
                 </label>
                 <input 
@@ -197,12 +181,12 @@ export default function AccountSettingsPage() {
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   placeholder="Enter your name"
-                  className="w-full bg-white border-2 border-[#1A1A1A] p-4 font-mono text-sm uppercase text-[#1A1A1A] focus:outline-none focus:ring-4 ring-[#FFF200]/50 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
+                  className="w-full rounded-xl border border-[#D8D6CE] bg-white px-4 py-3 text-sm text-[#1A1A1A] outline-none transition-all focus:ring-2 focus:ring-[#FFF200]/50"
                 />
               </div>
 
               <div className="space-y-2">
-                <label className="font-mono text-[10px] uppercase font-black tracking-widest flex items-center gap-2">
+                <label className="text-xs font-semibold text-slate-600 flex items-center gap-2">
                   <Phone size={12} className="text-[#00FFFF]" /> Mobile_Number
                 </label>
                 <input
@@ -210,15 +194,15 @@ export default function AccountSettingsPage() {
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   placeholder="0917 123 4567"
-                  className="w-full bg-white border-2 border-[#1A1A1A] p-4 font-mono text-sm uppercase text-[#1A1A1A] focus:outline-none focus:ring-4 ring-[#00FFFF]/40 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
+                  className="w-full rounded-xl border border-[#D8D6CE] bg-white px-4 py-3 text-sm text-[#1A1A1A] outline-none transition-all focus:ring-2 focus:ring-[#00FFFF]/40"
                 />
-                <p className="font-mono text-[9px] uppercase tracking-widest text-zinc-500">Saved in +63 format for SMS order updates.</p>
+                <p className="text-[11px] text-slate-500">Saved in +63 format for SMS order updates.</p>
               </div>
 
               <button 
                 type="submit"
                 disabled={isSavingProfile}
-                className="w-full mt-4 bg-[#1A1A1A] text-white py-4 font-black uppercase italic text-sm flex justify-center items-center gap-2 hover:bg-[#FFF200] hover:text-[#1A1A1A] transition-all disabled:opacity-50"
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-[#1A1A1A] py-3.5 text-sm font-extrabold text-white transition-all hover:bg-[#FFF200] hover:text-[#1A1A1A] disabled:opacity-50"
               >
                 {isSavingProfile ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                 Save Profile
@@ -227,52 +211,52 @@ export default function AccountSettingsPage() {
           </section>
 
           {/* SECURITY SETTINGS */}
-          <section className="bg-white border-4 border-[#1A1A1A] shadow-[8px_8px_0px_0px_rgba(236,0,140,1)] relative overflow-hidden group">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-[#EC008C] opacity-20 transform translate-x-8 -translate-y-8 group-hover:scale-150 transition-transform duration-700" />
+          <section className="relative overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white shadow-sm group">
+            <div className="cmyk-bar-sm absolute left-0 right-0 top-0" />
             
-            <div className="bg-[#1A1A1A] text-white px-6 py-4 flex items-center gap-3 border-b-4 border-[#1A1A1A]">
+            <div className="flex items-center gap-3 border-b border-[#D8D6CE] bg-white px-6 py-5">
               <Lock size={20} className="text-[#EC008C]" />
-              <h2 className="font-black uppercase italic tracking-widest text-lg">Change Password</h2>
+              <h2 className="text-xl font-black text-[#1A1A1A]">Change password</h2>
             </div>
 
             <form onSubmit={handleUpdateSecurity} className="p-6 md:p-8 space-y-6 relative z-10">
               {securityMessage.text && (
-                 <div className={`p-4 border-2 font-mono text-[10px] uppercase font-bold flex items-center gap-3 ${securityMessage.type === 'error' ? 'bg-white text-[#EC008C] border-[#EC008C]' : 'bg-[#1A1A1A] text-[#00FFFF] border-[#1A1A1A]'}`}>
+                 <div className={`rounded-xl border px-4 py-3 text-xs font-semibold flex items-center gap-3 ${securityMessage.type === 'error' ? 'bg-pink-50 text-[#EC008C] border-pink-200' : 'bg-[#1A1A1A] text-[#00FFFF] border-[#1A1A1A]'}`}>
                    {securityMessage.type === 'error' ? <AlertTriangle size={16} /> : <ShieldCheck size={16} />} 
                    {securityMessage.text}
                  </div>
               )}
 
               <div className="space-y-2">
-                <label className="font-mono text-[10px] uppercase font-black tracking-widest flex items-center gap-2">
-                  <Lock size={12} className="text-[#00FFFF]" /> New_Password
+                <label className="text-xs font-semibold text-slate-600 flex items-center gap-2">
+                  <Lock size={13} className="text-[#00FFFF]" /> New password
                 </label>
                 <input 
                   type="password" 
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full bg-white border-2 border-[#1A1A1A] p-4 text-sm text-[#1A1A1A] focus:outline-none focus:ring-4 ring-[#EC008C]/50 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] font-mono"
+                  className="w-full rounded-xl border border-[#D8D6CE] bg-white px-4 py-3 text-sm text-[#1A1A1A] outline-none transition-all focus:ring-2 focus:ring-[#EC008C]/50"
                 />
               </div>
 
               <div className="space-y-2">
-                <label className="font-mono text-[10px] uppercase font-black tracking-widest flex items-center gap-2">
-                  <Lock size={12} className="text-[#00FFFF]" /> Confirm_Password
+                <label className="text-xs font-semibold text-slate-600 flex items-center gap-2">
+                  <Lock size={13} className="text-[#00FFFF]" /> Confirm password
                 </label>
                 <input 
                   type="password" 
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full bg-white border-2 border-[#1A1A1A] p-4 text-sm text-[#1A1A1A] focus:outline-none focus:ring-4 ring-[#EC008C]/50 transition-all shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] font-mono"
+                  className="w-full rounded-xl border border-[#D8D6CE] bg-white px-4 py-3 text-sm text-[#1A1A1A] outline-none transition-all focus:ring-2 focus:ring-[#EC008C]/50"
                 />
               </div>
 
               <button 
                 type="submit"
                 disabled={isSavingSecurity}
-                className="w-full mt-4 bg-[#1A1A1A] text-white py-4 font-black uppercase italic text-sm flex justify-center items-center gap-2 hover:bg-[#EC008C] hover:text-white transition-all disabled:opacity-50"
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-[#1A1A1A] py-3.5 text-sm font-extrabold text-white transition-all hover:bg-[#EC008C] disabled:opacity-50"
               >
                 {isSavingSecurity ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                 Save Password

@@ -27,20 +27,43 @@ function MapEvents({ setPosition }) {
 function CenterToMarker({ position }) {
   const map = useMap();
   useEffect(() => {
-    if (position) {
-      map.setView(position, map.getZoom());
+    if (!position) return;
+    try {
+      const container = map.getContainer?.();
+      if (!map._loaded || !container?.isConnected || !container?._leaflet_id) return;
+      map.setView(position, map.getZoom(), { animate: false });
+    } catch {
+      // The map can be disposed while the owner page is switching routes.
     }
   }, [position, map]);
   return null;
 }
 
+function SafeMapContainer({ children, ...props }) {
+  const mapRef = useRef(null);
+
+  useEffect(() => () => {
+    const map = mapRef.current;
+    try {
+      const container = map?.getContainer?.();
+      map?.remove?.();
+      if (container?._leaflet_id) delete container._leaflet_id;
+    } catch {
+      // React-Leaflet may have already removed this instance.
+    } finally {
+      mapRef.current = null;
+    }
+  }, []);
+
+  return <MapContainer ref={mapRef} {...props}>{children}</MapContainer>;
+}
+
 export default function LocationPicker({ lat, lng, onChange }) {
   const [isMounted, setIsMounted] = useState(false);
-  const [position, setPosition] = useState(lat && lng ? { lat, lng } : null);
+  const [position, setPosition] = useState(
+    Number.isFinite(Number(lat)) && Number.isFinite(Number(lng)) ? { lat: Number(lat), lng: Number(lng) } : null,
+  );
   const defaultCenter = [14.6806, 120.5375]; // Default to Balanga, Bataan, Philippines
-
-  // HMR Fix for React Leaflet
-  const [mapKey] = useState(() => new Date().getTime());
 
   useEffect(() => {
     setIsMounted(true);
@@ -48,8 +71,8 @@ export default function LocationPicker({ lat, lng, onChange }) {
 
   // Ensure map updates position properly from props, but not if user drags
   useEffect(() => {
-    if (lat && lng && (!position || lat !== position.lat || lng !== position.lng)) {
-      setPosition({ lat, lng });
+    if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng)) && (!position || lat !== position.lat || lng !== position.lng)) {
+      setPosition({ lat: Number(lat), lng: Number(lng) });
     }
   }, [lat, lng, position]);
 
@@ -65,8 +88,7 @@ export default function LocationPicker({ lat, lng, onChange }) {
       {!isMounted ? (
         <div style={{ width: "100%", height: "100%", background: "#f9f9f7" }} />
       ) : (
-      <MapContainer
-        key={mapKey}
+      <SafeMapContainer
         center={position ? [position.lat, position.lng] : defaultCenter}
         zoom={13}
         style={{ width: "100%", height: "100%", zIndex: 0 }}
@@ -83,7 +105,7 @@ export default function LocationPicker({ lat, lng, onChange }) {
             <Marker position={position} icon={customIcon} />
           </>
         )}
-      </MapContainer>
+      </SafeMapContainer>
       )}
     </div>
   );

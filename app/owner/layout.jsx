@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import OwnerSidebar from "@/components/owner/OwnerSidebar";
+import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
 import {
   ShieldAlert, ShieldCheck, Loader2, Construction, Activity,
   CheckCircle, XCircle, Clock, Upload, AlertCircle,
@@ -29,10 +30,12 @@ export default function OwnerLayout({ children }) {
   const [businessId, setBusinessId]   = useState(null);
   const [userId, setUserId]           = useState(null);
   const [docStatuses, setDocStatuses] = useState([]);
-  const [mounted, setMounted]         = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [pendingOrders, setPendingOrders] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [ownerDisplayName, setOwnerDisplayName] = useState("");
+  const [ownerEmail, setOwnerEmail] = useState("");
+  const [signingOut, setSigningOut] = useState(false);
 
   // Re-upload state per doc
   const [reuploadFiles, setReuploadFiles]       = useState({});
@@ -53,12 +56,12 @@ export default function OwnerLayout({ children }) {
   }, []);
 
   useEffect(() => {
-    setMounted(true);
-
     const run = async () => {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) { router.push("/login"); return; }
       setUserId(user.id);
+      setOwnerEmail(user.email || "");
+      setOwnerDisplayName(user.user_metadata?.full_name || user.email?.split("@")[0] || "Shop owner");
 
       const { data: profile } = await supabase
         .from("profiles").select("role").eq("id", user.id).single();
@@ -144,8 +147,10 @@ export default function OwnerLayout({ children }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `business_id=eq.${businessId}` }, () => {
         fetchCounts();
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_messages' }, () => {
-        // We refetch counts when any chat message changes, as we can't easily filter by business_id in the channel config for this table
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_conversations', filter: `business_id=eq.${businessId}` }, () => {
+        // The chat schema updates the conversation timestamp for each new
+        // message, so this business-scoped channel avoids listening to every
+        // message in the entire marketplace.
         fetchCounts();
       })
       .subscribe();
@@ -184,13 +189,19 @@ export default function OwnerLayout({ children }) {
       };
 
       const file = reuploadFiles[docTypeStr];
-      const ext  = file.name.split(".").pop();
+      const uploadFile = file.type?.startsWith("image/") ? await optimizeImageForUpload(file) : file;
+      const ext  = uploadFile.type?.startsWith("image/") ? getUploadExtension(uploadFile) : uploadFile.name.split(".").pop();
       const path = `${userId}/${docTypeStr}-${Date.now()}.${ext}`;
+      const uploadBucket = uploadFile.type?.startsWith("image/") ? IMAGE_BUCKET : "business-documents";
       const { error: upErr } = await supabase.storage
-        .from("business-documents")
-        .upload(path, file, { upsert: true });
+        .from(uploadBucket)
+        .upload(path, uploadFile, {
+          upsert: true,
+          cacheControl: "31536000",
+          contentType: uploadFile.type,
+        });
       if (upErr) throw upErr;
-      const { data: { publicUrl } } = supabase.storage.from("business-documents").getPublicUrl(path);
+      const { data: { publicUrl } } = supabase.storage.from(uploadBucket).getPublicUrl(path);
       payload.file_url = publicUrl;
 
       if (doc?.id) {
@@ -287,31 +298,26 @@ export default function OwnerLayout({ children }) {
 
   /* ── STATIC GATE ── */
   const GateUI = ({ icon: Icon, title, message, badge, type, action }) => (
-    <div className="min-h-screen bg-[#FDFDFD] flex items-center justify-center p-6 font-sans text-[#1A1A1A] overflow-x-hidden">
-      <div className="absolute top-0 left-0 h-16 w-16 bg-[#00FFFF] opacity-20" />
-      <div className="absolute top-0 right-0 h-16 w-16 bg-[#EC008C] opacity-20" />
-      <div className="absolute bottom-0 left-0 h-16 w-16 bg-[#FFF200] opacity-20" />
-      <div className="max-w-md w-full border-4 border-[#1A1A1A] p-8 bg-white shadow-[10px_10px_0px_0px_rgba(0,255,255,1)] relative overflow-hidden">
+    <div className="flex min-h-screen items-center justify-center overflow-x-hidden bg-white p-6 font-sans text-[#1A1A1A]">
+      <div className="relative w-full max-w-md overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-8 shadow-[0_18px_45px_rgba(26,26,26,0.08)]">
+        <div className="cmyk-bar absolute left-0 right-0 top-0" />
         <div className="relative z-10">
-          <div className="flex justify-between items-start mb-6">
-            <div className={`p-3 border-2 border-[#1A1A1A] ${type === "error" ? "bg-[#EC008C] text-white" : "bg-[#FFF200] text-black"}`}>
-              <Icon size={32} />
+          <div className="mb-6 flex items-start justify-between">
+            <div className={`flex h-14 w-14 items-center justify-center rounded-2xl ${type === "error" ? "bg-[#EC008C] text-white" : "bg-[#00FFFF] text-[#1A1A1A]"}`}>
+              <Icon size={26} />
             </div>
-            {badge && <span className="font-mono text-[10px] font-black uppercase tracking-widest border-2 border-[#1A1A1A] px-2 py-1">{badge}</span>}
+            {badge && <span className="rounded-full bg-[#F6F6F2] px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-[#676762]">{badge}</span>}
           </div>
-          <h1 className="text-3xl font-black uppercase italic tracking-tighter leading-none mb-4">
-            {(title || "SYSTEM_LOG").replace(/\s/g, "_")}
-          </h1>
-          <p className="font-mono text-xs uppercase tracking-tight leading-relaxed opacity-70 mb-8 border-l-4 border-[#1A1A1A]/10 pl-4">{message}</p>
+          <h1 className="mb-3 text-3xl font-black tracking-tight">{title || "Loading your workspace"}</h1>
+          <p className="mb-8 text-sm leading-relaxed text-[#676762]">{message}</p>
           {action && (
             <button onClick={action.onClick}
-              className="w-full bg-[#1A1A1A] text-white py-4 font-mono text-[10px] font-black uppercase tracking-[0.3em] hover:bg-[#EC008C] transition-colors shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]">
+              className="w-full rounded-full bg-[#1A1A1A] py-3.5 text-sm font-black text-white transition-colors hover:bg-[#EC008C]">
               {action.label}
             </button>
           )}
-          <div className="mt-8 pt-4 border-t border-[#1A1A1A]/5 flex justify-between font-mono text-[8px] opacity-40 uppercase">
-            <span>Security_Layer: 04</span>
-            <span>Auth_Check: {mounted ? new Date().toLocaleTimeString() : "INITIALIZING..."}</span>
+          <div className="mt-8 border-t border-[#ECECE8] pt-4 text-xs text-[#676762]">
+            {type === "loading" ? "This usually takes a moment." : "Please check your account access or contact support."}
           </div>
         </div>
       </div>
@@ -360,8 +366,8 @@ export default function OwnerLayout({ children }) {
     };
 
     return (
-      <main className="min-h-screen bg-[#FDFDFD] text-[#1A1A1A] overflow-x-hidden">
-        <section className="relative border-b-8 border-[#1A1A1A] px-6 py-10 md:px-10 md:py-12">
+      <main className="owner-doc-review-page min-h-screen overflow-x-hidden bg-[#F6F6F2] text-[#1A1A1A]">
+        <section className="relative overflow-hidden border-b border-white/10 bg-[#1A1A1A] px-6 py-10 text-white md:px-10 md:py-12">
           <div className="absolute top-0 left-0 w-16 h-16 bg-[#00FFFF] opacity-20" />
           <div className="absolute top-0 right-0 w-16 h-16 bg-[#EC008C] opacity-20" />
           <div className="absolute bottom-0 left-0 w-16 h-16 bg-[#FFF200] opacity-20" />
@@ -381,7 +387,7 @@ export default function OwnerLayout({ children }) {
                 <h1 className="text-5xl md:text-7xl lg:text-8xl font-black uppercase italic tracking-tighter leading-[0.92]">
                   {hasRejected ? "Replace Documents" : docStatuses.length < REQUIRED_DOCS.length ? "Complete Requirements" : "Under Review"}
                 </h1>
-                <p className="mt-4 max-w-3xl font-mono text-[11px] md:text-sm uppercase tracking-[0.2em] leading-relaxed text-gray-600">
+                <p className="mt-4 max-w-3xl text-xs leading-relaxed text-white/65 md:text-sm">
                   {docStatuses.length < REQUIRED_DOCS.length
                     ? `Upload the required verification documents for ${businessName} so the shop can be reviewed.`
                     : hasRejected
@@ -632,48 +638,64 @@ export default function OwnerLayout({ children }) {
 
   /* ── STATE ROUTING ── */
   if (state === "checking") return (
-    <GateUI icon={Activity} title="Syncing Credentials"
-      message="Establishing secure connection. Checking authorization packets..."
-      badge="SCANNING" type="loading" />
+    <GateUI icon={Activity} title="Loading your shop workspace"
+      message="We’re checking your account and preparing your owner dashboard."
+      badge="PLEASE WAIT" type="loading" />
   );
 
   if (state === "unauthorized") return (
     <GateUI icon={ShieldAlert} title="Access Denied"
-      message="Your profile lacks the BUSINESS_OWNER permission to access this terminal."
-      badge="ERR_403" type="error"
-      action={{ label: "Return_to_Nexus", onClick: () => router.push("/browse") }} />
+      message="This area is available only to approved shop owner accounts."
+      badge="NOT AVAILABLE" type="error"
+      action={{ label: "Go to Browse", onClick: () => router.push("/browse") }} />
   );
 
   const isVerified = state === "approved";
 
+  const handleSignOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      setSigningOut(false);
+      return;
+    }
+    router.replace("/login");
+    router.refresh();
+  };
+
   /* ── PORTAL (all verified and unverified owners) ── */
   return (
-    <div className="flex min-h-[calc(100vh-88px)] bg-[radial-gradient(circle_at_top_left,rgba(0,255,255,0.14),transparent_28%),radial-gradient(circle_at_top_right,rgba(236,0,140,0.12),transparent_24%),linear-gradient(180deg,#fdfdfd_0%,#f7f7f4_100%)]">
+    <div className="flex h-screen overflow-hidden bg-[#1A1A1A]">
       <OwnerSidebar
         businessName={businessName}
+        ownerDisplayName={ownerDisplayName}
+        ownerEmail={ownerEmail}
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen((current) => !current)}
+        onSignOut={handleSignOut}
+        signingOut={signingOut}
         isVerified={isVerified}
         pendingOrders={pendingOrders}
         unreadMessages={unreadMessages}
       />
-      <main className="min-w-0 flex-1 overflow-y-auto relative">
+      <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-[#F6F6F2]">
         <div className="min-h-full w-full relative">
           {isLockedPage ? (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#FDFDFD]/90 backdrop-blur-sm">
-               <div className="text-center p-12 border-8 border-[#1A1A1A] bg-white shadow-[20px_20px_0px_0px_rgba(236,0,140,1)] max-w-2xl relative overflow-hidden">
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#1A1A1A]/90 p-6 backdrop-blur-sm">
+               <div className="relative max-w-2xl overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-8 text-center shadow-[0_18px_42px_rgba(26,26,26,0.16)] sm:p-12">
                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#EC008C] opacity-10 rotate-45 transform translate-x-16 -translate-y-16" />
                  
                  <Lock className="w-24 h-24 mx-auto text-[#EC008C] mb-8" />
-                 <h2 className="text-5xl md:text-6xl font-black uppercase tracking-tighter mb-6 italic leading-none">
-                   SHOP<br/><span className="text-[#EC008C]">LOCKED</span>
+                 <h2 className="mb-6 text-4xl font-black tracking-tight leading-none sm:text-6xl">
+                   Shop <span className="text-[#EC008C]">locked</span>
                  </h2>
-                 <p className="font-mono text-sm uppercase tracking-[0.2em] text-gray-600 mb-10 leading-relaxed border-l-4 border-[#EC008C] pl-4 text-left">
+                 <p className="mb-10 border-l-2 border-[#EC008C] pl-4 text-left text-sm leading-relaxed text-gray-600">
                    This module is restricted. You must complete your business document verification to unlock shop management tools, inventory, and messaging.
                  </p>
                  <button 
                    onClick={() => router.push('/owner/documents')} 
-                   className="w-full bg-[#1A1A1A] text-white px-8 py-6 font-black uppercase tracking-widest text-lg hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all shadow-[6px_6px_0px_0px_rgba(0,255,255,1)] active:shadow-none active:translate-x-1 active:translate-y-1"
+                   className="w-full rounded-full bg-[#1A1A1A] px-8 py-3.5 text-sm font-extrabold text-white transition-all hover:bg-[#00FFFF] hover:text-[#1A1A1A]"
                  >
                    VERIFY DOCUMENTS NOW
                  </button>

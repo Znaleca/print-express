@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Loader2, ArrowRight, CheckCircle2, AlertCircle } from "lucide-react";
 import Link from "next/link";
+import BrandMark from "@/components/BrandMark";
 
 const Requirement = ({ label, met }) => (
   <div className={`flex items-center gap-1.5 text-xs transition-colors ${met ? "text-emerald-600 font-medium" : "text-slate-400"}`}>
@@ -83,15 +84,8 @@ export default function ResetPasswordPage() {
             ) : (
               <>
                 <div className="text-center mb-8">
-                  <Link href="/" className="inline-flex items-center gap-2.5 group mb-4">
-                    <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center text-white font-black text-base shadow-md">
-                      <span className="text-[#00FFFF]">P</span>
-                      <span className="text-[#EC008C]">-</span>
-                      <span className="text-[#FFF200]">P</span>
-                    </div>
-                    <span className="text-2xl font-extrabold text-slate-900 tracking-tight">
-                      Press <span className="text-[#EC008C]">&</span> Present
-                    </span>
+                  <Link href="/" className="inline-flex items-center group mb-4" aria-label="Press and Present home">
+                    <BrandMark className="h-11 w-[78px] text-2xl transition-transform group-hover:-rotate-2" />
                   </Link>
 
                   <h1 className="text-2xl font-bold text-slate-900 tracking-tight">

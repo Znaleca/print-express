@@ -2,13 +2,15 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
   Plus, Edit, Trash2, Power, Loader2, Package, History
 } from "lucide-react";
-import ServiceFormModal from "@/components/owner/ServiceFormModal";
+import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
 
 export default function OwnerServicesPage() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState([]);
   const [businessId, setBusinessId] = useState(null);
@@ -170,7 +172,11 @@ export default function OwnerServicesPage() {
       const specs = values.specs_json;
       const modifiers = specs.price_modifiers || {};
 
-      await supabase.from("service_pricing_rules").delete().eq("service_id", serviceId);
+      const { error: deleteRulesError } = await supabase
+        .from("service_pricing_rules")
+        .delete()
+        .eq("service_id", serviceId);
+      if (deleteRulesError) throw new Error(`Could not update printable options: ${deleteRulesError.message}`);
 
       const rulesToInsert = [];
 
@@ -212,7 +218,7 @@ export default function OwnerServicesPage() {
 
       if (rulesToInsert.length > 0) {
         const { error: rulesErr } = await supabase.from("service_pricing_rules").insert(rulesToInsert);
-        if (rulesErr) console.warn("Notice: To persist option price modifiers, run printing-products-services-upgrade.sql in Supabase SQL Editor.", rulesErr);
+        if (rulesErr) throw new Error(`Could not save printable options: ${rulesErr.message}`);
       }
     }
 
@@ -259,14 +265,7 @@ export default function OwnerServicesPage() {
   };
 
   if (loading) {
-    return (
-      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 size={36} className="animate-spin text-[#EC008C]" />
-          <p className="text-xs font-semibold uppercase tracking-wider">Loading catalog items...</p>
-        </div>
-      </main>
-    );
+    return <OwnerPageSkeleton rows={4} />;
   }
 
   const filteredItems = items.filter((item) => {
@@ -276,27 +275,28 @@ export default function OwnerServicesPage() {
   });
 
   return (
-    <main className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+    <main className="owner-services-page min-h-screen bg-[#1A1A1A] font-sans text-slate-900 pb-20">
       {/* Header Banner */}
-      <section className="bg-white border-b border-slate-200 py-5 px-4 sm:px-6 lg:px-8 relative shadow-sm">
+      <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-10 pt-8 text-white sm:px-8 sm:pb-11 sm:pt-10 lg:px-10">
         <div className="cmyk-bar absolute top-0 left-0 right-0" />
-        <div className="max-w-[1600px] mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10" />
+        <div className="relative mx-auto flex max-w-6xl flex-col justify-between gap-6 md:flex-row md:items-end">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Services & Product Catalog</h1>
-            <p className="mt-0.5 text-xs text-slate-500">Manage on-demand print services, custom size pricing, and physical store inventory.</p>
+            <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">Services & products</h1>
+            <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">Manage what customers can order, configure print options, and keep ready-made inventory accurate.</p>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setModal({ mode: "create", forcedType: "service" })}
-              className="px-3.5 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-[#EC008C] transition-colors flex items-center gap-1.5 shadow-sm"
+              onClick={() => router.push("/owner/services/new-service")}
+              className="flex items-center gap-1.5 rounded-full bg-[#00FFFF] px-4 py-3 text-xs font-black text-[#1A1A1A] shadow-md transition-colors hover:bg-[#FFF200]"
             >
               <Plus size={16} /> Add Custom Service
             </button>
 
             <button
-              onClick={() => setModal({ mode: "create", forcedType: "product" })}
-              className="px-3.5 py-2 border border-slate-200 bg-white text-slate-800 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors flex items-center gap-1.5 shadow-sm"
+              onClick={() => router.push("/owner/services/new-product")}
+              className="flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-3 text-xs font-black text-white ring-1 ring-white/20 transition-colors hover:bg-[#EC008C]"
             >
               <Package size={16} /> Add Ready Product
             </button>
@@ -306,7 +306,7 @@ export default function OwnerServicesPage() {
 
       {/* Filter Tabs */}
       <section className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-5">
-        <div className="mb-4 rounded-xl border border-cyan-200 bg-cyan-50/60 px-4 py-3 text-xs text-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="mb-4 flex flex-col items-start justify-between gap-2 rounded-3xl border border-[#D8D6CE] bg-white px-5 py-4 text-xs text-slate-700 shadow-sm sm:flex-row sm:items-center">
           <span>
             General business information such as shop name, address, contact details, logo, payment QR, and downpayment rules belongs in the business profile.
           </span>
@@ -314,11 +314,11 @@ export default function OwnerServicesPage() {
             Edit Business Profile
           </Link>
         </div>
-        <div className="flex items-center gap-2 border-b border-slate-200 pb-3">
+        <div className="flex items-center gap-2 border-b border-[#D8D6CE] pb-3">
           <button
             onClick={() => setFilterType("ALL")}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              filterType === "ALL" ? "bg-slate-900 text-white" : "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50"
+              filterType === "ALL" ? "bg-slate-900 text-white" : "bg-white text-slate-700 border border-[#D8D6CE] hover:bg-[#F6F6F2]"
             }`}
           >
             All Items ({items.length})
@@ -326,7 +326,7 @@ export default function OwnerServicesPage() {
           <button
             onClick={() => setFilterType("service")}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              filterType === "service" ? "bg-slate-900 text-white" : "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50"
+              filterType === "service" ? "bg-slate-900 text-white" : "bg-white text-slate-700 border border-[#D8D6CE] hover:bg-[#F6F6F2]"
             }`}
           >
             Custom Services ({items.filter(i => i.item_type === "service").length})
@@ -334,7 +334,7 @@ export default function OwnerServicesPage() {
           <button
             onClick={() => setFilterType("product")}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              filterType === "product" ? "bg-slate-900 text-white" : "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50"
+              filterType === "product" ? "bg-slate-900 text-white" : "bg-white text-slate-700 border border-[#D8D6CE] hover:bg-[#F6F6F2]"
             }`}
           >
             Ready Products ({items.filter(i => i.item_type === "product").length})
@@ -345,7 +345,7 @@ export default function OwnerServicesPage() {
       {/* Catalog Grid */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
         {filteredItems.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-xs text-slate-500">
+          <div className="bg-white rounded-2xl border border-[#D8D6CE] p-12 text-center text-xs text-slate-500">
             No printing services or products found in this category. Click above to add new item specs!
           </div>
         ) : (
@@ -358,7 +358,7 @@ export default function OwnerServicesPage() {
               const hasModifiers = Object.keys(specs.price_modifiers || {}).length > 0;
 
               return (
-                <div key={item.id} className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col justify-between relative group">
+                <div key={item.id} className="relative flex flex-col justify-between overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm group">
                   <div className="cmyk-bar-sm absolute top-0 left-0 right-0" />
 
                   <div className="space-y-4">
@@ -386,7 +386,7 @@ export default function OwnerServicesPage() {
 
                     {/* Stock Management for Products */}
                     {!isService && (
-                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                      <div className="p-3 rounded-xl bg-[#FCFCFA] border border-[#D8D6CE] space-y-2 text-xs">
                         <div className="flex items-center justify-between">
                           <span className="font-semibold text-slate-700">Stock Inventory:</span>
                           <span className={`font-bold ${lowStock ? "text-rose-600" : "text-emerald-600"}`}>
@@ -398,7 +398,7 @@ export default function OwnerServicesPage() {
                             type="number"
                             value={stockDrafts[item.id] ?? stock}
                             onChange={(e) => setStockDrafts((p) => ({ ...p, [item.id]: e.target.value }))}
-                            className="w-20 px-2 py-1 bg-white border border-slate-200 rounded text-xs font-bold"
+                            className="w-20 px-2 py-1 bg-white border border-[#D8D6CE] rounded text-xs font-bold"
                           />
                           <button
                             onClick={() => handleStockUpdate(item, stockDrafts[item.id])}
@@ -412,7 +412,7 @@ export default function OwnerServicesPage() {
                           Stock quantity applies only to ready-made physical products. Custom print services use scheduling and order capacity instead.
                         </p>
                         {(inventoryMovements[item.id] || []).length > 0 && (
-                          <div className="pt-2 border-t border-slate-200 space-y-1">
+                          <div className="pt-2 border-t border-[#D8D6CE] space-y-1">
                             <p className="flex items-center gap-1 text-[11px] font-bold text-slate-700">
                               <History size={12} /> Recent inventory activity
                             </p>
@@ -462,7 +462,7 @@ export default function OwnerServicesPage() {
 
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => setModal({ mode: "edit", item })}
+                        onClick={() => router.push(`/owner/services/${item.id}`)}
                         className="p-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl transition-colors"
                       >
                         <Edit size={15} />
@@ -484,17 +484,6 @@ export default function OwnerServicesPage() {
         )}
       </section>
 
-      {/* Modal Form */}
-      {modal && (
-        <ServiceFormModal
-          mode={modal.mode}
-          initialValues={modal.item}
-          forcedType={modal.forcedType}
-          businessId={businessId}
-          onSave={handleSave}
-          onClose={() => setModal(null)}
-        />
-      )}
     </main>
   );
 }

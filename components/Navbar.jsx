@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
-import { LogOut, User, ChevronDown, LayoutDashboard, Menu, X, ShoppingBag } from "lucide-react";
+import { LogOut, User, ChevronDown, LayoutDashboard, ShoppingBag } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import BrandMark from "@/components/BrandMark";
+import PillNav from "@/components/PillNav";
 
 export default function Navbar() {
   const router = useRouter();
@@ -39,14 +41,31 @@ export default function Navbar() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, [lastScrollY, isMobileMenuOpen]);
 
-  const userRole = useMemo(() => {
+  const resolvedUserRole = useMemo(() => {
     return user?.user_metadata?.role || user?.role || "CUSTOMER";
   }, [user]);
 
-  const isAdminOrOwner = userRole === "ADMIN" || userRole === "SUPER_ADMIN" || userRole === "BUSINESS_OWNER";
+  const isPortalRoute = pathname?.startsWith("/owner") || pathname?.startsWith("/admin");
+  const isAuthRoute = [
+    "/login",
+    "/signup",
+    "/reset-password",
+    "/auth/confirm",
+  ].includes(pathname);
 
-  const consoleLabel = userRole === "BUSINESS_OWNER" ? "Shop Dashboard" : "Admin Dashboard";
-  const consoleHref = userRole === "BUSINESS_OWNER" ? "/owner" : "/admin";
+  // Keep the public header stable while an auth form finishes its redirect.
+  // Supabase can emit SIGNED_IN before the router leaves /login; using the
+  // resolved user directly here would briefly turn this into a portal header.
+  const headerUser = isAuthRoute ? null : user;
+  const headerUserRole = useMemo(() => {
+    return headerUser?.user_metadata?.role || headerUser?.role || "CUSTOMER";
+  }, [headerUser]);
+
+  const isAdminOrOwner = headerUserRole === "ADMIN" || headerUserRole === "BUSINESS_OWNER";
+  const isPortalExperience = isPortalRoute || isAdminOrOwner;
+
+  const consoleLabel = headerUserRole === "BUSINESS_OWNER" ? "Shop Dashboard" : "Admin Dashboard";
+  const consoleHref = headerUserRole === "BUSINESS_OWNER" ? "/owner" : "/admin";
 
   useEffect(() => {
     let mounted = true;
@@ -86,6 +105,12 @@ export default function Navbar() {
   }, []);
 
   useEffect(() => {
+    if (!loading && resolvedUserRole === "BUSINESS_OWNER" && pathname === "/") {
+      router.replace("/owner");
+    }
+  }, [loading, pathname, resolvedUserRole, router]);
+
+  useEffect(() => {
     if (pathname !== "/") {
       setActiveLandingSection("home");
       return;
@@ -113,9 +138,9 @@ export default function Navbar() {
   }, [pathname]);
 
   const displayName = useMemo(() => {
-    if (!user) return "";
-    return user.user_metadata?.full_name || user.email?.split("@")[0] || "Account";
-  }, [user]);
+    if (!headerUser) return "";
+    return headerUser.user_metadata?.full_name || headerUser.email?.split("@")[0] || "Account";
+  }, [headerUser]);
 
   const handleSignOut = async () => {
     const { error } = await supabase.auth.signOut();
@@ -130,61 +155,68 @@ export default function Navbar() {
   const handleLandingNavClick = (target) => (event) => {
     if (pathname !== "/") return;
 
-    event.preventDefault();
     if (target === "about") {
       const about = document.getElementById("about");
-      if (about) {
-        about.scrollIntoView({ behavior: "smooth", block: "start" });
-        setActiveLandingSection("about");
-      }
+      // The public Home page currently has no inline About section, so keep
+      // the normal Link navigation to /about when the anchor is unavailable.
+      if (!about) return;
+      event.preventDefault();
+      about.scrollIntoView({ behavior: "smooth", block: "start" });
+      setActiveLandingSection("about");
       return;
     }
 
+    event.preventDefault();
     window.scrollTo({ top: 0, behavior: "smooth" });
     setActiveLandingSection("home");
   };
 
+  // Owner and admin routes use their dedicated portal sidebars instead of the
+  // public header. Auth routes intentionally keep the public header visible,
+  // but headerUser above stays null until navigation leaves the auth screen.
+  if (isPortalRoute) return null;
+
   return (
-    <header className={`sticky top-0 z-[100] bg-white/98 backdrop-blur-md border-b border-stone-200/90 shadow-sm w-full text-slate-900 transition-transform duration-300 ease-in-out ${isVisible ? "translate-y-0" : "-translate-y-full"}`}>
+    <header className={`sticky top-0 z-[100] w-full border-b border-stone-200/90 bg-white/98 text-slate-900 shadow-sm transition-transform duration-300 ease-in-out ${isVisible ? "translate-y-0" : "-translate-y-full"}`}>
       {/* Signature CMYK Top Accent Bar */}
       <div className="cmyk-bar" />
 
-      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 h-20 sm:h-24 flex items-center justify-between">
-
-        {/* Big Prominent Editorial Serif Wordmark - Uppercase with Magenta & */}
-        <Link href="/" className="group shrink-0 flex items-center">
-          <span className="font-serif-brand text-3xl sm:text-4xl md:text-5xl lg:text-[44px] font-black text-slate-900 group-hover:text-[#EC008C] transition-colors tracking-tight select-none uppercase leading-none">
-            PRESS <span className="text-[#EC008C] font-serif italic font-normal text-4xl sm:text-5xl md:text-6xl lg:text-[52px]">&</span> PRESENT
-          </span>
-        </Link>
-
-        {/* Desktop Navigation */}
-        <nav className="hidden lg:flex items-center gap-1.5 bg-stone-100/80 p-1.5 rounded-full border border-stone-200">
-          {!isAdminOrOwner ? (
-            <>
-              <NavLink href="/" active={pathname === "/" && activeLandingSection === "home"} onClick={handleLandingNavClick("home")}>Home</NavLink>
-              <NavLink href="/#about" active={pathname === "/" && activeLandingSection === "about"} onClick={handleLandingNavClick("about")}>About</NavLink>
-              <NavLink href="/browse" active={pathname === "/browse"}>Browse Services</NavLink>
-              <NavLink href="/shops" active={pathname === "/shops"}>Print Shops</NavLink>
-              {user && <NavLink href="/track" active={pathname === "/track"}>Order Tracking</NavLink>}
-              {user && <NavLink href="/messages" active={pathname === "/messages"}>Messages</NavLink>}
-            </>
+      <div className="public-header-layout mx-auto grid h-16 max-w-[1600px] items-center px-4 sm:h-20 sm:px-6 lg:px-8">
+        <div className="justify-self-start" aria-label="Press and Present">
+          {isPortalExperience ? (
+            <BrandMark className="h-8 w-[60px] sm:h-9 sm:w-[64px]" />
           ) : (
-            <div className="flex items-center gap-2">
-              <Link
-                href={consoleHref}
-                className="px-5 py-2 rounded-full bg-slate-900 text-white text-sm font-bold hover:bg-slate-800 transition-colors flex items-center gap-2"
-              >
-                <LayoutDashboard size={16} className="text-[#00FFFF]" />
-                {consoleLabel}
-              </Link>
-            </div>
+            <Link href="/" className="group" aria-label="Press and Present home">
+              <BrandMark className="h-8 w-[60px] transition-transform group-hover:-rotate-3 group-hover:scale-105 sm:h-9 sm:w-[64px]" />
+            </Link>
           )}
-        </nav>
+        </div>
+
+        {/* Public navigation uses the animated PillNav layout. */}
+        <div className="min-w-0 justify-self-center">
+          {!isPortalExperience && (
+            <PillNav
+              showLogo={false}
+              items={[
+                { href: "/", label: "Home" },
+                { href: "/about", label: "About" },
+                { href: "/browse", label: "Browse Services" },
+                { href: "/shops", label: "Print Shops" },
+                ...(headerUser ? [{ href: "/track", label: "Order Tracking" }] : []),
+              ]}
+              activeHref={pathname === "/" ? (activeLandingSection === "about" ? "/about" : "/") : pathname}
+              onItemClick={(item, event) => {
+                if (item.href === "/" && pathname === "/") handleLandingNavClick("home")(event);
+                if (item.href === "/about" && pathname === "/") handleLandingNavClick("about")(event);
+              }}
+              onMobileMenuChange={setIsMobileMenuOpen}
+            />
+          )}
+        </div>
 
         {/* Auth & User Actions */}
-        <div className="hidden md:flex items-center gap-3">
-          {!loading && user ? (
+        <div className="hidden items-center gap-3 justify-self-end md:flex">
+          {!loading && headerUser ? (
             <div className="flex items-center gap-3">
               {isAdminOrOwner && (
                 <Link
@@ -198,22 +230,22 @@ export default function Navbar() {
               <div className="relative" ref={dropdownRef}>
                 <button
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className="flex items-center gap-3 px-4 py-2 rounded-full border border-stone-300 hover:border-stone-400 bg-stone-100 hover:bg-stone-200/70 transition-all group"
+                  className="group flex items-center gap-2.5 rounded-xl border border-stone-300 bg-stone-100 px-3 py-1.5 transition-all hover:border-stone-400 hover:bg-stone-200/70"
                 >
                   <div className="w-7 h-7 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">
                     {displayName.charAt(0).toUpperCase()}
                   </div>
-                  <span className="font-bold text-sm text-slate-800 truncate max-w-[120px]">{displayName}</span>
-                  <ChevronDown size={16} className={`text-slate-400 transition-transform duration-200 ${isDropdownOpen ? "rotate-180" : ""}`} />
+                  <span className="max-w-[120px] truncate text-sm font-bold text-slate-800">{displayName}</span>
+                  <ChevronDown size={15} className={`text-slate-400 transition-transform duration-200 ${isDropdownOpen ? "rotate-180" : ""}`} />
                 </button>
 
                 {isDropdownOpen && (
                   <div className="absolute right-0 mt-2 w-64 bg-white text-slate-900 rounded-2xl border border-stone-200 shadow-2xl py-2 z-50 animate-slide-up">
                     <div className="px-4 py-3 border-b border-stone-100 bg-stone-50">
                       <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Signed in as</p>
-                      <p className="font-bold text-xs text-slate-900 truncate mt-0.5">{user.email}</p>
+                      <p className="font-bold text-xs text-slate-900 truncate mt-0.5">{headerUser.email}</p>
                       <span className="inline-block mt-1.5 px-2 py-0.5 rounded-full bg-stone-200 text-slate-700 text-[10px] font-extrabold uppercase tracking-wider">
-                        {userRole.replace("_", " ")}
+                        {headerUserRole.replace("_", " ")}
                       </span>
                     </div>
 
@@ -251,7 +283,7 @@ export default function Navbar() {
             <div className="flex items-center gap-3">
               <Link
                 href="/login"
-                className="px-5 py-2.5 text-sm sm:text-base font-bold text-slate-700 hover:text-slate-900 hover:bg-stone-100 rounded-full transition-colors"
+                className="rounded-lg px-4 py-2 text-sm font-bold text-slate-700 transition-colors hover:bg-stone-100 hover:text-slate-900 sm:text-sm"
               >
                 Sign in
               </Link>
@@ -265,131 +297,28 @@ export default function Navbar() {
           )}
         </div>
 
-        {/* Mobile Menu Button */}
-        <div className="flex lg:hidden items-center gap-2">
-          <button
-            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            className="p-2.5 rounded-xl text-slate-800 hover:text-slate-900 hover:bg-stone-100 transition-colors"
-            aria-label="Toggle Menu"
-          >
-            {isMobileMenuOpen ? <X size={26} /> : <Menu size={26} />}
-          </button>
-        </div>
       </div>
 
-      {/* Mobile Drawer */}
+      {/* Mobile account actions remain separate from the PillNav links. */}
       {isMobileMenuOpen && (
-        <div className="lg:hidden border-t border-stone-200 bg-white px-5 py-5 space-y-4 shadow-2xl animate-slide-up text-slate-900">
-          <nav className="flex flex-col space-y-1.5">
-            <Link
-              href="/"
-              onClick={() => setIsMobileMenuOpen(false)}
-              className="px-4 py-3 text-base font-bold text-slate-800 hover:bg-stone-100 rounded-xl"
-            >
-              Home
-            </Link>
-            <Link
-              href="/browse"
-              onClick={() => setIsMobileMenuOpen(false)}
-              className="px-4 py-3 text-base font-bold text-slate-800 hover:bg-stone-100 rounded-xl"
-            >
-              Browse Services
-            </Link>
-            <Link
-              href="/shops"
-              onClick={() => setIsMobileMenuOpen(false)}
-              className="px-4 py-3 text-base font-bold text-slate-800 hover:bg-stone-100 rounded-xl"
-            >
-              Print Shops
-            </Link>
-            {user && (
-              <>
-                <Link
-                  href="/track"
-                  onClick={() => setIsMobileMenuOpen(false)}
-                  className="px-4 py-3 text-base font-bold text-slate-800 hover:bg-stone-100 rounded-xl"
-                >
-                  Order Tracking
-                </Link>
-                <Link
-                  href="/messages"
-                  onClick={() => setIsMobileMenuOpen(false)}
-                  className="px-4 py-3 text-base font-bold text-slate-800 hover:bg-stone-100 rounded-xl"
-                >
-                  Messages
-                </Link>
-              </>
-            )}
-            {isAdminOrOwner && (
-              <Link
-                href={consoleHref}
-                onClick={() => setIsMobileMenuOpen(false)}
-                className="px-4 py-3 text-base font-bold text-[#EC008C] hover:bg-pink-50 rounded-xl flex items-center gap-2"
-              >
-                <LayoutDashboard size={18} /> {consoleLabel}
-              </Link>
-            )}
-          </nav>
-
-          <div className="pt-4 border-t border-stone-200 flex flex-col gap-3">
-            {user ? (
-              <>
-                <div className="px-4 py-1">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Signed in as</p>
-                  <p className="text-sm font-bold text-slate-900 truncate">{user.email}</p>
-                </div>
-                <Link
-                  href="/account-settings"
-                  onClick={() => setIsMobileMenuOpen(false)}
-                  className="w-full text-center py-3 text-sm font-bold border border-stone-300 rounded-full text-slate-800 hover:bg-stone-100"
-                >
-                  Account Settings
-                </Link>
-                <button
-                  onClick={handleSignOut}
-                  className="w-full text-center py-3 text-sm font-bold bg-rose-50 text-rose-600 rounded-full"
-                >
-                  Sign out
-                </button>
-              </>
-            ) : (
-              <div className="flex gap-3 pt-1">
-                <Link
-                  href="/login"
-                  onClick={() => setIsMobileMenuOpen(false)}
-                  className="flex-1 text-center py-3 text-sm font-bold border border-stone-300 rounded-full text-slate-800 hover:bg-stone-100"
-                >
-                  Sign in
-                </Link>
-                <Link
-                  href="/signup"
-                  onClick={() => setIsMobileMenuOpen(false)}
-                  className="flex-1 text-center py-3 text-sm font-bold bg-[#EC008C] text-white rounded-full hover:bg-[#d0007b]"
-                >
-                  Create account
-                </Link>
+        <div className="pill-nav-mobile-account lg:hidden">
+          {headerUser ? (
+            <>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Signed in as</p>
+                <p className="truncate text-sm font-bold text-slate-900">{headerUser.email}</p>
               </div>
-            )}
-          </div>
+              <Link href="/account-settings" onClick={() => setIsMobileMenuOpen(false)} className="pill-nav-account-link">Account settings</Link>
+              <button onClick={handleSignOut} className="pill-nav-account-link pill-nav-account-link-danger">Sign out</button>
+            </>
+          ) : (
+            <div className="flex gap-2">
+              <Link href="/login" onClick={() => setIsMobileMenuOpen(false)} className="pill-nav-account-link flex-1 text-center">Sign in</Link>
+              <Link href="/signup" onClick={() => setIsMobileMenuOpen(false)} className="pill-nav-account-link pill-nav-account-link-primary flex-1 text-center">Create account</Link>
+            </div>
+          )}
         </div>
       )}
     </header>
   );
 }
-
-function NavLink({ href, children, active, onClick }) {
-  return (
-    <Link
-      href={href}
-      onClick={onClick}
-      className={`px-4 py-2 rounded-full text-sm sm:text-base transition-all relative ${active
-          ? "text-slate-900 bg-white font-extrabold shadow-xs"
-          : "text-slate-600 hover:text-slate-900 hover:bg-stone-200/60 font-bold"
-        }`}
-    >
-      {children}
-    </Link>
-  );
-}
-
-

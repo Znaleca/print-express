@@ -1,5 +1,5 @@
 -- Run this in Supabase SQL Editor.
--- This lets ADMIN/SUPER_ADMIN fetch full dashboard data without service-role key.
+-- This lets ADMIN fetch full dashboard data without service-role key.
 
 create or replace function public.admin_dashboard_snapshot()
 returns jsonb
@@ -19,7 +19,7 @@ begin
   from public.profiles p
   where p.id = auth.uid();
 
-  if requester_role not in ('ADMIN', 'SUPER_ADMIN') then
+  if requester_role <> 'ADMIN' then
     raise exception 'FORBIDDEN: Admin clearance required.';
   end if;
 

@@ -11,9 +11,9 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en" data-scroll-behavior="smooth">
-      <body className="min-h-screen flex flex-col">
+      <body className="min-h-screen flex flex-col app-body">
         <Navbar />
-        <main className="flex-1">{children}</main>
+        <div className="flex-1 app-route-shell">{children}</div>
         <Footer />
         <LiveChatWidget />
       </body>

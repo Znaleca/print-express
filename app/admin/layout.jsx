@@ -15,6 +15,8 @@ export default function AdminLayout({ children }) {
   const [state, setState] = useState("checking"); // checking | approved | unauthorized
   const [mounted, setMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [adminAccount, setAdminAccount] = useState({ name: "Admin", email: "" });
+  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -32,7 +34,7 @@ export default function AdminLayout({ children }) {
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("role")
+        .select("role, full_name")
         .eq("id", user.id)
         .single();
 
@@ -41,50 +43,61 @@ export default function AdminLayout({ children }) {
         return;
       }
 
+      setAdminAccount({
+        name: profile.full_name || user.user_metadata?.full_name || user.email?.split("@")[0] || "Admin",
+        email: user.email || "",
+      });
       setState("approved");
     };
 
     run();
   }, [router]);
 
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    await supabase.auth.signOut();
+    router.replace("/login");
+    router.refresh();
+  };
+
   /* ── Gate UI Wrapper ── */
   const GateUI = ({ icon: Icon, title, message, badge, type, action }) => (
-    <div className="min-h-screen bg-[#F4F4F1] flex items-center justify-center p-6 font-sans">
-      <div className="max-w-md w-full border-4 border-black p-8 bg-white shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] relative overflow-hidden">
-        <div className="absolute inset-0 pointer-events-none opacity-5 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]" />
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#1A1A1A] p-6 font-sans">
+      <div className="cmyk-bar absolute left-0 right-0 top-0" />
+      <div className="relative w-full max-w-md overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-8 shadow-[0_18px_42px_rgba(26,26,26,0.16)]">
 
         <div className="relative z-10">
           <div className="flex justify-between items-start mb-6">
-            <div className={`p-3 border-2 border-black ${type === 'error' ? 'bg-[#FF3E00] text-white' : 'bg-[#00FFFF] text-[#1A1A1A]'}`}>
+            <div className={`rounded-2xl p-3 ${type === 'error' ? 'bg-[#EC008C] text-white' : 'bg-[#00FFFF] text-[#1A1A1A]'}`}>
               <Icon size={32} />
             </div>
             {badge && (
-              <span className="font-mono text-[10px] font-black uppercase tracking-widest border-2 border-black px-2 py-1">
+              <span className="rounded-full border border-[#D8D6CE] px-3 py-1 text-[10px] font-black uppercase tracking-widest text-[#676762]">
                 {badge}
               </span>
             )}
           </div>
 
-          <h1 className="text-3xl font-black uppercase italic tracking-tighter leading-none mb-4">
-            {title ? title.replace(/\s/g, "_") : "SYSTEM_LOG"}
+          <h1 className="mb-4 text-3xl font-black tracking-tight leading-none">
+            {title || "Checking access"}
           </h1>
 
-          <p className="font-mono text-xs uppercase tracking-tight leading-relaxed opacity-70 mb-8 border-l-4 border-black/10 pl-4">
+          <p className="mb-8 border-l-2 border-[#EC008C] pl-4 text-sm leading-relaxed text-[#676762]">
             {message}
           </p>
 
           {action && (
             <button
               onClick={action.onClick}
-              className="w-full bg-black text-white py-4 font-mono text-[10px] font-black uppercase tracking-[0.3em] hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-colors shadow-[4px_4px_0px_0px_rgba(0,255,255,1)]"
+              className="w-full rounded-full bg-[#1A1A1A] py-3.5 text-sm font-extrabold text-white transition-colors hover:bg-[#00FFFF] hover:text-[#1A1A1A]"
             >
               {action.label}
             </button>
           )}
 
-          <div className="mt-8 pt-4 border-t border-black/5 flex justify-between font-mono text-[8px] opacity-40 uppercase">
-            <span>Security_Layer: 00</span>
-            <span>Auth_Check: {mounted ? new Date().toLocaleTimeString() : "INITIALIZING..."}</span>
+          <div className="mt-8 flex justify-between border-t border-[#D8D6CE] pt-4 text-[10px] text-[#676762]">
+            <span>Security layer · 00</span>
+            <span>Auth check · {mounted ? new Date().toLocaleTimeString() : "Initializing..."}</span>
           </div>
         </div>
       </div>
@@ -121,13 +134,17 @@ export default function AdminLayout({ children }) {
 
   /* ── Approved Portal ── */
   return (
-    <div className="flex min-h-screen bg-[#F4F4F1]">
+    <div className="flex h-screen overflow-hidden bg-[#1A1A1A]">
       <AdminSidebar
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen((current) => !current)}
+        adminName={adminAccount.name}
+        adminEmail={adminAccount.email}
+        onSignOut={handleSignOut}
+        signingOut={signingOut}
       />
-      <main className="flex-1 min-w-0 w-full">
-        <div className="w-full max-w-none min-h-[calc(100vh-88px)] p-4 sm:p-6 lg:p-8">
+      <main className="min-h-0 min-w-0 flex-1 w-full overflow-y-auto">
+        <div className="relative min-h-full w-full">
           {children}
         </div>
       </main>

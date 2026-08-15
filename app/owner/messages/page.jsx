@@ -4,12 +4,13 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
   MessageSquare, Send, Loader2, User, Store,
-  ChevronRight, ChevronLeft, Hash, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, Banknote, FileText
+  ChevronRight, ChevronLeft, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, Banknote, FileText
 } from "lucide-react";
+import { getUploadExtension, IMAGE_BUCKET, MAX_IMAGE_BYTES, optimizeImageForUpload } from "@/lib/imageUpload";
+import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
 
 const DESIGN_FILE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,image/svg+xml,.ai,.psd,.eps,.tif,.tiff";
-const DESIGN_MAX_BYTES = 50 * 1024 * 1024;
-const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const DESIGN_MAX_BYTES = 10 * 1024 * 1024;
 
 const formatBytes = (bytes = 0) => {
   if (!bytes) return "0 KB";
@@ -36,6 +37,7 @@ export default function OwnerMessagesPage() {
   const [messages, setMessages] = useState([]);
   const [msgLimit, setMsgLimit] = useState(20);
   const [hasMoreMsgs, setHasMoreMsgs] = useState(false);
+  const [loadingOlderMsgs, setLoadingOlderMsgs] = useState(false);
   const [input, setInput] = useState("");
   const [loadingConvs, setLoadingConvs] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
@@ -259,15 +261,14 @@ export default function OwnerMessagesPage() {
           event: "*",
           schema: "public",
           table: "chat_messages",
+          filter: `conversation_id=eq.${activeConv.id}`,
         },
         async (payload) => {
           const row = payload.new || payload.old;
           if (!row?.conversation_id) return;
 
-          if (row.conversation_id === activeConv.id) {
-            await fetchMessages(activeConv.id, true);
-            await markConversationRead(activeConv.id);
-          }
+          await fetchMessages(activeConv.id, true);
+          await markConversationRead(activeConv.id);
 
           await loadConversations(true);
         }
@@ -281,12 +282,6 @@ export default function OwnerMessagesPage() {
     };
   }, [activeConv]);
 
-  useEffect(() => {
-    if (activeConv) {
-      fetchMessages(activeConv.id, false, msgLimit);
-    }
-  }, [msgLimit]);
-
   // Detect unanswered video call requests
   useEffect(() => {
     if (!messages.length || !user) return;
@@ -296,8 +291,12 @@ export default function OwnerMessagesPage() {
     setVideoCallRequestAlert(hasRequest && !hasInvite);
   }, [messages, user]);
 
-  const fetchMessages = async (convId, isBg = false, limit = 20) => {
-    if (!isBg) setLoadingMsgs(true);
+  const fetchMessages = async (convId, isBg = false, limit = 20, prepend = false) => {
+    const previousHeight = scrollContainerRef.current?.scrollHeight || 0;
+    const previousTop = scrollContainerRef.current?.scrollTop || 0;
+
+    if (prepend) setLoadingOlderMsgs(true);
+    else if (!isBg) setLoadingMsgs(true);
     const { data, count } = await supabase
       .from("chat_messages")
       .select("*", { count: "exact" })
@@ -306,10 +305,26 @@ export default function OwnerMessagesPage() {
       .limit(limit);
       
     if (data) {
-      setMessages(data.reverse());
-      setHasMoreMsgs(count > limit);
-      
-      if (limit === 20 || isBg) {
+      const orderedMessages = data.reverse();
+      if (prepend) {
+        setMessages((currentMessages) => {
+          const existingIds = new Set(currentMessages.map((message) => message.id));
+          const olderMessages = orderedMessages.filter((message) => !existingIds.has(message.id));
+          return [...olderMessages, ...currentMessages];
+        });
+      } else {
+        setMessages(orderedMessages);
+      }
+      setHasMoreMsgs((count || 0) > limit);
+
+      if (prepend) {
+        setTimeout(() => {
+          const container = scrollContainerRef.current;
+          if (container) {
+            container.scrollTop = container.scrollHeight - previousHeight + previousTop;
+          }
+        }, 50);
+      } else if (limit === 20 || isBg) {
         setTimeout(() => {
           if (scrollContainerRef.current) {
             scrollContainerRef.current.scrollTo({
@@ -322,11 +337,15 @@ export default function OwnerMessagesPage() {
         }, 50);
       }
     }
-    if (!isBg) setLoadingMsgs(false);
+    if (prepend) setLoadingOlderMsgs(false);
+    else if (!isBg) setLoadingMsgs(false);
   };
 
-  const loadMoreMessages = () => {
-    setMsgLimit(prev => prev + 20);
+  const loadMoreMessages = async () => {
+    if (!activeConv || !hasMoreMsgs || loadingOlderMsgs) return;
+    const nextLimit = msgLimit + 20;
+    setMsgLimit(nextLimit);
+    await fetchMessages(activeConv.id, false, nextLimit, true);
   };
 
   const markConversationRead = async (convId) => {
@@ -364,21 +383,34 @@ export default function OwnerMessagesPage() {
 
   const sendImageMessage = async (file) => {
     if (!file || !activeConv || !user) return;
-    if (!file.type?.startsWith("image/") || file.size > IMAGE_MAX_BYTES) {
-      window.alert("Please upload an image file up to 10 MB for regular chat attachments.");
+    if (!file.type?.startsWith("image/")) {
+      window.alert("Please upload an image file.");
       return;
     }
     setSendingImage(true);
 
-    const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+    const optimized = await optimizeImageForUpload(file).catch((error) => {
+      window.alert(error.message || `Images must be ${MAX_IMAGE_BYTES / (1024 * 1024)} MB or smaller.`);
+      return null;
+    });
+    if (!optimized) {
+      setSendingImage(false);
+      return;
+    }
+
+    const ext = getUploadExtension(optimized);
     const filePath = `${activeConv.id}/${user.id}-${Date.now()}.${ext}`;
 
     const { error: uploadErr } = await supabase.storage
-      .from("chat-images")
-      .upload(filePath, file, { upsert: false });
+      .from(IMAGE_BUCKET)
+      .upload(filePath, optimized, {
+        upsert: false,
+        cacheControl: "31536000",
+        contentType: optimized.type,
+      });
 
     if (!uploadErr) {
-      const { data } = supabase.storage.from("chat-images").getPublicUrl(filePath);
+      const { data } = supabase.storage.from(IMAGE_BUCKET).getPublicUrl(filePath);
       await supabase.from("chat_messages").insert({
         conversation_id: activeConv.id,
         sender_id: user.id,
@@ -387,8 +419,8 @@ export default function OwnerMessagesPage() {
         image_url: data?.publicUrl || null,
         metadata: {
           file_name: file.name,
-          file_size_bytes: file.size,
-          file_type: file.type || "image",
+          file_size_bytes: optimized.size,
+          file_type: optimized.type || "image",
           file_format: ext,
         },
         is_read: false,
@@ -465,21 +497,37 @@ export default function OwnerMessagesPage() {
   const sendDesignVersionMessage = async (file) => {
     if (!file || !activeConv || !user) return;
     if (file.size > DESIGN_MAX_BYTES) {
-      window.alert("Design proof files must be 50 MB or smaller.");
+      window.alert("Design proof files must be 10 MB or smaller.");
       return;
     }
     setSending(true);
 
-    const uploadProfile = getUploadProfile(file);
-    const ext = uploadProfile.extension || "file";
+    const uploadFile = file.type?.startsWith("image/")
+      ? await optimizeImageForUpload(file).catch((error) => {
+          window.alert(error.message || "Images must be 5 MB or smaller after optimization.");
+          return null;
+        })
+      : file;
+    if (!uploadFile) {
+      setSending(false);
+      return;
+    }
+
+    const uploadProfile = getUploadProfile(uploadFile);
+    const ext = uploadFile.type?.startsWith("image/") ? getUploadExtension(uploadFile) : (uploadProfile.extension || "file");
     const filePath = `${activeConv.id}/${user.id}-design-v${designVersion}-${Date.now()}.${ext}`;
+    const storageBucket = uploadFile.type?.startsWith("image/") ? IMAGE_BUCKET : "chat-images";
 
     const { error: uploadErr } = await supabase.storage
-      .from("chat-images")
-      .upload(filePath, file, { upsert: false });
+      .from(storageBucket)
+      .upload(filePath, uploadFile, {
+        upsert: false,
+        cacheControl: "31536000",
+        contentType: uploadFile.type,
+      });
 
     if (!uploadErr) {
-      const { data } = supabase.storage.from("chat-images").getPublicUrl(filePath);
+      const { data } = supabase.storage.from(storageBucket).getPublicUrl(filePath);
       let proofId = null;
       const numericVersion = Number.parseInt(designVersion, 10) || 1;
       const proofPayload = {
@@ -487,7 +535,7 @@ export default function OwnerMessagesPage() {
         version_number: numericVersion,
         file_url: data?.publicUrl || null,
         file_name: file.name,
-        file_size_bytes: file.size,
+        file_size_bytes: uploadFile.size,
         file_type: uploadProfile.fileType,
         file_format: ext,
         quality_notes: uploadProfile.quality,
@@ -533,7 +581,7 @@ export default function OwnerMessagesPage() {
           proof_status: "PENDING",
           is_locked: false,
           file_name: file.name,
-          file_size_bytes: file.size,
+          file_size_bytes: uploadFile.size,
           file_type: uploadProfile.fileType,
           file_format: ext,
           file_mime: uploadProfile.mime,
@@ -652,50 +700,55 @@ export default function OwnerMessagesPage() {
 
   /* ── UI ── */
   if (!user) {
-    return (
-      <div className="flex items-center justify-center h-full bg-[#1A1A1A] text-[#00FFFF] font-mono">
-        <Loader2 className="animate-spin mb-4" size={48} />
-      </div>
-    );
+    return <OwnerPageSkeleton rows={2} />;
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-80px)] bg-[#FDFDFD] font-sans">
-      <div className="border-b-8 border-[#1A1A1A] px-8 py-6 bg-white shrink-0">
+    <div className="owner-messages-page flex h-full min-h-0 flex-col bg-[#F6F6F2] font-sans text-slate-900">
+      <div className="relative shrink-0 border-b border-slate-200 bg-white px-4 pb-6 pt-8 sm:px-8 sm:pb-7">
+        <div className="cmyk-bar absolute left-0 right-0 top-0" />
         <div className="mx-auto w-full max-w-[1920px]">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="flex gap-1">
-              <div className="w-4 h-1 bg-[#00FFFF]" /><div className="w-4 h-1 bg-[#EC008C]" /><div className="w-4 h-1 bg-[#FFF200]" />
-            </div>
-            <span className="font-mono text-[9px] uppercase tracking-[0.5em] text-gray-400">Node_Comm_Center</span>
-          </div>
-          <h1 className="text-4xl md:text-5xl font-black uppercase italic tracking-tighter leading-none">
-            Customer_Inbox
+          <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-[#EC008C]">Customer communication</p>
+          <h1 className="mt-2 text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">
+            Shop <span className="text-[#00AFC0]">messages.</span>
           </h1>
+          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-slate-500 sm:text-base">
+            Reply to customer questions, review files, send quotes, and keep every print conversation together.
+          </p>
         </div>
       </div>
 
-      <div className="flex flex-1 w-full max-w-[1920px] mx-auto overflow-hidden">
+      <div className="flex min-h-0 flex-1 w-full max-w-[1920px] gap-3 overflow-hidden p-3 sm:gap-4 sm:p-4">
         {/* ── LEFT: CONVERSATION LIST ── */}
-        <aside className={`${activeConv ? 'hidden md:flex' : 'flex'} w-full md:w-80 lg:w-96 border-r-4 border-l-4 border-b-4 border-[#1A1A1A] flex-col shrink-0 bg-white`}>
-          <div className="px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
-            <p className="font-mono text-[10px] uppercase tracking-widest font-black text-[#00FFFF]">
-              {conversations.length} Active Thread{conversations.length !== 1 ? "s" : ""}
-            </p>
+        <aside className={`${activeConv ? 'hidden md:flex' : 'flex'} w-full min-h-0 shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm md:w-80 lg:w-96`}>
+          <div className="border-b border-slate-100 bg-[#F6F6F2] px-4 py-4 text-slate-900">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#EC008C]">Inbox</p>
+                <h2 className="mt-1 text-sm font-extrabold">Customer conversations</h2>
+              </div>
+              <span className="text-[10px] font-bold text-slate-400">{conversations.length} {conversations.length === 1 ? "thread" : "threads"}</span>
+            </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain divide-y divide-slate-100">
             {loadingConvs ? (
-              <div className="flex items-center justify-center py-20">
-                <Loader2 size={32} className="animate-spin text-[#00FFFF]" />
+              <div className="space-y-3 p-4" aria-label="Loading conversations">
+                {[1, 2, 3, 4].map((row) => (
+                  <div key={row} className="flex animate-pulse items-center gap-3 rounded-xl bg-[#F6F6F2] p-4">
+                    <div className="h-10 w-10 shrink-0 rounded-xl bg-[#D8D6CE]" />
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="h-3 w-3/5 rounded-full bg-[#D8D6CE]" />
+                      <div className="h-2 w-4/5 rounded-full bg-[#ECECE8]" />
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : conversations.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
-                <MessageSquare size={48} className="mb-4 text-gray-200" />
-                <p className="font-black uppercase italic text-lg text-gray-400">Inbox_Empty</p>
-                <p className="font-mono text-[10px] uppercase opacity-40 mt-2 leading-relaxed">
-                  Customers will contact you from your shop page.
-                </p>
+                <MessageSquare size={40} className="mb-4 text-slate-200" />
+                <p className="text-lg font-black text-slate-400">Inbox empty</p>
+                <p className="mt-2 text-xs leading-relaxed text-slate-400">Customers will contact you from your shop page.</p>
               </div>
             ) : (
               conversations.map((conv) => {
@@ -705,34 +758,34 @@ export default function OwnerMessagesPage() {
                   <button
                     key={conv.id}
                     onClick={() => openConversation(conv)}
-                    className={`w-full text-left px-6 py-5 border-b-2 border-[#1A1A1A]/10 transition-all flex items-center gap-4 group ${
+                    className={`group flex w-full items-start gap-3 border-l-4 p-4 text-left transition-colors ${
                       isActive
-                        ? "bg-[#1A1A1A] text-white"
-                        : "hover:bg-[#00FFFF]/10"
+                        ? "border-[#00FFFF] bg-[#EFFFFF]"
+                        : "border-transparent hover:bg-slate-50"
                     }`}
                   >
-                    <div className={`w-10 h-10 flex items-center justify-center shrink-0 border-2 ${isActive ? "bg-[#00FFFF] border-[#00FFFF]" : "bg-[#F9F9F7] border-[#1A1A1A]"}`}>
-                      <User size={16} className={isActive ? "text-[#1A1A1A]" : "text-[#00FFFF]"} />
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-sm font-bold text-slate-500">
+                      {convLabel(conv).charAt(0).toUpperCase() || <User size={16} />}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className={`font-black uppercase italic text-sm leading-none truncate ${isActive ? "text-white" : "text-[#1A1A1A]"}`}>
+                      <p className={`break-words text-sm font-bold leading-snug ${isActive ? "text-slate-900" : "text-slate-800"}`}>
                         {convLabel(conv)}
                       </p>
                       {conv.customer_profile?.email && (
-                        <p className={`font-mono text-[9px] uppercase mt-1.5 font-bold truncate ${isActive ? "text-[#00FFFF]/70" : "opacity-40"}`}>
+                        <p className="mt-1 break-all text-[10px] text-slate-400">
                           {conv.customer_profile.email}
                         </p>
                       )}
-                      <p className={`font-mono text-[8px] uppercase mt-1 font-black ${isActive ? "text-white/40" : "opacity-30"}`}>
+                      <p className="mt-1 text-[10px] text-slate-400">
                         {new Date(conv.updated_at).toLocaleDateString()}
                       </p>
                     </div>
                     {unread > 0 && (
-                      <div className="min-w-6 h-6 px-2 bg-[#EC008C] text-white border-2 border-[#1A1A1A] flex items-center justify-center font-mono text-[9px] font-black">
+                      <div className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[#EC008C] px-1.5 text-[10px] font-bold text-white">
                         {unread}
                       </div>
                     )}
-                    <ChevronRight size={14} className={`shrink-0 ${isActive ? "text-[#00FFFF]" : "opacity-0 group-hover:opacity-100 text-[#EC008C]"} transition-opacity`} />
+                    <ChevronRight size={14} className={`mt-1 shrink-0 ${isActive ? "text-[#00AFC0]" : "text-slate-300 group-hover:text-[#EC008C]"} transition-colors`} />
                   </button>
                 );
               })
@@ -741,73 +794,64 @@ export default function OwnerMessagesPage() {
         </aside>
 
         {/* ── RIGHT: CHAT PANEL ── */}
-        <div className={`flex-1 flex-col min-w-0 border-r-4 border-b-4 border-[#1A1A1A] ${!activeConv ? 'hidden md:flex' : 'flex'}`}>
+        <div className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ${!activeConv ? 'hidden md:flex' : 'flex'}`}>
           {!activeConv ? (
-            <div className="flex-1 flex flex-col items-center justify-center bg-[#F9F9F7]">
-              <div className="w-20 h-20 bg-[#1A1A1A] flex items-center justify-center mb-6 shadow-[8px_8px_0px_0px_rgba(0,255,255,1)]">
-                <MessageSquare size={36} className="text-[#00FFFF]" />
+            <div className="flex flex-1 flex-col items-center justify-center bg-[#F6F6F2] px-6 text-center">
+              <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-900 text-[#00FFFF] shadow-lg">
+                <MessageSquare size={28} />
               </div>
-              <p className="font-black uppercase italic text-2xl tracking-tighter mb-2">Select_A_Thread</p>
-              <p className="font-mono text-[10px] uppercase tracking-widest opacity-40">
-                Pick a conversation to begin transmission.
-              </p>
+              <p className="mb-2 text-2xl font-black tracking-tight text-slate-900">Select a conversation</p>
+              <p className="max-w-sm text-sm text-slate-500">Choose a customer thread to reply, review files, or send a quote.</p>
             </div>
           ) : (
             <>
               {/* Chat header */}
-              <div className="px-4 md:px-8 py-5 bg-white border-b-4 border-[#1A1A1A] flex items-center gap-4 shrink-0 shadow-[0_4px_0_0_rgba(26,26,26,1)]">
+              <div className="flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 py-4 md:px-6">
                 <button
                   type="button"
                   onClick={() => setActiveConv(null)}
-                  className="md:hidden flex items-center justify-center w-10 h-10 bg-[#1A1A1A] text-[#00FFFF] border-2 border-[#1A1A1A] shrink-0"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:border-slate-400 md:hidden"
                 >
                   <ChevronLeft size={20} />
                 </button>
-                <div className="w-10 h-10 bg-[#1A1A1A] items-center justify-center border-2 border-[#1A1A1A] hidden md:flex shrink-0">
-                  <User size={16} className="text-[#00FFFF]" />
+                <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-sm font-bold text-[#00FFFF] md:flex">
+                  {convLabel(activeConv).charAt(0).toUpperCase()}
                 </div>
                 <div>
-                  <p className="font-black uppercase italic text-xl tracking-tighter leading-none">
+                  <p className="break-words text-base font-extrabold leading-tight text-slate-900 sm:text-lg">
                     {convLabel(activeConv)}
                   </p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Hash size={10} className="text-[#00FFFF]" />
-                    <p className="font-mono text-[9px] uppercase tracking-widest opacity-40 font-black">
-                      {activeConv.id.split("-")[0]}
-                    </p>
-                    <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse ml-1" />
-                    <p className="font-mono text-[9px] uppercase tracking-widest text-green-500 font-black">Online</p>
-                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">Customer conversation · Reply from your shop</p>
                 </div>
               </div>
 
               {/* Messages area */}
-              <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#F9F9F7] relative">
+              <div ref={scrollContainerRef} className="relative flex-1 space-y-4 overflow-y-auto overscroll-contain bg-[#F6F6F2] p-4 sm:p-6">
 
                 {/* Video Call Request Alert Banner */}
                 {videoCallRequestAlert && (
-                  <div className="sticky top-0 z-30 mb-4 flex items-center justify-between gap-4 bg-[#EC008C] border-4 border-[#1A1A1A] px-5 py-4 shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] animate-pulse-once">
+                  <div className="sticky top-0 z-30 mb-4 flex items-center justify-between gap-4 rounded-xl border border-pink-200 bg-pink-50 px-4 py-3 shadow-sm">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-[#1A1A1A] flex items-center justify-center shrink-0">
-                        <Video size={20} className="text-[#00FFFF]" />
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#EC008C] text-white">
+                        <Video size={18} />
                       </div>
                       <div>
-                        <p className="font-black uppercase italic text-white text-sm leading-none">Video Call Requested!</p>
-                        <p className="font-mono text-[10px] uppercase text-white/70 mt-1">A customer is requesting a video consultation. Schedule a time below.</p>
+                        <p className="text-sm font-extrabold leading-none text-slate-900">Video call requested</p>
+                        <p className="mt-1 text-[11px] text-slate-500">Schedule a time for this customer’s consultation.</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
                         onClick={() => { setShowSchedule(true); setShowQuote(false); setShowDesign(false); }}
-                        className="px-4 py-2 bg-[#FFF200] text-[#1A1A1A] font-black uppercase text-[10px] border-2 border-[#1A1A1A] hover:bg-white transition-colors"
+                        className="rounded-lg bg-[#EC008C] px-3 py-2 text-[10px] font-bold text-white transition-colors hover:bg-[#c90078]"
                       >
                         Schedule Now
                       </button>
                       <button
                         type="button"
                         onClick={() => setVideoCallRequestAlert(false)}
-                        className="p-1 text-white hover:text-[#FFF200] transition-colors"
+                        className="rounded-lg p-1 text-slate-400 hover:bg-white hover:text-slate-900 transition-colors"
                         title="Dismiss"
                       >
                         <X size={18} />
@@ -819,17 +863,23 @@ export default function OwnerMessagesPage() {
                 {hasMoreMsgs && (
                   <div className="flex justify-center pt-2 pb-4">
                     <button
+                      type="button"
                       onClick={loadMoreMessages}
-                      className="bg-white border-2 border-[#1A1A1A] font-mono text-[10px] uppercase font-black tracking-widest px-4 py-2 hover:bg-[#1A1A1A] hover:text-[#00FFFF] transition-all"
+                      disabled={loadingOlderMsgs}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-bold text-slate-600 shadow-sm transition-colors hover:border-slate-400 hover:text-slate-900 disabled:cursor-wait disabled:opacity-60"
                     >
-                      {loadingMsgs ? "Loading..." : "Load Previous Messages"}
+                      {loadingOlderMsgs ? "Loading older messages…" : "Load previous messages"}
                     </button>
                   </div>
                 )}
 
                 {loadingMsgs && messages.length === 0 ? (
-                  <div className="flex items-center justify-center py-20">
-                    <Loader2 size={32} className="animate-spin text-[#00FFFF]" />
+                  <div className="space-y-4 py-10" aria-label="Loading messages">
+                    {[1, 2, 3].map((row) => (
+                      <div key={row} className={`flex animate-pulse ${row % 2 ? "justify-start" : "justify-end"}`}>
+                        <div className={`h-14 rounded-2xl bg-[#D8D6CE] ${row % 2 ? "w-2/3" : "w-1/2"}`} />
+                      </div>
+                    ))}
                   </div>
                 ) : messages.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full opacity-40 mt-20">
@@ -1316,8 +1366,8 @@ export default function OwnerMessagesPage() {
       </div>
       {/* ── Image Popup Modal ── */}
       {viewImagePopup && (
-        <div className="fixed inset-0 z-[998] flex items-center justify-center bg-[#1A1A1A]/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl bg-[#FDFDFD] border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)]">
+        <div className="dialog-overlay" role="dialog" aria-modal="true">
+          <div className="dialog-surface w-full max-w-2xl overflow-hidden border-4 border-[#1A1A1A] shadow-[12px_12px_0px_0px_rgba(0,255,255,1)]">
             <div className="flex items-center justify-between px-6 py-4 border-b-4 border-[#1A1A1A] bg-[#1A1A1A] text-white">
               <div className="flex items-center gap-3">
                 <div className="flex gap-1">

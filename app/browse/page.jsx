@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Search, Star, Loader2, Map as MapIcon, ChevronRight, Printer, Store, MapPin, SlidersHorizontal, Navigation } from "lucide-react";
+import { Search, Star, Loader2, Map as MapIcon, ChevronRight, MapPin, SlidersHorizontal, LocateFixed, X } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
 const MapComponent = dynamic(() => import("@/components/MapComponent"), {
@@ -23,23 +23,33 @@ export default function BrowsePage() {
   const [selectedId, setSelectedId] = useState(null);
   const [businesses, setBusinesses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const mapSectionRef = useRef(null);
 
-  useEffect(() => {
+  const requestLocation = () => {
     if (!navigator.geolocation) return;
+
+    setLocationLoading(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setUserLocation({
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
         });
+        setSelectedId(null);
+        setSortMode("nearest");
+        setLocationLoading(false);
       },
       () => {
         setUserLocation(null);
+        setLocationLoading(false);
       },
       { enableHighAccuracy: true, timeout: 7000 }
     );
-  }, []);
+  };
 
   const haversineKm = (lat1, lon1, lat2, lon2) => {
     const toRad = (deg) => (deg * Math.PI) / 180;
@@ -57,36 +67,53 @@ export default function BrowsePage() {
     return Math.max(1, Math.round(distanceKm * 2.5));
   };
 
-  const buildRouteUrl = (shop) => {
-    if (!Number.isFinite(shop.lat) || !Number.isFinite(shop.lng)) return null;
-    const origin = userLocation ? `&origin=${userLocation.lat},${userLocation.lng}` : "";
-    return `https://www.google.com/maps/dir/?api=1${origin}&destination=${shop.lat},${shop.lng}`;
-  };
-
   useEffect(() => {
     async function loadBusinesses() {
       const { data: bizData, error: bizError } = await supabase
         .from("businesses")
         .select(`
           id, name, address, lat, lng, logo_url, is_open,
-          services ( name, category, available ),
-          business_reviews ( rating )
+          services ( name, category, available )
         `)
         .eq("status", "APPROVED")
         .order("created_at", { ascending: false });
 
       if (bizError) {
-        console.error("Error loading businesses:", bizError);
+        console.error("Error loading businesses:", {
+          code: bizError.code,
+          message: bizError.message,
+          details: bizError.details,
+          hint: bizError.hint,
+        });
+        setLoadError("We could not load verified print shops right now. Please refresh and try again.");
         setLoading(false);
         return;
       }
+
+      // Keep reviews optional. Embedding the business_reviews view can fail when
+      // PostgREST has not inferred a relationship for the view yet.
+      const { data: reviewData, error: reviewError } = await supabase
+        .from("business_reviews")
+        .select("business_id, rating");
+      if (reviewError) {
+        console.warn("Reviews are temporarily unavailable:", {
+          code: reviewError.code,
+          message: reviewError.message,
+          details: reviewError.details,
+          hint: reviewError.hint,
+        });
+      }
+      const reviewsByBusiness = (reviewData || []).reduce((map, review) => {
+        map[review.business_id] = [...(map[review.business_id] || []), review];
+        return map;
+      }, {});
 
       const formatted = (bizData || []).map((b) => {
         const availableServices = (b.services || [])
           .filter(s => s.available)
           .map(s => s.name);
 
-        const reviews = b.business_reviews || [];
+        const reviews = reviewsByBusiness[b.id] || [];
         const avgRating = reviews.length > 0
           ? (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1)
           : 5.0;
@@ -117,9 +144,13 @@ export default function BrowsePage() {
     () =>
       businesses.filter(
         (b) =>
-          b.name.toLowerCase().includes(search.toLowerCase()) ||
-          b.services.some((s) => s.toLowerCase().includes(search.toLowerCase())) ||
-          b.address.toLowerCase().includes(search.toLowerCase())
+          Number.isFinite(b.lat) &&
+          Number.isFinite(b.lng) &&
+          (
+            b.name.toLowerCase().includes(search.toLowerCase()) ||
+            b.services.some((s) => s.toLowerCase().includes(search.toLowerCase())) ||
+            b.address.toLowerCase().includes(search.toLowerCase())
+          )
       ),
     [businesses, search]
   );
@@ -189,6 +220,11 @@ export default function BrowsePage() {
     return list;
   }, [recommended, sortMode]);
 
+  const suggestions = useMemo(() => {
+    if (!search.trim()) return [];
+    return recommended.slice(0, 7);
+  }, [recommended, search]);
+
   const nearestBusiness = useMemo(() => {
     const distanceReady = recommended.filter((b) => b.distanceKm != null);
     if (distanceReady.length === 0) return null;
@@ -197,212 +233,163 @@ export default function BrowsePage() {
   const nearestBusinessId = nearestBusiness?.id || null;
 
   return (
-    <div className="flex flex-col lg:flex-row h-[calc(100vh-88px)] overflow-hidden bg-slate-50 font-sans">
-      
-      {/* Sidebar View */}
-      <aside className="w-full lg:w-[460px] shrink-0 flex flex-col bg-white border-r border-slate-200 z-10 relative shadow-md">
+    <main className="browse-page flex min-h-[calc(100vh-88px)] flex-col overflow-visible bg-[#D9D9D2] font-sans">
+      {/* Search row */}
+      <section className="relative z-20 shrink-0 overflow-visible bg-[#1A1A1A] px-4 py-5 text-white sm:px-8 sm:py-6 lg:py-7">
+        <div className="cmyk-bar absolute left-0 right-0 top-0" />
+        <div className="absolute -right-12 -top-28 h-64 w-64 rounded-full border border-white/10" />
 
-        {/* Top Filter Header */}
-        <div className="p-4 sm:p-5 border-b border-slate-200 bg-white relative">
-          <div className="cmyk-bar absolute top-0 left-0 right-0" />
+        <div className="relative mx-auto w-full max-w-5xl text-center">
+          <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">
+            Find print <span className="text-[#00FFFF]">shops.</span>
+          </h1>
+          <p className="mx-auto mt-3 max-w-xl text-xs leading-relaxed text-white/65 sm:text-sm">
+            Search by shop name, service, or area. Select a result to focus its pin on the map.
+          </p>
 
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center">
-                <Printer size={18} className="text-[#00FFFF]" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-slate-900 tracking-tight leading-none">Find Print Shops</h1>
-                <p className="text-[11px] text-slate-500 mt-0.5">{displayedBusinesses.length} registered verified shops available</p>
-              </div>
-            </div>
-          </div>
+          <div className="relative mx-auto mt-4 max-w-3xl text-left">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/55" size={20} />
+              <input
+                type="text"
+                value={search}
+                onFocus={() => setShowSuggestions(Boolean(search.trim()))}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setShowSuggestions(Boolean(event.target.value.trim()));
+                }}
+                className="browse-search h-14 w-full rounded-full border border-white/25 bg-white/10 pl-12 pr-12 text-sm font-semibold text-white placeholder:text-white/45 focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/20 sm:text-base"
+                placeholder="Search shop, service, or area..."
+                aria-label="Search print shops"
+                role="combobox"
+                aria-expanded={showSuggestions && Boolean(search.trim())}
+                aria-controls="shop-suggestions"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch("");
+                    setSelectedId(null);
+                    setShowSuggestions(false);
+                  }}
+                  className="absolute right-3 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+                  aria-label="Clear shop search"
+                >
+                  <X size={17} />
+                </button>
+              )}
 
-          <div className="relative mb-3">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input
-              type="text"
-              className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#EC008C] focus:border-transparent transition-all"
-              placeholder="Search by shop name, service, or area..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-semibold text-slate-600 flex items-center gap-1">
-              <SlidersHorizontal size={12} /> Sort by:
-            </span>
-            <select
-              value={sortMode}
-              onChange={(e) => setSortMode(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00FFFF]"
-            >
-              <option value="recommended">Recommended</option>
-              <option value="nearest">Nearest to Me</option>
-              <option value="most_reviews">Most Reviewed</option>
-            </select>
-          </div>
-          {nearestBusiness && (
-            <div className="mt-3 rounded-xl border border-[#FFF200] bg-[#FFF200]/20 px-3 py-2 text-xs text-slate-800">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-bold truncate">Nearest: {nearestBusiness.name}</span>
-                <span className="font-semibold shrink-0">{nearestBusiness.distanceKm.toFixed(1)} km | ~{nearestBusiness.travelMinutes} min</span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Shop List Container */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50">
-          {loading ? (
-            <div className="flex flex-col items-center justify-center h-64 text-xs font-semibold text-slate-500">
-              <Loader2 className="animate-spin mb-3 text-[#EC008C]" size={32} />
-              <p>Loading print shops...</p>
-            </div>
-          ) : displayedBusinesses.length === 0 ? (
-            <div className="p-8 rounded-2xl border border-dashed border-slate-300 bg-white text-center text-xs font-medium text-slate-500">
-              No print shops match your search criteria.
-            </div>
-          ) : (
-            displayedBusinesses.map((b) => {
-              const isSelected = selectedId === b.id;
-              return (
-                <div key={b.id} className="w-full">
-                  <div
-                    onClick={() => setSelectedId(b.id)}
-                    className={`w-full text-left p-4 rounded-2xl border transition-all cursor-pointer relative group ${
-                      isSelected
-                        ? "bg-white border-[#EC008C] shadow-md ring-2 ring-[#EC008C]/20"
-                        : "bg-white border-slate-200 hover:border-slate-300 shadow-sm"
-                    } ${!b.is_open ? "opacity-75" : ""}`}
-                  >
-                    <div className="flex items-start gap-4">
-                      {/* Logo */}
-                      {b.logo_url ? (
-                        <img
-                          src={b.logo_url}
-                          alt={b.name}
-                          className="w-14 h-14 object-cover rounded-xl border border-slate-200 shrink-0"
-                        />
-                      ) : (
-                        <div className="w-14 h-14 rounded-xl bg-slate-100 border border-slate-200 text-slate-400 flex items-center justify-center shrink-0">
-                          <Store size={22} />
-                        </div>
-                      )}
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <h2 className="text-base font-bold text-slate-900 truncate group-hover:text-[#EC008C] transition-colors">
-                            {b.name}
-                          </h2>
-                          {!b.is_open ? (
-                            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-bold uppercase tracking-wider shrink-0">
-                              CLOSED
-                            </span>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase tracking-wider shrink-0">
-                              OPEN
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="text-xs text-slate-500 truncate flex items-center gap-1 mt-0.5">
-                          <MapPin size={12} className="shrink-0 text-slate-400" />
-                          <span>{b.address}</span>
-                        </p>
-
-                        <div className="flex items-center justify-between gap-3 mt-2 text-xs">
-                          <div className="flex items-center gap-1 font-bold text-slate-900">
-                            <Star size={14} className="fill-amber-400 text-amber-400" />
-                            <span>{b.rating.toFixed(1)}</span>
-                            <span className="text-slate-400 font-normal">({b.reviewCount})</span>
-                          </div>
-
-                          {b.distanceKm != null ? (
-                            <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-600">
-                              <span>{b.distanceKm.toFixed(1)} km away</span>
-                              <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-bold">
-                                ~{b.travelMinutes} min drive
-                              </span>
-                            </div>
-                          ) : (
-                            <span className="text-[11px] font-semibold text-slate-400">
-                              No pinned map location
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Nearest Shop Badge & Open Route Action */}
-                        <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-slate-100">
-                          {b.id === nearestBusinessId ? (
-                            <span className="px-2 py-0.5 rounded-md bg-[#00FFFF]/20 text-slate-900 text-[10px] font-extrabold uppercase tracking-wider">
-                              Nearest Shop
-                            </span>
-                          ) : <span />}
-
-                          {buildRouteUrl(b) ? (
-                            <a
-                              href={buildRouteUrl(b)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-900 hover:text-[#EC008C] transition-colors"
-                            >
-                              <Navigation size={12} className="text-[#EC008C]" />
-                              Show Route
-                            </a>
-                          ) : (
-                            <span className="text-[11px] text-slate-400 font-semibold">Route unavailable</span>
-                          )}
-                        </div>
-
-                        {/* Service tags */}
-                        <div className="flex gap-1.5 flex-wrap mt-2.5">
-                          {b.services.map((s, idx) => (
-                            <span key={idx} className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-medium">
-                              {s}
-                            </span>
-                          ))}
-                        </div>
-
-                        {isSelected && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              router.push(`/business/${b.id}`);
-                            }}
-                            className="mt-3.5 w-full py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-[#EC008C] transition-all flex items-center justify-center gap-2 shadow-sm"
-                          >
-                            View Shop Details <ChevronRight size={14} />
-                          </button>
-                        )}
-                      </div>
+              {showSuggestions && search.trim() && (
+                <div id="shop-suggestions" role="listbox" className="absolute left-0 right-0 top-full z-30 mt-2 max-h-[min(390px,55vh)] overflow-y-auto rounded-3xl border border-[#D8D6CE] bg-[#F6F6F2] p-2 text-[#1A1A1A] shadow-2xl">
+                  {loading ? (
+                    <div className="flex items-center gap-3 px-4 py-5 text-xs font-bold text-slate-500">
+                      <Loader2 size={17} className="animate-spin text-[#EC008C]" /> Searching print shops...
                     </div>
-                  </div>
+                  ) : suggestions.length === 0 ? (
+                    <div className="px-4 py-6 text-center">
+                      <p className="text-sm font-black">No matching shops</p>
+                      <p className="mt-1 text-xs text-slate-500">Try another name, service, or area.</p>
+                    </div>
+                  ) : (
+                    suggestions.map((shop) => (
+                      <button
+                        key={shop.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selectedId === shop.id}
+                        onClick={() => {
+                          setSearch(shop.name);
+                          setSelectedId(shop.id);
+                          setShowSuggestions(false);
+                          requestAnimationFrame(() => {
+                            mapSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+                          });
+                        }}
+                        className="group flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition-colors hover:bg-white"
+                      >
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#1A1A1A] text-[#00FFFF]">
+                          <MapPin size={17} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-sm font-black group-hover:text-[#EC008C]">{shop.name}</p>
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${shop.is_open ? "bg-emerald-100 text-emerald-700" : "bg-[#ECECE8] text-slate-500"}`}>
+                              {shop.is_open ? "Open" : "Closed"}
+                            </span>
+                          </div>
+                          <p className="mt-0.5 truncate text-xs text-slate-500">{shop.address}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1 text-xs font-black text-[#1A1A1A]">
+                          <Star size={13} className="fill-[#FFF200] text-[#D6C900]" /> {shop.rating.toFixed(1)}
+                          <ChevronRight size={15} className="text-[#EC008C] transition-transform group-hover:translate-x-0.5" />
+                        </div>
+                      </button>
+                    ))
+                  )}
                 </div>
-              );
-            })
-          )}
-        </div>
-      </aside>
+              )}
+          </div>
 
-      {/* Map View */}
-      <div className="flex-1 relative z-0 bg-slate-200">
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-3 text-[11px]">
+            <span className="flex items-center gap-2 font-bold text-white/70">
+              <span className="h-2 w-2 rounded-full bg-[#EC008C]" />
+              {userLocation
+                ? `${displayedBusinesses.length} ${displayedBusinesses.length === 1 ? "nearby shop" : "nearby shops"} around you`
+                : `${displayedBusinesses.length} ${displayedBusinesses.length === 1 ? "shop" : "shops"} on the map`}
+            </span>
+            <label className="flex items-center gap-2 font-semibold text-white/55">
+              <SlidersHorizontal size={12} />
+              <select
+                value={sortMode}
+                onChange={(event) => setSortMode(event.target.value)}
+                className="browse-sort rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-[11px] font-bold text-white focus:border-[#00FFFF] focus:ring-0"
+                aria-label="Sort print shops"
+              >
+                <option value="recommended" className="text-[#1A1A1A]">Recommended</option>
+                <option value="nearest" className="text-[#1A1A1A]">Nearest first</option>
+                <option value="most_reviews" className="text-[#1A1A1A]">Most reviewed</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={requestLocation}
+              disabled={locationLoading}
+              className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] font-bold text-white/75 transition-colors hover:border-[#00FFFF]/50 hover:text-white disabled:cursor-wait disabled:opacity-60"
+            >
+              <LocateFixed size={13} className="text-[#FFF200]" />
+              {locationLoading ? "Finding your exact location..." : userLocation ? "Showing nearby shops" : "Use my location"}
+            </button>
+            {nearestBusiness && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-[#FFF200]/45 bg-[#FFF200]/10 px-3 py-1.5 text-[11px] font-bold text-[#FFF200]">
+                Nearest: {nearestBusiness.name} · {nearestBusiness.distanceKm.toFixed(1)} km
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="relative mx-auto mt-3 flex max-w-5xl items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-wider text-white/45">
+          <MapIcon size={13} className="text-[#FFF200]" /> The map below shows verified shop pins
+        </div>
+      </section>
+
+      {/* Map row */}
+      <section ref={mapSectionRef} className="relative h-[520px] flex-none shrink-0 overflow-hidden bg-[#D9D9D2] sm:h-[600px]">
+        {loadError && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#D9D9D2]/90 p-6 text-center">
+            <div className="max-w-sm rounded-2xl border border-rose-200 bg-white p-6 shadow-lg">
+              <p className="text-sm font-black text-slate-900">Print shops are temporarily unavailable</p>
+              <p className="mt-2 text-xs leading-relaxed text-slate-500">{loadError}</p>
+              <button type="button" onClick={() => window.location.reload()} className="mt-4 rounded-full bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-[#EC008C]">Refresh</button>
+            </div>
+          </div>
+        )}
         <MapComponent
           businesses={displayedBusinesses}
           selectedBusinessId={selectedId}
           userLocation={userLocation}
           nearestBusinessId={nearestBusinessId}
         />
-
-        {/* Floating Header */}
-        <div className="absolute top-4 right-4 z-10 bg-white/95 backdrop-blur-md text-slate-900 px-4 py-2.5 rounded-xl border border-slate-200 shadow-lg text-xs font-semibold flex items-center gap-2">
-          <MapIcon size={16} className="text-[#00E5FF]" />
-          <span>Interactive Map | nearest route highlighted</span>
-        </div>
-      </div>
-
-    </div>
+      </section>
+    </main>
   );
 }

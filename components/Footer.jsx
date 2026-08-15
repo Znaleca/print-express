@@ -1,3 +1,6 @@
+'use client';
+
+import { usePathname } from "next/navigation";
 import { FaFacebookF, FaInstagram, FaYoutube } from 'react-icons/fa';
 import { SiTiktok } from 'react-icons/si';
 import { ArrowUpRight } from "lucide-react";
@@ -26,6 +29,12 @@ function CMYKBar() {
 }
 
 export default function Footer() {
+    const pathname = usePathname();
+
+    // Owner and admin portals have their own navigation and should stay separate from
+    // the public customer experience.
+    if (pathname?.startsWith("/owner") || pathname?.startsWith("/admin") || pathname === "/messages") return null;
+
     const socialLinks = [
         { icon: <FaFacebookF size={14} />, label: 'Facebook', href: '#' },
         { icon: <FaInstagram size={14} />, label: 'Instagram', href: '#' },
@@ -145,8 +154,8 @@ export default function Footer() {
                 {/* ── OVERSIZED DISPLAY BRAND TEXT TREATMENT ── */}
                 <div className="my-8 py-6 border-t border-b border-white/10 text-center overflow-hidden">
                     <Link href="/" className="inline-block group">
-                        <h2 className="font-serif-brand font-black tracking-tight text-[#F6F6F2]/90 group-hover:text-white transition-colors uppercase leading-none select-none text-[clamp(2.5rem,8vw,7.5rem)]">
-                            PRESS <span className="text-[#EC008C] font-serif italic font-normal">&</span> PRESENT
+                        <h2 className="font-mono font-bold tracking-[-0.07em] text-[#F6F6F2]/90 group-hover:text-white transition-colors uppercase leading-none select-none text-[clamp(2.5rem,8vw,7.5rem)]">
+                            PRESS <span className="text-[#EC008C] font-bold">&</span> PRESENT
                         </h2>
                     </Link>
                 </div>

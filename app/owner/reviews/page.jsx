@@ -6,6 +6,7 @@ import {
   MessageSquare, Star, Loader2, User,
   Calendar, Hash, AlertTriangle, Eye, EyeOff, RefreshCcw, CheckCircle, Store, StarHalf
 } from "lucide-react";
+import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
 import Link from "next/link";
 
 export default function OwnerReviews() {
@@ -113,37 +114,31 @@ export default function OwnerReviews() {
     : "0.0";
 
   if (loading) {
-    return (
-      <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 size={36} className="animate-spin text-[#EC008C]" />
-          <p className="text-xs font-semibold uppercase tracking-wider">Loading reviews...</p>
-        </div>
-      </main>
-    );
+    return <OwnerPageSkeleton rows={3} />;
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+    <main className="owner-reviews-page min-h-screen bg-[#F6F6F2] font-sans text-slate-900 pb-20">
       
       {/* Header Banner */}
-      <section className="bg-white border-b border-slate-200 py-8 px-4 sm:px-6 lg:px-8 relative shadow-sm">
+      <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-10 pt-8 text-white sm:px-8 sm:pb-11 sm:pt-10 lg:px-10">
         <div className="cmyk-bar absolute top-0 left-0 right-0" />
-        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10" />
+        <div className="relative mx-auto flex max-w-6xl flex-col justify-between gap-6 md:flex-row md:items-end">
           <div>
-            <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Customer Reviews</h1>
-            <p className="mt-1 text-xs text-slate-500">Monitor customer feedback, average shop ratings, and moderate public review visibility.</p>
+            <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">Reviews</h1>
+            <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">Stay close to customer feedback and control which reviews are visible on your shop profile.</p>
           </div>
 
-          <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
+          <div className="flex items-center gap-3 rounded-2xl bg-white/10 p-3 ring-1 ring-white/15">
             <div className="text-center px-2">
-              <span className="text-2xl font-extrabold text-slate-900">{avgRating}</span>
+              <span className="text-2xl font-extrabold text-white">{avgRating}</span>
               <div className="flex items-center text-amber-400 justify-center">
                 <Star size={12} className="fill-amber-400" />
               </div>
             </div>
             <div className="border-l border-slate-200 pl-3">
-              <p className="text-xs font-bold text-slate-900">{reviews.length} Published</p>
+              <p className="text-xs font-bold text-white">{reviews.length} Published</p>
               <p className="text-[11px] text-slate-400">{hiddenReviews.length} Hidden</p>
             </div>
           </div>
@@ -204,7 +199,7 @@ export default function OwnerReviews() {
         ) : (
           <div className="space-y-4">
             {filteredList.map((r) => (
-              <div key={r.order_id} className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+              <div key={r.order_id} className="flex flex-col justify-between gap-4 rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:flex-row sm:items-start">
                 <div className="space-y-2 max-w-2xl">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-sm text-slate-900">{r.customer_name || "Verified Customer"}</span>

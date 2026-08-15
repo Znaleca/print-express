@@ -1,31 +1,7 @@
-import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/serverAuth";
 
 export const revalidate = 0;
-
-/**
- * INIT_ADMIN_PROTOCOL
- * Authenticates via the Bearer token to interface with public.profiles
- */
-const getAdminClient = (request) => {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const authHeader = request.headers.get("authorization") || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
-
-  if (!url || !anonKey) {
-    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY.");
-  }
-
-  if (!token) {
-    throw new Error("Missing bearer token.");
-  }
-
-  return createClient(url, anonKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-    global: { headers: { Authorization: `Bearer ${token}` } },
-  });
-};
 
 /**
  * GET: SYSTEM_CORE_SNAPSHOT
@@ -33,7 +9,9 @@ const getAdminClient = (request) => {
  */
 export async function GET(request) {
   try {
-    const supabase = getAdminClient(request);
+    const auth = await requireAdmin(request);
+    if (auth.error) return NextResponse.json({ error: auth.error }, { status: auth.status });
+    const { supabase } = auth;
 
     const { data: snapshot, error: snapshotError } = await supabase.rpc("admin_dashboard_snapshot");
 
@@ -73,12 +51,15 @@ export async function GET(request) {
  */
 export async function PATCH(request) {
   try {
+    const auth = await requireAdmin(request);
+    if (auth.error) return NextResponse.json({ error: auth.error }, { status: auth.status });
+
     const { businessId, ownerId, action } = await request.json();
-    if (!businessId || !ownerId || !action) {
+    if (!businessId || !ownerId || !["APPROVE", "REJECT"].includes(action)) {
       return NextResponse.json({ error: "PAYLOAD_INCOMPLETE" }, { status: 400 });
     }
 
-    const supabase = getAdminClient(request);
+    const { supabase } = auth;
     const newStatus = action === "APPROVE" ? "APPROVED" : "REJECTED";
 
     // 1. UPDATE BUSINESS STATUS
