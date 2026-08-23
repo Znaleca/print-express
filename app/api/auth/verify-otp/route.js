@@ -1,5 +1,35 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabaseAdmin";
+import {
+  hashOtp,
+  safeEqualHex,
+} from "@/lib/otpSecurity";
+
+const INVALID_CODE_MESSAGE = "Invalid or expired code.";
+
+async function removeCreatedAccount(supabase, userId) {
+  // Compensating cleanup keeps an auth user from being left without the
+  // profile/business rows that the signup workflow promises to create.
+  const { error: businessCleanupError } = await supabase
+    .from("businesses")
+    .delete()
+    .eq("owner_id", userId);
+  if (businessCleanupError) console.error("Signup business cleanup error:", businessCleanupError);
+
+  const { error: profileCleanupError } = await supabase
+    .from("profiles")
+    .delete()
+    .eq("id", userId);
+  if (profileCleanupError) console.error("Signup profile cleanup error:", profileCleanupError);
+
+  const { error: authCleanupError } = await supabase.auth.admin.deleteUser(userId);
+  if (authCleanupError) console.error("Signup auth cleanup error:", authCleanupError);
+}
+
+async function consumeOtp(supabase, otpId) {
+  const { error } = await supabase.from("otp_verifications").delete().eq("id", otpId);
+  if (error) throw error;
+}
 
 export async function POST(request) {
   try {
@@ -14,7 +44,7 @@ export async function POST(request) {
       return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
     }
     if (!/^\d{6}$/.test(normalizedCode)) {
-      return NextResponse.json({ error: "Enter the 6-digit verification code." }, { status: 400 });
+      return NextResponse.json({ error: INVALID_CODE_MESSAGE }, { status: 400 });
     }
     if (!["signup", "reset"].includes(normalizedType)) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -28,64 +58,82 @@ export async function POST(request) {
       return NextResponse.json({ error: "Password must be between 8 and 128 characters." }, { status: 400 });
     }
 
-    // 1. Verify OTP in database
+    let businessBackground = "";
+    let productsSummary = "";
+    if (normalizedType === "signup" && requestedRole === "BUSINESS_OWNER") {
+      businessBackground = String(userData?.business_background || "").trim();
+      productsSummary = String(userData?.products_summary || "").trim();
+
+      if (businessBackground.length < 20 || businessBackground.length > 800) {
+        return NextResponse.json({ error: "Business background must be between 20 and 800 characters." }, { status: 400 });
+      }
+
+      if (productsSummary.length < 10 || productsSummary.length > 500) {
+        return NextResponse.json({ error: "Products and services summary must be between 10 and 500 characters." }, { status: 400 });
+      }
+    }
+
     const { data: verifications, error: verifyError } = await supabase
       .from("otp_verifications")
-      .select("*")
+      .select("id, otp_hash, attempt_count, max_attempts")
       .eq("email", normalizedEmail)
       .eq("type", normalizedType)
-      .eq("otp_code", normalizedCode)
       .gte("expires_at", new Date().toISOString())
       .order("created_at", { ascending: false })
       .limit(1);
 
-    if (verifyError || !verifications || verifications.length === 0) {
-      return NextResponse.json({ error: "Invalid or expired code." }, { status: 400 });
+    if (verifyError) {
+      console.error("OTP lookup error:", verifyError);
+      return NextResponse.json({ error: "Verification is temporarily unavailable. Please try again." }, { status: 503 });
     }
 
-    // 2. Delete the used code
-    await supabase.from("otp_verifications").delete().eq("id", verifications[0].id);
-
-    // 3. Process Based on Type
-    if (normalizedType === "signup") {
-      if (requestedRole === "BUSINESS_OWNER") {
-        const businessBackground = (userData?.business_background || "").trim();
-        const productsSummary = (userData?.products_summary || "").trim();
-
-        if (businessBackground.length < 20 || businessBackground.length > 800) {
-          return NextResponse.json({ error: "Business background must be between 20 and 800 characters." }, { status: 400 });
-        }
-
-        if (productsSummary.length < 10 || productsSummary.length > 500) {
-          return NextResponse.json({ error: "Products and services summary must be between 10 and 500 characters." }, { status: 400 });
-        }
+    const verification = verifications?.[0];
+    let codeMatches = false;
+    if (verification?.otp_hash) {
+      try {
+        codeMatches = safeEqualHex(
+          verification.otp_hash,
+          hashOtp({ email: normalizedEmail, type: normalizedType, code: normalizedCode })
+        );
+      } catch (hashError) {
+        console.error("OTP hash comparison error:", hashError);
       }
-      
-      // Auto-confirm the user during creation since they already verified the code
-      const { data: user, error: createUserError } = await supabase.auth.admin.createUser({
+    }
+
+    if (!verification || !codeMatches) {
+      if (verification?.id) {
+        const { error: attemptError } = await supabase.rpc("register_otp_attempt", {
+          p_otp_id: verification.id,
+        });
+        if (attemptError) console.error("OTP attempt tracking error:", attemptError);
+      }
+      return NextResponse.json({ error: INVALID_CODE_MESSAGE }, { status: 400 });
+    }
+
+    // Keep the code until the account/password workflow completes. This
+    // allows signup rollback and avoids orphaned auth users on later failures.
+    if (normalizedType === "signup") {
+      const { role: _untrustedRole, ...safeUserMetadata } = userData || {};
+      const { data: createdUser, error: createUserError } = await supabase.auth.admin.createUser({
         email: normalizedEmail,
-        password: password,
+        password,
         email_confirm: true,
-        user_metadata: userData || {},
+        user_metadata: safeUserMetadata,
       });
 
-      if (createUserError) {
-        console.error("Create user error:", createUserError);
-        return NextResponse.json({ error: createUserError.message }, { status: 400 });
+      if (createUserError || !createdUser?.user?.id) {
+        console.error("Create user error:", createUserError || "Missing created user id");
+        return NextResponse.json({ error: "Unable to complete verification. Please request a new code or sign in." }, { status: 400 });
       }
 
-      const createdUser = user?.user;
-      if (!createdUser?.id) {
-        return NextResponse.json({ error: "User was created, but the account id was not returned." }, { status: 500 });
-      }
-
+      const createdUserId = createdUser.user.id;
       const role = requestedRole;
-      const fullName = userData?.full_name || "";
-      const phone = userData?.phone || "";
+      const fullName = String(userData?.full_name || "").trim();
+      const phone = String(userData?.phone || "").trim();
       const { error: profileError } = await supabase
         .from("profiles")
         .upsert({
-          id: createdUser.id,
+          id: createdUserId,
           email: normalizedEmail,
           full_name: fullName,
           phone,
@@ -95,81 +143,61 @@ export async function POST(request) {
 
       if (profileError) {
         console.error("Create profile error:", profileError);
-        return NextResponse.json({ error: profileError.message }, { status: 400 });
+        await removeCreatedAccount(supabase, createdUserId);
+        return NextResponse.json({ error: "Unable to complete account setup. Please try again." }, { status: 400 });
       }
 
       if (role === "BUSINESS_OWNER") {
-        const businessName = (userData?.business_name || `${fullName}'s Business`).trim();
-        const businessBackground = (userData?.business_background || "").trim();
-        const productsSummary = (userData?.products_summary || "").trim();
-
-        const { data: existingBusiness } = await supabase
+        const businessName = String(userData?.business_name || `${fullName}'s Business`).trim();
+        const { error: businessError } = await supabase
           .from("businesses")
-          .select("id")
-          .eq("owner_id", createdUser.id)
-          .limit(1)
-          .maybeSingle();
+          .insert({
+            owner_id: createdUserId,
+            name: businessName || "Pending Business",
+            description: businessBackground,
+            products_summary: productsSummary,
+            status: "PENDING",
+          });
 
-        if (!existingBusiness) {
-          const { error: businessError } = await supabase
-            .from("businesses")
-            .insert({
-              owner_id: createdUser.id,
-              name: businessName || "Pending Business",
-              description: businessBackground,
-              products_summary: productsSummary,
-              status: "PENDING",
-            });
-
-          if (businessError) {
-            console.error("Create business error:", businessError);
-            return NextResponse.json({ error: businessError.message }, { status: 400 });
-          }
-        } else {
-          const { error: businessUpdateError } = await supabase
-            .from("businesses")
-            .update({
-              name: businessName || "Pending Business",
-              description: businessBackground,
-              products_summary: productsSummary,
-            })
-            .eq("id", existingBusiness.id);
-
-          if (businessUpdateError) {
-            console.error("Update business profile error:", businessUpdateError);
-            return NextResponse.json({ error: businessUpdateError.message }, { status: 400 });
-          }
+        if (businessError) {
+          console.error("Create business error:", businessError);
+          await removeCreatedAccount(supabase, createdUserId);
+          return NextResponse.json({ error: "Unable to complete business setup. Please try again." }, { status: 400 });
         }
       }
 
+      try {
+        await consumeOtp(supabase, verification.id);
+      } catch (consumeError) {
+        console.error("OTP consumption error after signup:", consumeError);
+      }
+
       return NextResponse.json({ success: true, message: "User registered securely." });
-
-    } else if (normalizedType === "reset") {
-      // Find user ID by email using our custom RPC
-      const { data: userId, error: rpcError } = await supabase.rpc("get_user_id_by_email", { lookup_email: normalizedEmail });
-      
-      if (rpcError || !userId) {
-        console.error("Find user error:", rpcError);
-        return NextResponse.json({ error: "Could not find user account." }, { status: 404 });
-      }
-
-      // Update password via admin API
-      const { error: updateError } = await supabase.auth.admin.updateUserById(userId, {
-        password: password
-      });
-
-      if (updateError) {
-        console.error("Update password error:", updateError);
-        return NextResponse.json({ error: updateError.message }, { status: 400 });
-      }
-
-      return NextResponse.json({ success: true, message: "Password updated successfully." });
     }
 
-    return NextResponse.json({ error: "Invalid type" }, { status: 400 });
+    const { data: userId, error: rpcError } = await supabase.rpc("get_user_id_by_email", {
+      lookup_email: normalizedEmail,
+    });
+    if (rpcError || !userId) {
+      console.error("Find user error:", rpcError || "Missing user id");
+      return NextResponse.json({ error: INVALID_CODE_MESSAGE }, { status: 400 });
+    }
 
+    const { error: updateError } = await supabase.auth.admin.updateUserById(userId, { password });
+    if (updateError) {
+      console.error("Update password error:", updateError);
+      return NextResponse.json({ error: "Unable to update the password. Please try again." }, { status: 400 });
+    }
+
+    try {
+      await consumeOtp(supabase, verification.id);
+    } catch (consumeError) {
+      console.error("OTP consumption error after password reset:", consumeError);
+    }
+
+    return NextResponse.json({ success: true, message: "Password updated successfully." });
   } catch (err) {
     console.error("Verify OTP API error:", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: "Verification is temporarily unavailable. Please try again." }, { status: 503 });
   }
 }

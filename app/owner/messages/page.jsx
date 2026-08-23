@@ -3,17 +3,34 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
-  MessageSquare, Send, Loader2, User, Store,
-  ChevronRight, ChevronLeft, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, Banknote, FileText
+  MessageSquare, Send, Loader2,
+  ChevronRight, ChevronLeft, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, Banknote, FileText,
+  Sparkles, Plus, RotateCcw, Save
 } from "lucide-react";
-import { getUploadExtension, IMAGE_BUCKET, MAX_IMAGE_BYTES, optimizeImageForUpload } from "@/lib/imageUpload";
+import {
+  CHAT_IMAGES_BUCKET,
+  getUploadExtension,
+  MAX_IMAGE_BYTES,
+  optimizeImageForUpload,
+  resolveStorageUrl,
+  toStorageRef,
+} from "@/lib/imageUpload";
+import {
+  buildDefaultShopQuestions,
+  getShopQuestions,
+  MAX_QUESTION_LABEL_LENGTH,
+  MAX_QUESTION_TEXT_LENGTH,
+  MAX_SHOP_QUESTIONS,
+  normalizeShopQuestions,
+} from "@/lib/chatQuestions";
 import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
+import ProfileAvatar from "@/components/ProfileAvatar";
 
 const DESIGN_FILE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,image/svg+xml,.ai,.psd,.eps,.tif,.tiff";
 const DESIGN_MAX_BYTES = 10 * 1024 * 1024;
 
 const formatBytes = (bytes = 0) => {
-  if (!bytes) return "0 KB";
+  if (!Number.isFinite(Number(bytes)) || Number(bytes) <= 0) return "Not recorded";
   const units = ["bytes", "KB", "MB", "GB"];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
@@ -51,17 +68,30 @@ export default function OwnerMessagesPage() {
   const [scheduleTime, setScheduleTime] = useState("");
   const [showQuote, setShowQuote] = useState(false);
   const [quoteAmount, setQuoteAmount] = useState("");
+  const [quoteTax, setQuoteTax] = useState("");
+  const [quoteDiscount, setQuoteDiscount] = useState("");
+  const [quoteTerms, setQuoteTerms] = useState("Includes prepress review, proofing, print production, and standard finishing unless stated otherwise.");
   const [showDesign, setShowDesign] = useState(false);
   const [designVersion, setDesignVersion] = useState("1");
   const [jitsiRoom, setJitsiRoom] = useState(null);
   const [videoCallRequestAlert, setVideoCallRequestAlert] = useState(false);
   const [viewImagePopup, setViewImagePopup] = useState(null); // { url, label }
+  const [showQuestionEditor, setShowQuestionEditor] = useState(false);
+  const [questionDrafts, setQuestionDrafts] = useState([]);
+  const [questionEditorError, setQuestionEditorError] = useState("");
+  const [savingQuestions, setSavingQuestions] = useState(false);
   const bottomRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
   const jitsiApiRef = useRef(null);
   const jitsiScriptRef = useRef(null);
+
+  const openProtectedImage = async (value, label) => {
+    const url = await resolveStorageUrl(value);
+    if (url) setViewImagePopup({ url, label });
+    else window.alert("This attachment is unavailable or access was denied.");
+  };
 
   /* ── 0. Jitsi External API (no-logo) ── */
   useEffect(() => {
@@ -149,7 +179,7 @@ export default function OwnerMessagesPage() {
     // Business owner — fetch ALL their businesses
     const { data: bizList, error: bizErr } = await supabase
       .from("businesses")
-      .select("id, name")
+      .select("id, name, chat_suggested_questions")
       .eq("owner_id", user.id);
 
     if (bizErr) {
@@ -189,7 +219,7 @@ export default function OwnerMessagesPage() {
       if (customerIds.length > 0) {
         const { data: profileRows, error: profErr } = await supabase
           .from("profiles")
-          .select("id, full_name, email")
+          .select("id, full_name, email, avatar_url")
           .in("id", customerIds);
 
         if (profErr) {
@@ -207,6 +237,7 @@ export default function OwnerMessagesPage() {
         ...c,
         customer_profile: profileMap[c.customer_id] || null,
         _biz_name: bizMap[c.business_id]?.name || "Your Shop",
+        _biz_questions: bizMap[c.business_id]?.chat_suggested_questions || [],
       }));
     }
 
@@ -225,6 +256,9 @@ export default function OwnerMessagesPage() {
       (unreadRows || []).forEach((row) => {
         unreadMap[row.conversation_id] = (unreadMap[row.conversation_id] || 0) + 1;
       });
+      // The open thread is marked read immediately. Keep its badge cleared if
+      // a realtime refresh races with that update.
+      if (activeConv?.id) unreadMap[activeConv.id] = 0;
       setUnreadByConv(unreadMap);
     } else {
       setUnreadByConv({});
@@ -240,6 +274,7 @@ export default function OwnerMessagesPage() {
     setMsgLimit(20);
     setHasMoreMsgs(false);
     setUnreadByConv((prev) => ({ ...prev, [conv.id]: 0 }));
+    void markConversationRead(conv.id);
   };
 
   /* ── 4. Load messages + subscribe realtime + poll fallback ── */
@@ -305,7 +340,11 @@ export default function OwnerMessagesPage() {
       .limit(limit);
       
     if (data) {
-      const orderedMessages = data.reverse();
+      const resolvedData = await Promise.all(data.map(async (message) => ({
+        ...message,
+        image_url: message.image_url ? await resolveStorageUrl(message.image_url) : null,
+      })));
+      const orderedMessages = resolvedData.reverse();
       if (prepend) {
         setMessages((currentMessages) => {
           const existingIds = new Set(currentMessages.map((message) => message.id));
@@ -369,13 +408,19 @@ export default function OwnerMessagesPage() {
     if (!input.trim() || !activeConv) return;
     setSending(true);
 
-    await supabase.from("chat_messages").insert({
+    const { error: messageError } = await supabase.from("chat_messages").insert({
       conversation_id: activeConv.id,
       sender_id: user.id,
       sender_role: "BUSINESS_OWNER",
       content: input.trim(),
       is_read: false,
     });
+
+    if (messageError) {
+      window.alert(messageError.message || "Could not send your message.");
+      setSending(false);
+      return;
+    }
 
     setInput("");
     setSending(false);
@@ -402,7 +447,7 @@ export default function OwnerMessagesPage() {
     const filePath = `${activeConv.id}/${user.id}-${Date.now()}.${ext}`;
 
     const { error: uploadErr } = await supabase.storage
-      .from(IMAGE_BUCKET)
+      .from(CHAT_IMAGES_BUCKET)
       .upload(filePath, optimized, {
         upsert: false,
         cacheControl: "31536000",
@@ -410,13 +455,13 @@ export default function OwnerMessagesPage() {
       });
 
     if (!uploadErr) {
-      const { data } = supabase.storage.from(IMAGE_BUCKET).getPublicUrl(filePath);
+      const storageRef = toStorageRef(CHAT_IMAGES_BUCKET, filePath);
       await supabase.from("chat_messages").insert({
         conversation_id: activeConv.id,
         sender_id: user.id,
         sender_role: "BUSINESS_OWNER",
         content: "[image]",
-        image_url: data?.publicUrl || null,
+        image_url: storageRef,
         metadata: {
           file_name: file.name,
           file_size_bytes: optimized.size,
@@ -443,13 +488,18 @@ export default function OwnerMessagesPage() {
   const sendVideoCallInvite = async () => {
     if (!scheduleTime || !activeConv || !user) return;
     setSending(true);
-    await supabase.from("chat_messages").insert({
+    const { error: inviteError } = await supabase.from("chat_messages").insert({
       conversation_id: activeConv.id,
       sender_id: user.id,
       sender_role: "BUSINESS_OWNER",
       content: `[VIDEO_CALL_INVITE:${new Date(scheduleTime).toISOString()}]`,
       is_read: false,
     });
+    if (inviteError) {
+      window.alert(inviteError.message || "Could not send the video call invite.");
+      setSending(false);
+      return;
+    }
     setSending(false);
     setShowSchedule(false);
     setScheduleTime("");
@@ -461,23 +511,37 @@ export default function OwnerMessagesPage() {
     
     const latestServiceInquiry = [...messages].reverse().find(m => m.message_type === 'service_inquiry');
     const serviceId = latestServiceInquiry?.metadata?.service_id || "";
+    const serviceName = latestServiceInquiry?.metadata?.service_name || "";
+    if (!serviceId) {
+      setSending(false);
+      window.alert("A customer service request is required before sending a checkout quotation.");
+      return;
+    }
     const latestApprovedProof = [...messages].reverse().find(
       (m) => m.message_type === "design_version" && m.metadata?.proof_status === "APPROVED"
     );
-    const amount = parseFloat(quoteAmount);
+    const subtotal = parseFloat(quoteAmount);
+    const taxes = Math.max(0, parseFloat(quoteTax) || 0);
+    const discount = Math.max(0, parseFloat(quoteDiscount) || 0);
+    const amount = subtotal + taxes - discount;
+    if (!Number.isFinite(amount) || subtotal <= 0 || amount < 0) {
+      setSending(false);
+      window.alert("Enter a valid subtotal. Tax and discount cannot make the total negative.");
+      return;
+    }
     const validUntil = new Date(Date.now() + 14 * 86400000).toISOString();
 
-    await supabase.from("chat_messages").insert({
+    const { error: quoteError } = await supabase.from("chat_messages").insert({
       conversation_id: activeConv.id,
       sender_id: user.id,
       sender_role: "BUSINESS_OWNER",
-      content: "Detailed quotation prepared. Final cost can be locked after proof approval.",
+      content: `Formal quotation prepared. Subtotal PHP ${subtotal.toFixed(2)} + tax/VAT PHP ${taxes.toFixed(2)} − discount PHP ${discount.toFixed(2)} = total PHP ${amount.toFixed(2)}. Final cost can be locked after proof approval.`,
       message_type: 'quote',
       metadata: {
         quote_amount: amount,
-        subtotal: amount,
-        taxes: 0,
-        discount: 0,
+        subtotal,
+        taxes,
+        discount,
         total_cost: amount,
         currency: "PHP",
         valid_until: validUntil,
@@ -485,13 +549,24 @@ export default function OwnerMessagesPage() {
         proof_id: latestApprovedProof?.metadata?.proof_id || null,
         proof_version: latestApprovedProof?.metadata?.version || null,
         quotation_format: "formal_print_market",
-        terms: "Includes prepress review, proofing, print production, and standard finishing unless stated otherwise.",
+        service_name: serviceName,
+        inquiry_message_id: latestServiceInquiry.id,
+        requested_quantity: Number(latestServiceInquiry.metadata?.quantity || 1),
+        selected_specs: latestServiceInquiry.metadata?.selected_specs || {},
+        terms: quoteTerms.trim() || "Includes prepress review, proofing, print production, and standard finishing unless stated otherwise.",
       },
       is_read: false,
     });
+    if (quoteError) {
+      window.alert(quoteError.message || "Could not send the quotation.");
+      setSending(false);
+      return;
+    }
     setSending(false);
     setShowQuote(false);
     setQuoteAmount("");
+    setQuoteTax("");
+    setQuoteDiscount("");
   };
 
   const sendDesignVersionMessage = async (file) => {
@@ -516,7 +591,7 @@ export default function OwnerMessagesPage() {
     const uploadProfile = getUploadProfile(uploadFile);
     const ext = uploadFile.type?.startsWith("image/") ? getUploadExtension(uploadFile) : (uploadProfile.extension || "file");
     const filePath = `${activeConv.id}/${user.id}-design-v${designVersion}-${Date.now()}.${ext}`;
-    const storageBucket = uploadFile.type?.startsWith("image/") ? IMAGE_BUCKET : "chat-images";
+    const storageBucket = CHAT_IMAGES_BUCKET;
 
     const { error: uploadErr } = await supabase.storage
       .from(storageBucket)
@@ -527,13 +602,13 @@ export default function OwnerMessagesPage() {
       });
 
     if (!uploadErr) {
-      const { data } = supabase.storage.from(storageBucket).getPublicUrl(filePath);
+      const storageRef = toStorageRef(storageBucket, filePath);
       let proofId = null;
       const numericVersion = Number.parseInt(designVersion, 10) || 1;
       const proofPayload = {
         conversation_id: activeConv.id,
         version_number: numericVersion,
-        file_url: data?.publicUrl || null,
+        file_url: storageRef,
         file_name: file.name,
         file_size_bytes: uploadFile.size,
         file_type: uploadProfile.fileType,
@@ -587,7 +662,7 @@ export default function OwnerMessagesPage() {
           file_mime: uploadProfile.mime,
           quality_notes: uploadProfile.quality,
         },
-        image_url: data?.publicUrl || null,
+        image_url: storageRef,
         is_read: false,
       });
     }
@@ -600,6 +675,14 @@ export default function OwnerMessagesPage() {
   const updateProofStatus = async (msg, status, lockCost = false) => {
     if (!activeConv || !user) return;
     const latestQuote = [...messages].reverse().find((m) => m.message_type === "quote");
+    if (lockCost && (status !== "APPROVED" || !latestQuote)) {
+      window.alert("Approve a proof and send a formal quotation before locking the final cost.");
+      return;
+    }
+    if (lockCost && latestQuote?.metadata?.valid_until && new Date(latestQuote.metadata.valid_until) < new Date()) {
+      window.alert("This quotation has expired. Send a new quotation before locking the final cost.");
+      return;
+    }
     const lockedTotal = lockCost
       ? Number(latestQuote?.metadata?.total_cost || latestQuote?.metadata?.quote_amount || 0)
       : Number(msg.metadata?.locked_total_amount || 0);
@@ -698,13 +781,93 @@ export default function OwnerMessagesPage() {
   const convLabel = (conv) =>
     conv.customer_profile?.full_name || conv.customer_profile?.email || "Customer";
 
+  const openQuestionEditor = () => {
+    if (!activeConv) return;
+    const questions = getShopQuestions({
+      name: activeConv._biz_name,
+      chat_suggested_questions: activeConv._biz_questions,
+    });
+    setQuestionDrafts(questions.map((question) => ({ ...question })));
+    setQuestionEditorError("");
+    setShowQuestionEditor(true);
+  };
+
+  const updateQuestionDraft = (index, field, value) => {
+    setQuestionDrafts((current) => current.map((question, questionIndex) => (
+      questionIndex === index ? { ...question, [field]: value } : question
+    )));
+    setQuestionEditorError("");
+  };
+
+  const addQuestionDraft = () => {
+    if (questionDrafts.length >= MAX_SHOP_QUESTIONS) return;
+    setQuestionDrafts((current) => [
+      ...current,
+      {
+        key: `custom-${Date.now()}`,
+        label: "New question",
+        customerText: "Type the complete question customers will send to your shop.",
+      },
+    ]);
+  };
+
+  const restoreDefaultQuestions = () => {
+    setQuestionDrafts(buildDefaultShopQuestions({ name: activeConv?._biz_name }).map((question) => ({ ...question })));
+    setQuestionEditorError("");
+  };
+
+  const saveShopQuestions = async (event) => {
+    event.preventDefault();
+    if (!activeConv || !user || savingQuestions) return;
+
+    const hasIncompleteQuestion = questionDrafts.some((question) => (
+      !String(question.label || "").trim() || !String(question.customerText || "").trim()
+    ));
+    if (hasIncompleteQuestion || questionDrafts.length === 0) {
+      setQuestionEditorError("Keep at least one question and complete both fields for every question.");
+      return;
+    }
+
+    const normalizedQuestions = normalizeShopQuestions(questionDrafts);
+    if (normalizedQuestions.length !== questionDrafts.length) {
+      setQuestionEditorError("One or more questions could not be saved. Check every label and full question.");
+      return;
+    }
+
+    setSavingQuestions(true);
+    setQuestionEditorError("");
+    const { data: updatedBusiness, error } = await supabase
+      .from("businesses")
+      .update({ chat_suggested_questions: normalizedQuestions })
+      .eq("id", activeConv.business_id)
+      .eq("owner_id", user.id)
+      .select("chat_suggested_questions")
+      .single();
+
+    if (error) {
+      setQuestionEditorError(error.message || "Could not save these customer questions.");
+      setSavingQuestions(false);
+      return;
+    }
+
+    const savedQuestions = updatedBusiness?.chat_suggested_questions || normalizedQuestions;
+    setConversations((current) => current.map((conversation) => (
+      conversation.business_id === activeConv.business_id
+        ? { ...conversation, _biz_questions: savedQuestions }
+        : conversation
+    )));
+    setActiveConv((current) => current ? { ...current, _biz_questions: savedQuestions } : current);
+    setSavingQuestions(false);
+    setShowQuestionEditor(false);
+  };
+
   /* ── UI ── */
   if (!user) {
     return <OwnerPageSkeleton rows={2} />;
   }
 
   return (
-    <div className="owner-messages-page flex h-full min-h-0 flex-col bg-[#F6F6F2] font-sans text-slate-900">
+    <div className="owner-messages-page flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 md:h-[100dvh]">
       <div className="relative shrink-0 border-b border-slate-200 bg-white px-4 pb-6 pt-8 sm:px-8 sm:pb-7">
         <div className="cmyk-bar absolute left-0 right-0 top-0" />
         <div className="mx-auto w-full max-w-[1920px]">
@@ -764,9 +927,12 @@ export default function OwnerMessagesPage() {
                         : "border-transparent hover:bg-slate-50"
                     }`}
                   >
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-sm font-bold text-slate-500">
-                      {convLabel(conv).charAt(0).toUpperCase() || <User size={16} />}
-                    </div>
+                    <ProfileAvatar
+                      src={conv.customer_profile?.avatar_url}
+                      name={convLabel(conv)}
+                      className="h-10 w-10"
+                      fallbackClassName="bg-slate-100 text-slate-500"
+                    />
                     <div className="flex-1 min-w-0">
                       <p className={`break-words text-sm font-bold leading-snug ${isActive ? "text-slate-900" : "text-slate-800"}`}>
                         {convLabel(conv)}
@@ -814,19 +980,29 @@ export default function OwnerMessagesPage() {
                 >
                   <ChevronLeft size={20} />
                 </button>
-                <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-sm font-bold text-[#00FFFF] md:flex">
-                  {convLabel(activeConv).charAt(0).toUpperCase()}
-                </div>
-                <div>
+                <ProfileAvatar
+                  src={activeConv.customer_profile?.avatar_url}
+                  name={convLabel(activeConv)}
+                  className="h-10 w-10 max-md:hidden"
+                  fallbackClassName="bg-slate-900 text-[#00FFFF]"
+                />
+                <div className="min-w-0 flex-1">
                   <p className="break-words text-base font-extrabold leading-tight text-slate-900 sm:text-lg">
                     {convLabel(activeConv)}
                   </p>
-                  <p className="mt-1 text-[11px] text-slate-500">Customer conversation · Reply from your shop</p>
+                  <p className="mt-1 truncate text-[11px] text-slate-500">{activeConv._biz_name} · Reply from your shop</p>
                 </div>
+                <button
+                  type="button"
+                  onClick={openQuestionEditor}
+                  className="ml-auto inline-flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-[#F6F6F2] px-3 py-2 text-[10px] font-bold text-slate-700 transition-colors hover:border-[#EC008C] hover:text-[#EC008C]"
+                >
+                  <Sparkles size={14} /> <span className="hidden sm:inline">Customer questions</span><span className="sm:hidden">Questions</span>
+                </button>
               </div>
 
               {/* Messages area */}
-              <div ref={scrollContainerRef} className="relative flex-1 space-y-4 overflow-y-auto overscroll-contain bg-[#F6F6F2] p-4 sm:p-6">
+              <div data-chat-scroll-area="true" ref={scrollContainerRef} className="relative min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain bg-[#F6F6F2] p-4 sm:p-6">
 
                 {/* Video Call Request Alert Banner */}
                 {videoCallRequestAlert && (
@@ -894,11 +1070,15 @@ export default function OwnerMessagesPage() {
                     const uploadName = meta.file_name || "Uploaded file";
                     const isPreviewable = Boolean(msg.image_url && (meta.file_mime?.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(uploadName)));
                     return (
-                      <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
+                      <div key={msg.id} className={`flex items-end gap-3 ${isMine ? "justify-end" : "justify-start"}`}>
                         {!isMine && (
-                          <div className="w-8 h-8 bg-[#1A1A1A] flex items-center justify-center shrink-0 mr-3 mt-auto">
-                            <User size={13} className="text-[#FFF200]" />
-                          </div>
+                          <ProfileAvatar
+                            src={activeConv.customer_profile?.avatar_url}
+                            name={convLabel(activeConv)}
+                            className="h-8 w-8"
+                            fallbackClassName="bg-[#1A1A1A] text-[#FFF200]"
+                            sizes="32px"
+                          />
                         )}
                         <div className={`relative max-w-[65%] px-5 py-4 border-2 ${
                           isMine
@@ -1020,33 +1200,50 @@ export default function OwnerMessagesPage() {
                               <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#FFF200] mb-2">Official Quote Sent</p>
                               <p className="text-3xl font-black italic text-[#00FFFF] mb-4">₱{Number(msg.metadata?.quote_amount).toFixed(2)}</p>
                               <div className="grid grid-cols-2 gap-2 text-[10px] font-mono uppercase mb-4">
+                                <span className="opacity-60">Subtotal</span>
+                                <span className="text-right">₱{Number(meta.subtotal || meta.quote_amount || 0).toFixed(2)}</span>
+                                <span className="opacity-60">Tax / VAT</span>
+                                <span className="text-right">₱{Number(meta.taxes || 0).toFixed(2)}</span>
+                                <span className="opacity-60">Discount</span>
+                                <span className="text-right">−₱{Number(meta.discount || 0).toFixed(2)}</span>
+                                <span className="font-black text-[#FFF200]">Total</span>
+                                <span className="text-right font-black text-[#FFF200]">₱{Number(meta.total_cost || meta.quote_amount || 0).toFixed(2)}</span>
                                 <span className="opacity-60">Valid Until</span>
                                 <span className="text-right">{meta.valid_until ? new Date(meta.valid_until).toLocaleDateString() : "14 days"}</span>
                                 <span className="opacity-60">Proof Version</span>
                                 <span className="text-right">{meta.proof_version || "Not locked"}</span>
                               </div>
+                              {meta.terms && <p className="mb-3 text-[10px] font-mono uppercase leading-relaxed opacity-70">{meta.terms}</p>}
                               {msg.content && <p className="text-sm font-bold leading-relaxed mb-4">{msg.content}</p>}
                               <p className="font-mono text-[9px] uppercase tracking-widest text-[#FFF200]/50">Waiting for customer to finalize...</p>
                             </div>
                           ) : msg.message_type === 'design_version' ? (
-                            <div className="flex flex-col min-w-64">
-                              <div className="mb-3 border-2 border-[#FFF200] bg-[#FFF200]/10 p-3">
-                                <div className="flex items-center justify-between gap-3">
-                                  <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#FFF200]">Proof Version {meta.version || "1"}</p>
+                            <div className="flex w-full max-w-md flex-col">
+                              <div className="mb-3 overflow-hidden rounded-2xl border-2 border-[#FFF200] bg-[#1A1A1A] text-white shadow-[4px_4px_0px_0px_rgba(255,242,0,1)]">
+                                <div className="flex items-start justify-between gap-3 bg-[#FFF200] px-4 py-3 text-[#1A1A1A]">
+                                  <div>
+                                    <p className="font-mono text-[10px] font-black uppercase tracking-widest">Design proof</p>
+                                    <p className="mt-1 text-sm font-black">Version {meta.version || "1"}</p>
+                                  </div>
                                   <span className="bg-[#1A1A1A] px-2 py-1 font-mono text-[9px] font-black uppercase text-white">
                                     {meta.proof_status || "PENDING"}
                                   </span>
                                 </div>
-                                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[9px] uppercase opacity-80">
-                                  <span>Type: {meta.file_type || "Design proof"}</span>
-                                  <span>Format: {(meta.file_format || "file").toUpperCase()}</span>
-                                  <span>Size: {formatBytes(meta.file_size_bytes)}</span>
-                                  <span>Quality: Print-ready review</span>
-                                </div>
-                                {meta.quality_notes && (
-                                  <p className="mt-2 font-mono text-[9px] uppercase leading-relaxed opacity-70">{meta.quality_notes}</p>
-                                )}
-                                <div className="mt-3 flex flex-wrap gap-2">
+                                <div className="p-4">
+                                  <div className="mb-3 flex items-center gap-2 rounded-lg border border-white/15 bg-white/10 px-3 py-2">
+                                    <FileText size={15} className="shrink-0 text-[#00FFFF]" />
+                                    <span className="min-w-0 break-all text-[11px] font-bold">{meta.file_name || "Uploaded design proof"}</span>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-x-3 gap-y-2 font-mono text-[9px] uppercase text-white/75">
+                                    <span>Type: {meta.file_type || "Design proof"}</span>
+                                    <span>Format: {(meta.file_format || "file").toUpperCase()}</span>
+                                    <span>Size: {formatBytes(meta.file_size_bytes)}</span>
+                                    <span>Quality: Print-ready review</span>
+                                  </div>
+                                  {meta.quality_notes && (
+                                    <p className="mt-3 rounded-lg border border-white/10 bg-white/5 p-2 font-mono text-[9px] uppercase leading-relaxed text-white/70">{meta.quality_notes}</p>
+                                  )}
+                                  <div className="mt-4 flex flex-wrap gap-2">
                                   <button
                                     type="button"
                                     onClick={() => updateProofStatus(msg, "APPROVED")}
@@ -1066,11 +1263,12 @@ export default function OwnerMessagesPage() {
                                   <button
                                     type="button"
                                     onClick={() => updateProofStatus(msg, "APPROVED", true)}
-                                    disabled={sending || meta.is_locked}
+                                    disabled={sending || meta.is_locked || meta.proof_status !== "APPROVED" || !messages.some((candidate) => candidate.message_type === "quote")}
                                     className="bg-[#EC008C] px-3 py-2 font-black uppercase text-[9px] text-white border-2 border-[#1A1A1A] disabled:opacity-40"
                                   >
                                     Lock Cost
                                   </button>
+                                  </div>
                                 </div>
                               </div>
                               {msg.content && msg.content !== "[image]" && (
@@ -1088,7 +1286,15 @@ export default function OwnerMessagesPage() {
                               {msg.metadata?.service_name && (
                                 <p className="font-black uppercase text-sm mb-1">{msg.metadata.service_name}</p>
                               )}
-                              <p className="text-sm font-bold italic opacity-80">{msg.content}</p>
+                              <div className="my-2 grid grid-cols-2 gap-x-4 gap-y-1 border-y border-white/15 py-2 font-mono text-[9px] uppercase">
+                                <span className="opacity-60">Quantity</span><span className="text-right font-black">{msg.metadata?.quantity || 1}</span>
+                                {msg.metadata?.selected_specs?.size && <><span className="opacity-60">Size</span><span className="text-right font-black">{msg.metadata.selected_specs.size}</span></>}
+                                {msg.metadata?.selected_specs?.material && <><span className="opacity-60">Material</span><span className="text-right font-black">{msg.metadata.selected_specs.material}</span></>}
+                                {msg.metadata?.selected_specs?.quality && <><span className="opacity-60">Quality</span><span className="text-right font-black">{msg.metadata.selected_specs.quality}</span></>}
+                                <span className="opacity-60">Attachments</span><span className="text-right font-black">{msg.metadata?.attachment_count || 0}</span>
+                              </div>
+                              {msg.metadata?.selected_specs?.notes && <p className="mb-2 border border-white/15 bg-white/5 p-2 text-xs font-bold">{msg.metadata.selected_specs.notes}</p>}
+                              <p className="whitespace-pre-wrap text-sm font-bold italic opacity-80">{msg.content}</p>
                             </div>
                           ) : msg.message_type === 'refund_dispute' ? (
                             <div className="flex flex-col p-4 border-2 border-[#EC008C] bg-[#EC008C]/10 min-w-[220px]">
@@ -1099,12 +1305,12 @@ export default function OwnerMessagesPage() {
                               <p className="text-sm font-bold leading-relaxed whitespace-pre-wrap mb-3">{msg.content}</p>
                               <div className="flex flex-col gap-1 border-t border-[#EC008C]/30 pt-2">
                                 {msg.metadata?.receipt_url && (
-                                  <button onClick={() => setViewImagePopup({ url: msg.metadata.receipt_url, label: 'Payment Receipt' })} className="font-mono text-[9px] uppercase font-black text-[#EC008C] flex items-center gap-1 hover:underline text-left">
+                                  <button onClick={() => openProtectedImage(msg.metadata.receipt_url, 'Payment Receipt')} className="font-mono text-[9px] uppercase font-black text-[#EC008C] flex items-center gap-1 hover:underline text-left">
                                     📄 View Payment Receipt
                                   </button>
                                 )}
                                 {msg.metadata?.refund_receipt_url && (
-                                  <button onClick={() => setViewImagePopup({ url: msg.metadata.refund_receipt_url, label: 'Refund Proof You Uploaded' })} className="font-mono text-[9px] uppercase font-black text-[#EC008C] flex items-center gap-1 hover:underline text-left">
+                                  <button onClick={() => openProtectedImage(msg.metadata.refund_receipt_url, 'Refund Proof You Uploaded')} className="font-mono text-[9px] uppercase font-black text-[#EC008C] flex items-center gap-1 hover:underline text-left">
                                     🧾 View Refund Proof You Uploaded
                                   </button>
                                 )}
@@ -1171,9 +1377,13 @@ export default function OwnerMessagesPage() {
                           </p>
                         </div>
                         {isMine && (
-                          <div className="w-8 h-8 bg-[#00FFFF] flex items-center justify-center shrink-0 ml-3 mt-auto">
-                            <Store size={13} className="text-[#1A1A1A]" />
-                          </div>
+                          <ProfileAvatar
+                            src={user?.user_metadata?.avatar_url}
+                            name={user?.user_metadata?.full_name || user?.email || "You"}
+                            className="h-8 w-8"
+                            fallbackClassName="bg-[#00AFC0] text-white"
+                            sizes="32px"
+                          />
                         )}
                       </div>
                     );
@@ -1183,7 +1393,7 @@ export default function OwnerMessagesPage() {
               </div>
 
               {/* Input */}
-              <form onSubmit={sendMessage} className="flex gap-3 p-5 border-t-4 border-[#1A1A1A] bg-white shrink-0">
+              <form data-chat-composer="true" onSubmit={sendMessage} className="flex shrink-0 gap-3 border-t-4 border-[#1A1A1A] bg-white p-5">
                 <input
                   type="text"
                   value={input}
@@ -1269,15 +1479,54 @@ export default function OwnerMessagesPage() {
                       <div className="absolute bottom-16 right-0 bg-white border-2 border-[#1A1A1A] p-4 shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] flex flex-col gap-3 z-50 w-64">
                         <p className="font-black uppercase italic text-sm border-b-2 border-[#1A1A1A] pb-2">Send Official Quote</p>
                         <label className="flex flex-col gap-1">
-                          <span className="font-mono text-[9px] uppercase font-black opacity-60">Amount (₱)</span>
+                          <span className="font-mono text-[9px] uppercase font-black opacity-60">Subtotal (₱)</span>
                           <input
                             type="number"
+                            min="0"
+                            step="0.01"
                             value={quoteAmount}
                             onChange={(e) => setQuoteAmount(e.target.value)}
                             placeholder="e.g. 1500"
                             className="border-2 border-[#1A1A1A] px-2 py-2 text-sm font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
                           />
                         </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="flex flex-col gap-1">
+                            <span className="font-mono text-[9px] uppercase font-black opacity-60">Tax / VAT</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={quoteTax}
+                              onChange={(e) => setQuoteTax(e.target.value)}
+                              placeholder="0.00"
+                              className="border-2 border-[#1A1A1A] px-2 py-2 text-sm font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
+                            />
+                          </label>
+                          <label className="flex flex-col gap-1">
+                            <span className="font-mono text-[9px] uppercase font-black opacity-60">Discount</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={quoteDiscount}
+                              onChange={(e) => setQuoteDiscount(e.target.value)}
+                              placeholder="0.00"
+                              className="border-2 border-[#1A1A1A] px-2 py-2 text-sm font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
+                            />
+                          </label>
+                        </div>
+                        <label className="flex flex-col gap-1">
+                          <span className="font-mono text-[9px] uppercase font-black opacity-60">Terms &amp; inclusions</span>
+                          <textarea
+                            value={quoteTerms}
+                            onChange={(e) => setQuoteTerms(e.target.value)}
+                            rows={3}
+                            maxLength={500}
+                            className="resize-none border-2 border-[#1A1A1A] px-2 py-2 text-xs font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
+                          />
+                        </label>
+                        <p className="font-mono text-[9px] uppercase opacity-60">Valid for 14 days · currency PHP · total = subtotal + tax − discount</p>
                         <div className="flex gap-2 mt-1">
                           <button
                             type="button"
@@ -1364,6 +1613,92 @@ export default function OwnerMessagesPage() {
           )}
         </div>
       </div>
+      {showQuestionEditor && activeConv && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-slate-950/65 p-3 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="question-editor-title" onClick={() => !savingQuestions && setShowQuestionEditor(false)}>
+          <form onSubmit={saveShopQuestions} className="relative flex max-h-[92dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="cmyk-bar shrink-0" />
+            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#EC008C]">Ask the shop settings</p>
+                <h2 id="question-editor-title" className="mt-1 text-xl font-black text-slate-900">Customer questions for {activeConv._biz_name}</h2>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">Edit the button label and the complete message customers send. These are questions only—the shop still writes every answer.</p>
+              </div>
+              <button type="button" onClick={() => setShowQuestionEditor(false)} disabled={savingQuestions} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-900 disabled:opacity-40" aria-label="Close question editor">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-[#F6F6F2] p-4 sm:p-6">
+              {questionDrafts.map((question, index) => (
+                <section key={question.key || index} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-900 text-[10px] font-black text-[#00FFFF]">{index + 1}</span>
+                      <p className="text-xs font-extrabold text-slate-900">Customer shortcut</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setQuestionDrafts((current) => current.filter((_, questionIndex) => questionIndex !== index))}
+                      disabled={questionDrafts.length <= 1}
+                      className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-30"
+                      aria-label={`Remove question ${index + 1}`}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">Button label</span>
+                      <input
+                        value={question.label}
+                        onChange={(event) => updateQuestionDraft(index, "label", event.target.value)}
+                        maxLength={MAX_QUESTION_LABEL_LENGTH}
+                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold outline-none focus:border-[#EC008C] focus:ring-2 focus:ring-[#EC008C]/15"
+                        placeholder="e.g. Ask about rush printing"
+                      />
+                      <span className="mt-1 block text-right text-[9px] text-slate-400">{question.label.length}/{MAX_QUESTION_LABEL_LENGTH}</span>
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">Question sent to the shop</span>
+                      <textarea
+                        value={question.customerText}
+                        onChange={(event) => updateQuestionDraft(index, "customerText", event.target.value)}
+                        maxLength={MAX_QUESTION_TEXT_LENGTH}
+                        rows={2}
+                        className="w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs leading-relaxed outline-none focus:border-[#00AFC0] focus:ring-2 focus:ring-[#00FFFF]/20"
+                        placeholder="Write the complete question customers will send."
+                      />
+                      <span className="mt-1 block text-right text-[9px] text-slate-400">{question.customerText.length}/{MAX_QUESTION_TEXT_LENGTH}</span>
+                    </label>
+                  </div>
+                </section>
+              ))}
+
+              {questionEditorError && (
+                <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">{questionEditorError}</p>
+              )}
+            </div>
+
+            <div className="flex shrink-0 flex-col gap-3 border-t border-slate-200 bg-white px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={addQuestionDraft} disabled={questionDrafts.length >= MAX_SHOP_QUESTIONS || savingQuestions} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-[10px] font-bold text-slate-700 hover:border-[#00AFC0] hover:text-[#008C99] disabled:opacity-40">
+                  <Plus size={14} /> Add question
+                </button>
+                <button type="button" onClick={restoreDefaultQuestions} disabled={savingQuestions} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-[10px] font-bold text-slate-500 hover:bg-slate-100 hover:text-slate-900 disabled:opacity-40">
+                  <RotateCcw size={14} /> Restore defaults
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setShowQuestionEditor(false)} disabled={savingQuestions} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Cancel</button>
+                <button type="submit" disabled={savingQuestions} className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-5 py-2.5 text-xs font-bold text-white hover:bg-[#EC008C] disabled:cursor-wait disabled:opacity-50">
+                  {savingQuestions ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                  {savingQuestions ? "Saving…" : "Save questions"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
       {/* ── Image Popup Modal ── */}
       {viewImagePopup && (
         <div className="dialog-overlay" role="dialog" aria-modal="true">

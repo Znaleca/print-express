@@ -6,6 +6,16 @@ import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { MessageSquare } from "lucide-react";
 
+async function getProfileRole(userId) {
+  if (!userId) return null;
+  const { data } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .maybeSingle();
+  return data?.role || null;
+}
+
 export default function LiveChatWidget() {
   const pathname = usePathname();
   const [user, setUser] = useState(null);
@@ -13,26 +23,44 @@ export default function LiveChatWidget() {
   const [unread, setUnread] = useState(0);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setUser(user || null);
-      setRole(user?.user_metadata?.role || null);
-    });
+    let active = true;
+    const loadUser = async () => {
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      if (!active) return;
+      setUser(currentUser || null);
+      const nextRole = currentUser ? await getProfileRole(currentUser.id) : null;
+      if (!active) return;
+      setRole(nextRole);
+    };
+    loadUser();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
-      setUser(session?.user || null);
-      setRole(session?.user?.user_metadata?.role || null);
+      const nextUser = session?.user || null;
+      setUser(nextUser);
+      setRole(null);
+      window.setTimeout(async () => {
+        if (!active || !nextUser) return;
+        setRole(await getProfileRole(nextUser.id));
+      }, 0);
     });
-    return () => subscription.unsubscribe();
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
-    if (!user || role === "BUSINESS_OWNER" || role === "ADMIN") return;
+    if (!user || !role || role === "BUSINESS_OWNER" || role === "ADMIN") return;
+
+    let active = true;
+    let channel = null;
 
     const fetchUnread = async () => {
       const { data: convs } = await supabase
         .from("chat_conversations")
         .select("id")
-        .eq("customer_id", user.id);
+        .eq("customer_id", user.id)
+        .range(0, 99);
       
       const convIds = (convs || []).map(c => c.id);
       if (convIds.length > 0) {
@@ -42,22 +70,48 @@ export default function LiveChatWidget() {
           .in("conversation_id", convIds)
           .eq("is_read", false)
           .neq("sender_id", user.id);
-        setUnread(count || 0);
+        if (active) setUnread(count || 0);
       } else {
-        setUnread(0);
+        if (active) setUnread(0);
       }
+
+      return convIds;
     };
 
-    fetchUnread();
+    const setupRealtime = async () => {
+      const convIds = await fetchUnread();
+      if (!active) return;
 
-    const channel = supabase.channel(`customer_badge:${user.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_messages' }, () => {
-        fetchUnread();
-      })
-      .subscribe();
+      channel = supabase.channel(`customer_badge:${user.id}`);
+      convIds.slice(0, 100).forEach((conversationId) => {
+        channel = channel.on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "chat_messages",
+            filter: `conversation_id=eq.${conversationId}`,
+          },
+          fetchUnread
+        );
+      });
+      channel = channel.on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "chat_conversations",
+          filter: `customer_id=eq.${user.id}`,
+        },
+        fetchUnread
+      ).subscribe();
+    };
+
+    setupRealtime();
 
     return () => {
-      supabase.removeChannel(channel);
+      active = false;
+      if (channel) supabase.removeChannel(channel);
     };
   }, [user, role]);
 

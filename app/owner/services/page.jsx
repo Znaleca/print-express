@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
-  Plus, Edit, Trash2, Power, Loader2, Package, History
+  Plus, Edit, Trash2, Power, Loader2, Package, History, Search, SlidersHorizontal, X
 } from "lucide-react";
 import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
 
@@ -22,6 +22,7 @@ export default function OwnerServicesPage() {
   const [inventoryMovements, setInventoryMovements] = useState({});
   const [error, setError] = useState(null);
   const [filterType, setFilterType] = useState("ALL"); // 'ALL', 'service', 'product'
+  const [searchQuery, setSearchQuery] = useState("");
 
   const loadItems = useCallback(async (bizId) => {
     // 1. Fetch baseline services
@@ -268,10 +269,22 @@ export default function OwnerServicesPage() {
     return <OwnerPageSkeleton rows={4} />;
   }
 
+  const serviceCount = items.filter((item) => item.item_type === "service").length;
+  const productCount = items.filter((item) => item.item_type === "product").length;
+  const lowStockCount = items.filter((item) => item.item_type === "product" && Number(item.stock_qty || 0) <= Number(item.low_stock_threshold || 10)).length;
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+
   const filteredItems = items.filter((item) => {
     if (filterType === "service") return item.item_type === "service";
     if (filterType === "product") return item.item_type === "product";
     return true;
+  }).filter((item) => {
+    if (!normalizedSearch) return true;
+    return [item.name, item.category, item.description, item.item_type === "service" ? "service made to order" : "product ready to sell"]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedSearch);
   });
 
   return (
@@ -280,65 +293,105 @@ export default function OwnerServicesPage() {
       <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-10 pt-8 text-white sm:px-8 sm:pb-11 sm:pt-10 lg:px-10">
         <div className="cmyk-bar absolute top-0 left-0 right-0" />
         <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10" />
-        <div className="relative mx-auto flex max-w-6xl flex-col justify-between gap-6 md:flex-row md:items-end">
+        <div className="relative mx-auto flex max-w-6xl flex-col justify-between gap-6 md:flex-row md:items-start">
           <div>
-            <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">Services & products</h1>
-            <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">Manage what customers can order, configure print options, and keep ready-made inventory accurate.</p>
+            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[#00FFFF]">Your catalog</p>
+            <h1 className="mt-2 text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">Products & services</h1>
+            <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">Add the things your shop offers. Products are ready to sell from stock; services are made to order for each customer.</p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="grid w-full max-w-md grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               onClick={() => router.push("/owner/services/new-service")}
-              className="flex items-center gap-1.5 rounded-full bg-[#00FFFF] px-4 py-3 text-xs font-black text-[#1A1A1A] shadow-md transition-colors hover:bg-[#FFF200]"
+              className="group flex items-center gap-3 rounded-2xl bg-[#00FFFF] px-4 py-3 text-left text-[#1A1A1A] shadow-md transition-colors hover:bg-[#FFF200]"
             >
-              <Plus size={16} /> Add Custom Service
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#1A1A1A] text-[#00FFFF]"><Plus size={17} /></span>
+              <span className="min-w-0"><span className="block text-xs font-black">Add a service</span><span className="mt-0.5 block text-[10px] font-semibold opacity-70">Made to order</span></span>
             </button>
 
             <button
               onClick={() => router.push("/owner/services/new-product")}
-              className="flex items-center gap-1.5 rounded-full bg-white/10 px-4 py-3 text-xs font-black text-white ring-1 ring-white/20 transition-colors hover:bg-[#EC008C]"
+              className="group flex items-center gap-3 rounded-2xl bg-white/10 px-4 py-3 text-left text-white ring-1 ring-white/20 transition-colors hover:bg-[#EC008C]"
             >
-              <Package size={16} /> Add Ready Product
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-slate-900"><Package size={17} /></span>
+              <span className="min-w-0"><span className="block text-xs font-black">Add a product</span><span className="mt-0.5 block text-[10px] font-semibold text-white/65">Ready to sell</span></span>
             </button>
           </div>
         </div>
       </section>
 
-      {/* Filter Tabs */}
-      <section className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-5">
+      <section className="mx-auto max-w-[1600px] px-4 pt-5 sm:px-6 lg:px-8">
         <div className="mb-4 flex flex-col items-start justify-between gap-2 rounded-3xl border border-[#D8D6CE] bg-white px-5 py-4 text-xs text-slate-700 shadow-sm sm:flex-row sm:items-center">
-          <span>
-            General business information such as shop name, address, contact details, logo, payment QR, and downpayment rules belongs in the business profile.
-          </span>
-          <Link href="/owner/shop" className="font-bold text-slate-900 hover:text-[#EC008C]">
-            Edit Business Profile
-          </Link>
+          <span>Shop details, logo, payment QR, and downpayment rules are managed in your business profile.</span>
+          <Link href="/owner/shop" className="font-bold text-slate-900 hover:text-[#EC008C]">Edit Business Profile</Link>
         </div>
-        <div className="flex items-center gap-2 border-b border-[#D8D6CE] pb-3">
-          <button
-            onClick={() => setFilterType("ALL")}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              filterType === "ALL" ? "bg-slate-900 text-white" : "bg-white text-slate-700 border border-[#D8D6CE] hover:bg-[#F6F6F2]"
-            }`}
-          >
-            All Items ({items.length})
-          </button>
-          <button
-            onClick={() => setFilterType("service")}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              filterType === "service" ? "bg-slate-900 text-white" : "bg-white text-slate-700 border border-[#D8D6CE] hover:bg-[#F6F6F2]"
-            }`}
-          >
-            Custom Services ({items.filter(i => i.item_type === "service").length})
-          </button>
-          <button
-            onClick={() => setFilterType("product")}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              filterType === "product" ? "bg-slate-900 text-white" : "bg-white text-slate-700 border border-[#D8D6CE] hover:bg-[#F6F6F2]"
-            }`}
-          >
-            Ready Products ({items.filter(i => i.item_type === "product").length})
-          </button>
+
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[
+            ["All catalog items", items.length, "Products + services"],
+            ["Services", serviceCount, "Made to order"],
+            ["Products", productCount, "Ready to sell"],
+            ["Low stock", lowStockCount, lowStockCount > 0 ? "Needs attention" : "All good"],
+          ].map(([label, value, hint]) => (
+            <div key={label} className="rounded-2xl border border-[#D8D6CE] bg-white px-4 py-3 shadow-sm">
+              <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">{label}</p>
+              <div className="mt-1 flex items-end justify-between gap-2">
+                <p className="text-2xl font-black text-slate-900">{value}</p>
+                <p className="text-right text-[10px] font-semibold text-slate-500">{hint}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mb-4 flex items-start gap-3 rounded-3xl border border-cyan-200 bg-cyan-50 px-5 py-4 text-xs text-slate-700 shadow-sm">
+          <History size={18} className="mt-0.5 shrink-0 text-[#009FA0]" />
+          <div>
+            <p className="font-black text-slate-900">How stock works</p>
+            <p className="mt-1 max-w-4xl leading-relaxed"><strong>Products</strong> use stock quantity and low-stock thresholds. Each successful order deducts the ordered quantity. <strong>Services</strong> are made to order and do not deduct stock.</p>
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-[#D8D6CE] bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal size={16} className="text-[#009FA0]" />
+              <div>
+                <p className="text-xs font-black text-slate-900">Your catalog</p>
+                <p className="text-[10px] text-slate-500">Find an item or choose a type to manage.</p>
+              </div>
+            </div>
+            <div className="relative w-full lg:max-w-xs">
+              <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search by name or category"
+                aria-label="Search products and services"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-9 text-xs font-medium outline-none transition-colors focus:border-[#00AFC0] focus:bg-white"
+              />
+              {searchQuery && (
+                <button type="button" onClick={() => setSearchQuery("")} aria-label="Clear catalog search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700"><X size={14} /></button>
+              )}
+            </div>
+          </div>
+          <div className="mt-3 flex gap-2 overflow-x-auto border-t border-slate-100 pt-3">
+            {[
+              ["ALL", `All items · ${items.length}`],
+              ["service", `Services · ${serviceCount}`],
+              ["product", `Products · ${productCount}`],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setFilterType(value)}
+                aria-pressed={filterType === value}
+                className={`shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all ${filterType === value ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-700 hover:border-[#00AFC0] hover:bg-[#EFFFFF]"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -346,7 +399,8 @@ export default function OwnerServicesPage() {
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
         {filteredItems.length === 0 ? (
           <div className="bg-white rounded-2xl border border-[#D8D6CE] p-12 text-center text-xs text-slate-500">
-            No printing services or products found in this category. Click above to add new item specs!
+            <p className="text-sm font-black text-slate-800">{normalizedSearch ? `No items match “${searchQuery.trim()}”.` : "No products or services found here yet."}</p>
+            <p className="mt-1">{normalizedSearch ? "Try a different name or category." : "Use one of the add buttons above to build your catalog."}</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -367,15 +421,16 @@ export default function OwnerServicesPage() {
                         <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${
                           isService ? "bg-[#00FFFF]/20 text-slate-900" : "bg-purple-100 text-purple-800"
                         }`}>
-                          {isService ? "Custom Service" : "Physical Product"}
+                          {isService ? "Service · made to order" : "Product · ready to sell"}
                         </span>
                         <h3 className="font-extrabold text-base text-slate-900 mt-1">{item.name}</h3>
+                        {item.category && <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">{item.category}</p>}
                         <p className="text-xs font-semibold text-[#EC008C]">
                           {item.price_max ? `₱${Number(item.price).toFixed(2)} – ₱${Number(item.price_max).toFixed(2)}` : `₱${Number(item.price).toFixed(2)}`}
                         </p>
                       </div>
 
-                      {item.image_url && (
+                      {!isService && item.image_url && (
                         <img src={item.image_url} alt={item.name} className="w-14 h-14 object-cover rounded-xl border border-slate-200 shrink-0" />
                       )}
                     </div>
@@ -409,7 +464,7 @@ export default function OwnerServicesPage() {
                           </button>
                         </div>
                         <p className="text-[11px] text-slate-500">
-                          Stock quantity applies only to ready-made physical products. Custom print services use scheduling and order capacity instead.
+                          Products are ready to sell from stock. Services are made to order and do not use inventory.
                         </p>
                         {(inventoryMovements[item.id] || []).length > 0 && (
                           <div className="pt-2 border-t border-[#D8D6CE] space-y-1">
@@ -453,6 +508,9 @@ export default function OwnerServicesPage() {
                     <button
                       onClick={() => handleToggle(item)}
                       disabled={toggling === item.id}
+                      type="button"
+                      aria-pressed={item.available}
+                      title={item.available ? "Disable item" : "Make item available"}
                       className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors ${
                         item.available ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
                       }`}
@@ -463,6 +521,9 @@ export default function OwnerServicesPage() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => router.push(`/owner/services/${item.id}`)}
+                        type="button"
+                        title="Edit item"
+                        aria-label={`Edit ${item.name}`}
                         className="p-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl transition-colors"
                       >
                         <Edit size={15} />
@@ -470,6 +531,9 @@ export default function OwnerServicesPage() {
                       <button
                         onClick={() => handleDelete(item.id)}
                         disabled={deleting === item.id}
+                        type="button"
+                        title="Delete item"
+                        aria-label={`Delete ${item.name}`}
                         className="p-2 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-xl transition-colors"
                       >
                         <Trash2 size={15} />

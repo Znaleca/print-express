@@ -12,6 +12,7 @@ import {
   ChevronLeft, ChevronRight
 } from "lucide-react";
 import ReceiptModal from "@/components/ReceiptModal";
+import { resolveStorageUrl } from "@/lib/imageUpload";
 
 const ORDERS_PER_PAGE = 5;
 
@@ -21,6 +22,7 @@ const STATUS_MAP = {
   PREPARING:         { label: "In Production",         color: "border-[#EFA3D0] bg-[#FFF0F8] text-[#A90063]", accent: "text-[#EC008C]", marker: "bg-[#EC008C]" },
   READY_TO_PICK_UP:  { label: "Ready for Pickup",      color: "border-[#9BC4F5] bg-[#EEF6FF] text-[#195A9E]", accent: "text-[#195A9E]", marker: "bg-[#9BC4F5]" },
   RIDER_ON_THE_WAY:  { label: "Out for Delivery",      color: "border-[#D5B7FF] bg-[#F5EEFF] text-[#6B35A5]", accent: "text-[#6B35A5]", marker: "bg-[#C7A5FF]" },
+  DELIVERY_COMPLETED:{ label: "Delivery Completed",    color: "border-[#B9B8B1] bg-[#ECECE8] text-[#4E4E49]", accent: "text-[#B9B8B1]", marker: "bg-[#B9B8B1]" },
   COMPLETED:         { label: "Order Completed",       color: "border-[#B9B8B1] bg-[#ECECE8] text-[#4E4E49]", accent: "text-[#B9B8B1]", marker: "bg-[#B9B8B1]" },
   CANCELLED:         { label: "Cancelled",             color: "border-[#F2A5A5] bg-[#FFF0F0] text-[#A32828]", accent: "text-[#FF8D8D]", marker: "bg-[#FF8D8D]" },
   REFUND_PENDING:    { label: "Refund Processing",      color: "border-[#F1BF83] bg-[#FFF5E8] text-[#A94800]", accent: "text-[#F1BF83]", marker: "bg-[#F1BF83]" },
@@ -35,7 +37,9 @@ const getProgressSteps = (order) => [
   order.delivery_type === "DELIVERY"
     ? { key: "RIDER_ON_THE_WAY", label: "Out for delivery" }
     : { key: "READY_TO_PICK_UP", label: "Ready for pickup" },
-  { key: "COMPLETED", label: "Completed" },
+  order.delivery_type === "DELIVERY"
+    ? { key: "DELIVERY_COMPLETED", label: "Delivery completed" }
+    : { key: "COMPLETED", label: "Completed" },
 ];
 
 export default function TrackOrderPage() {
@@ -85,8 +89,7 @@ export default function TrackOrderPage() {
           .eq("id", authUser.id)
           .maybeSingle();
 
-        const resolvedRole = profile?.role || authUser.user_metadata?.role;
-        const customer = resolvedRole === "CUSTOMER";
+        const customer = profile?.role === "CUSTOMER";
         setIsCustomer(customer);
 
         if (!customer) return;
@@ -243,7 +246,7 @@ export default function TrackOrderPage() {
     const rev = reviewsState[orderId];
     if (!rev || !rev.rating) return alert("Please select a star rating.");
     const targetOrder = orders.find(o => o.id === orderId);
-    if (targetOrder?.status !== "COMPLETED") {
+    if (!["COMPLETED", "DELIVERY_COMPLETED"].includes(targetOrder?.status)) {
       return alert("Feedback and rating can only be submitted after delivery or pickup is completed.");
     }
     setSubmittingReviewId(orderId);
@@ -257,7 +260,7 @@ export default function TrackOrderPage() {
         .update({ rating: rev.rating, feedback: rev.feedback })
         .eq("id", orderId)
         .eq("customer_id", user?.id)
-        .eq("status", "COMPLETED");
+        .in("status", ["COMPLETED", "DELIVERY_COMPLETED"]);
 
       if (error) throw error;
 
@@ -422,12 +425,14 @@ export default function TrackOrderPage() {
                 };
                 const bInfo = o.businesses || {};
                 const canCancel = o.status === "PLACED" || o.status === "PENDING";
-                const isCompleted = o.status === "COMPLETED";
+                const isReviewable = ["COMPLETED", "DELIVERY_COMPLETED"].includes(o.status);
                 const isRefundPending = o.status === "REFUND_PENDING";
                 const isRefunded = o.status === "REFUNDED";
                 const canRequestRefund = o.status === "CANCELLED";
                 const progressSteps = getProgressSteps(o);
-                const currentProgressIndex = progressSteps.findIndex((step) => step.key === o.status);
+                const currentProgressIndex = o.delivery_type === "DELIVERY" && o.status === "COMPLETED"
+                  ? progressSteps.length - 1
+                  : progressSteps.findIndex((step) => step.key === o.status);
                 const isTerminalStatus = ["CANCELLED", "REFUND_PENDING", "REFUNDED", "REFUND_CONFIRMED"].includes(o.status);
 
                 return (
@@ -592,7 +597,11 @@ export default function TrackOrderPage() {
                           <p className="text-xs text-teal-900 font-medium">The print shop has processed a refund for this order. Please check your e-wallet / account balance.</p>
                           <div className="flex gap-2">
                             {o.refund_proof_url && (
-                              <button onClick={() => setViewRefundProof(o.refund_proof_url)} className="rounded-lg border border-teal-300 bg-white px-3 py-1.5 text-xs font-bold text-teal-800">
+                              <button onClick={async () => {
+                                const url = await resolveStorageUrl(o.refund_proof_url);
+                                if (url) setViewRefundProof(url);
+                                else alert("This refund proof is unavailable or access was denied.");
+                              }} className="rounded-lg border border-teal-300 bg-white px-3 py-1.5 text-xs font-bold text-teal-800">
                                 View Refund Proof
                               </button>
                             )}
@@ -604,7 +613,7 @@ export default function TrackOrderPage() {
                       )}
 
                       {/* Review Submission for Completed Orders */}
-                      {isCompleted && (
+                      {isReviewable && (
                         <div className="space-y-3 rounded-2xl border-t border-slate-100 bg-slate-50/50 p-4 pt-4">
                           <p className="text-xs font-bold text-slate-900">Leave a Review for {bInfo.name}</p>
                           <div className="flex items-center gap-1">

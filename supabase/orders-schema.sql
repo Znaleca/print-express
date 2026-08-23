@@ -8,7 +8,7 @@ create table if not exists public.orders (
   id uuid primary key default gen_random_uuid(),
   customer_id uuid references auth.users not null,
   business_id uuid references public.businesses(id) not null,
-  status text not null default 'PENDING' check (status in ('PENDING', 'PLACED', 'PREPARING', 'READY_TO_PICK_UP', 'RIDER_ON_THE_WAY', 'COMPLETED', 'CANCELLED', 'REFUND_PENDING', 'REFUNDED', 'REFUND_CONFIRMED')),
+  status text not null default 'PENDING' check (status in ('PENDING', 'PLACED', 'PREPARING', 'READY_TO_PICK_UP', 'RIDER_ON_THE_WAY', 'DELIVERY_COMPLETED', 'COMPLETED', 'CANCELLED', 'REFUND_PENDING', 'REFUNDED', 'REFUND_CONFIRMED')),
   payment_method text not null check (payment_method in ('COD', 'E-Wallet')),
   total numeric(10,2) not null,
   customer_phone text,

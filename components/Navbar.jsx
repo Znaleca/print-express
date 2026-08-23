@@ -8,10 +8,21 @@ import { supabase } from "@/lib/supabaseClient";
 import BrandMark from "@/components/BrandMark";
 import PillNav from "@/components/PillNav";
 
+async function loadProfileRole(userId) {
+  if (!userId) return null;
+  const { data } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .maybeSingle();
+  return data?.role || null;
+}
+
 export default function Navbar() {
   const router = useRouter();
   const pathname = usePathname();
   const [user, setUser] = useState(null);
+  const [profileRole, setProfileRole] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -19,7 +30,7 @@ export default function Navbar() {
   const dropdownRef = useRef(null);
 
   const [isVisible, setIsVisible] = useState(true);
-  const [lastScrollY, setLastScrollY] = useState(0);
+  const lastScrollYRef = useRef(0);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -27,23 +38,23 @@ export default function Navbar() {
 
       if (currentScrollY <= 20 || isMobileMenuOpen) {
         setIsVisible(true);
-      } else if (currentScrollY > lastScrollY && currentScrollY > 60) {
+      } else if (currentScrollY > lastScrollYRef.current && currentScrollY > 60) {
         // Scrolling DOWN -> hide header smoothly
         setIsVisible(false);
-      } else if (currentScrollY < lastScrollY) {
+      } else if (currentScrollY < lastScrollYRef.current) {
         // Scrolling UP -> show header smoothly
         setIsVisible(true);
       }
-      setLastScrollY(currentScrollY);
+      lastScrollYRef.current = currentScrollY;
     };
 
     window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
-  }, [lastScrollY, isMobileMenuOpen]);
+  }, [isMobileMenuOpen]);
 
   const resolvedUserRole = useMemo(() => {
-    return user?.user_metadata?.role || user?.role || "CUSTOMER";
-  }, [user]);
+    return profileRole || "CUSTOMER";
+  }, [profileRole]);
 
   const isPortalRoute = pathname?.startsWith("/owner") || pathname?.startsWith("/admin");
   const isAuthRoute = [
@@ -58,8 +69,8 @@ export default function Navbar() {
   // resolved user directly here would briefly turn this into a portal header.
   const headerUser = isAuthRoute ? null : user;
   const headerUserRole = useMemo(() => {
-    return headerUser?.user_metadata?.role || headerUser?.role || "CUSTOMER";
-  }, [headerUser]);
+    return headerUser ? profileRole || "CUSTOMER" : "CUSTOMER";
+  }, [headerUser, profileRole]);
 
   const isAdminOrOwner = headerUserRole === "ADMIN" || headerUserRole === "BUSINESS_OWNER";
   const isPortalExperience = isPortalRoute || isAdminOrOwner;
@@ -81,13 +92,24 @@ export default function Navbar() {
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       if (!mounted) return;
       setUser(currentUser || null);
+      const nextRole = currentUser ? await loadProfileRole(currentUser.id) : null;
+      if (!mounted) return;
+      setProfileRole(nextRole);
       setLoading(false);
     };
     loadUser();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user || null);
+      const nextUser = session?.user || null;
+      setUser(nextUser);
+      setProfileRole(null);
       setLoading(false);
+      // Supabase recommends deferring additional database work from inside
+      // the auth callback to avoid blocking auth state delivery.
+      window.setTimeout(async () => {
+        if (!mounted || !nextUser) return;
+        setProfileRole(await loadProfileRole(nextUser.id));
+      }, 0);
     });
 
     const handleClickOutside = (event) => {

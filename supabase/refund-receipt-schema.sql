@@ -13,6 +13,7 @@ ALTER TABLE public.orders ADD CONSTRAINT orders_status_check
     'PREPARING',
     'READY_TO_PICK_UP',
     'RIDER_ON_THE_WAY',
+    'DELIVERY_COMPLETED',
     'COMPLETED',
     'CANCELLED',
     'REFUND_PENDING',

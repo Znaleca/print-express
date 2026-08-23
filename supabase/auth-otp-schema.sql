@@ -7,10 +7,14 @@ create extension if not exists pgcrypto;
 create table if not exists public.otp_verifications (
   id uuid primary key default gen_random_uuid(),
   email text not null,
-  otp_code text not null check (otp_code ~ '^[0-9]{6}$'),
+  otp_hash text,
   type text not null check (type in ('signup', 'reset')),
   expires_at timestamptz not null,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  attempt_count integer not null default 0,
+  max_attempts integer not null default 5,
+  request_ip_hash text,
+  request_device_hash text
 );
 
 create index if not exists otp_verifications_lookup_idx

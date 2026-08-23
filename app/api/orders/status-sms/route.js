@@ -7,6 +7,7 @@ const SMS_STATUS_LABELS = {
   PREPARING: "PREPARING",
   READY_TO_PICK_UP: "READY",
   RIDER_ON_THE_WAY: "DELIVERY",
+  DELIVERY_COMPLETED: "DELIVERY_COMPLETED",
   COMPLETED: "COMPLETED",
   CANCELLED: "CANCELLED",
 };
@@ -33,6 +34,10 @@ const buildSmsMessage = ({ statusLabel, order, business }) => {
 
   if (statusLabel === "CANCELLED") {
     return `Press & Present: Order #${orderCode} has been CANCELLED by ${shopName}. Please contact the shop for details.`;
+  }
+
+  if (statusLabel === "DELIVERY_COMPLETED") {
+    return `Press & Present: Order #${orderCode} has been delivered and completed by ${shopName}. Thank you for ordering.`;
   }
 
   return `Press & Present: Order #${orderCode} is COMPLETED. Thank you for ordering from ${shopName}.`;

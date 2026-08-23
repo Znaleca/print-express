@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS public.inventory_movements (
     qty_change INTEGER NOT NULL,
     new_stock_qty INTEGER NOT NULL,
     reason TEXT NOT NULL, -- 'RESTOCK', 'ORDER_DEDUCTION', 'MANUAL_ADJUSTMENT'
+    note TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -110,6 +111,10 @@ CREATE TABLE IF NOT EXISTS public.sms_notification_logs (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- CREATE TABLE IF NOT EXISTS does not add columns to older installations.
+ALTER TABLE public.sms_notification_logs ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'Semaphore';
+ALTER TABLE public.sms_notification_logs ADD COLUMN IF NOT EXISTS provider_response JSONB;
+
 -- Enable RLS Policies on New Tables
 ALTER TABLE public.service_pricing_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_movements ENABLE ROW LEVEL SECURITY;
@@ -157,6 +162,110 @@ DROP POLICY IF EXISTS "Users can update proofs" ON public.design_proofs;
 CREATE POLICY "Users can update proofs" ON public.design_proofs FOR UPDATE TO authenticated
 USING (uploaded_by = auth.uid())
 WITH CHECK (uploaded_by = auth.uid());
+
+-- Customers must be able to approve or request changes on proofs uploaded by
+-- the shop. The UI only changes review fields; file ownership remains fixed.
+DROP POLICY IF EXISTS "Participants can review design proofs" ON public.design_proofs;
+CREATE POLICY "Participants can review design proofs" ON public.design_proofs FOR UPDATE TO authenticated
+USING (
+  conversation_id IN (
+    SELECT c.id FROM public.chat_conversations c
+    WHERE c.customer_id = auth.uid()
+       OR c.business_id IN (SELECT id FROM public.businesses WHERE owner_id = auth.uid())
+  )
+)
+WITH CHECK (
+  conversation_id IN (
+    SELECT c.id FROM public.chat_conversations c
+    WHERE c.customer_id = auth.uid()
+       OR c.business_id IN (SELECT id FROM public.businesses WHERE owner_id = auth.uid())
+  )
+);
+
+-- Keep proof identity and files immutable after upload. Review actions may
+-- only change status, lock metadata, and review timestamps.
+CREATE OR REPLACE FUNCTION public.guard_design_proof_updates()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  caller uuid := auth.uid();
+  conversation_customer uuid;
+  business_owner uuid;
+  caller_is_owner boolean := false;
+  caller_is_customer boolean := false;
+BEGIN
+  IF coalesce(auth.role(), '') = 'service_role' OR public.is_admin() THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT c.customer_id, b.owner_id
+    INTO conversation_customer, business_owner
+  FROM public.chat_conversations c
+  JOIN public.businesses b ON b.id = c.business_id
+  WHERE c.id = OLD.conversation_id;
+
+  caller_is_owner := business_owner = caller;
+  caller_is_customer := conversation_customer = caller;
+  IF NOT caller_is_owner AND NOT caller_is_customer THEN
+    RAISE EXCEPTION 'Only proof participants can review a design proof';
+  END IF;
+
+  IF NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
+     OR NEW.order_id IS DISTINCT FROM OLD.order_id
+     OR NEW.version_number IS DISTINCT FROM OLD.version_number
+     OR NEW.file_url IS DISTINCT FROM OLD.file_url
+     OR NEW.file_name IS DISTINCT FROM OLD.file_name
+     OR NEW.file_size_bytes IS DISTINCT FROM OLD.file_size_bytes
+     OR NEW.file_type IS DISTINCT FROM OLD.file_type
+     OR NEW.file_format IS DISTINCT FROM OLD.file_format
+     OR NEW.uploaded_by IS DISTINCT FROM OLD.uploaded_by
+     OR NEW.uploaded_role IS DISTINCT FROM OLD.uploaded_role THEN
+    RAISE EXCEPTION 'Proof identity and file details cannot be changed';
+  END IF;
+
+  IF NEW.status NOT IN ('PENDING', 'APPROVED', 'REJECTED', 'NEEDS_CHANGES') THEN
+    RAISE EXCEPTION 'Invalid design proof status';
+  END IF;
+
+  -- Customers can approve/request changes on a shop proof, but only the
+  -- business owner can lock the final cost for production.
+  IF caller_is_customer THEN
+    IF OLD.uploaded_by = caller THEN
+      RAISE EXCEPTION 'Customers cannot review their own uploaded proof';
+    END IF;
+    IF NEW.is_locked IS DISTINCT FROM OLD.is_locked
+       OR NEW.locked_total_amount IS DISTINCT FROM OLD.locked_total_amount
+       OR NEW.locked_at IS DISTINCT FROM OLD.locked_at THEN
+      RAISE EXCEPTION 'Only the business owner can lock a proof cost';
+    END IF;
+  END IF;
+
+  IF NEW.is_locked AND NEW.status <> 'APPROVED' THEN
+    RAISE EXCEPTION 'Only an approved proof can be locked';
+  END IF;
+  IF NEW.is_locked AND NEW.locked_total_amount IS NULL THEN
+    RAISE EXCEPTION 'A locked proof must include a final cost';
+  END IF;
+
+  IF OLD.is_locked AND (
+    NEW.status IS DISTINCT FROM OLD.status
+    OR NEW.is_locked IS DISTINCT FROM OLD.is_locked
+    OR NEW.locked_total_amount IS DISTINCT FROM OLD.locked_total_amount
+    OR NEW.locked_at IS DISTINCT FROM OLD.locked_at
+  ) THEN
+    RAISE EXCEPTION 'Locked proof versions cannot be changed';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS guard_design_proof_updates ON public.design_proofs;
+CREATE TRIGGER guard_design_proof_updates
+BEFORE UPDATE ON public.design_proofs
+FOR EACH ROW EXECUTE FUNCTION public.guard_design_proof_updates();
 
 DROP POLICY IF EXISTS "Owners can create category approval requests" ON public.category_approval_requests;
 CREATE POLICY "Owners can create category approval requests"

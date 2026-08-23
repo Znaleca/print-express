@@ -12,7 +12,7 @@ select
   feedback,
   created_at
 from public.orders
-where status = 'COMPLETED' and rating is not null;
+where status in ('COMPLETED', 'DELIVERY_COMPLETED') and rating is not null;
 
 -- 2) Grant access to public roles
 grant select on public.business_reviews to anon, authenticated;

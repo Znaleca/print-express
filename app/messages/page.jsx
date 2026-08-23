@@ -4,16 +4,24 @@ import { useState, useEffect, useRef, useMemo, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
-  MessageSquare, Send, Loader2, User, Store,
+  MessageSquare, Send, Loader2,
   ChevronRight, ChevronLeft, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, MapPin, Sparkles, CheckCircle2, ArrowRight, FileText
 } from "lucide-react";
-import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
+import {
+  CHAT_IMAGES_BUCKET,
+  getUploadExtension,
+  optimizeImageForUpload,
+  resolveStorageUrl,
+  toStorageRef,
+} from "@/lib/imageUpload";
+import { getShopQuestions } from "@/lib/chatQuestions";
+import ProfileAvatar from "@/components/ProfileAvatar";
 
 const DESIGN_FILE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,image/svg+xml,.ai,.psd,.eps,.tif,.tiff";
 const DESIGN_MAX_BYTES = 10 * 1024 * 1024;
 
 const formatBytes = (bytes = 0) => {
-  if (!bytes) return "0 KB";
+  if (!Number.isFinite(Number(bytes)) || Number(bytes) <= 0) return "Not recorded";
   const units = ["bytes", "KB", "MB", "GB"];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
@@ -30,66 +38,10 @@ const getUploadProfile = (file) => {
   return { extension, mime, fileType, quality };
 };
 
-const shorten = (value, maxLength = 25) => {
-  const text = String(value || "").trim();
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
-};
-
-/*
- * These are real questions sent to the shop, not synthetic answers. The
- * catalog context makes the wording useful without pretending the platform
- * knows a shop's live prices, queue, materials, or delivery coverage.
- */
-const buildShopQuestions = (business) => {
-  const shopName = business?.name || "your shop";
-  const availableItems = (business?.services || []).filter((item) => item?.available !== false);
-  const featuredItem = availableItems[0];
-  const featuredName = featuredItem?.name ? shorten(featuredItem.name) : "my print job";
-  const hasCustomServices = availableItems.some((item) => item.item_type !== "product" || item.is_customizable);
-
-  return [
-    {
-      key: "catalog",
-      label: "What do you offer?",
-      customerText: `Hi! What printing services and products are currently available at ${shopName}?`,
-    },
-    {
-      key: "quote",
-      label: featuredItem ? `Price for ${featuredName}` : "Ask for a quote",
-      customerText: featuredItem
-        ? `Could you give me an estimate for ${featuredItem.name}? Please include the available options, minimum quantity, and expected turnaround.`
-        : "Could you give me a quote? I can send the size, quantity, material, and deadline so you can price it accurately.",
-    },
-    {
-      key: "options",
-      label: "Ask about options",
-      customerText: featuredItem
-        ? `For ${featuredItem.name}, what sizes, materials, finishes, and quality options do you currently offer? Please include any added costs.`
-        : "What sizes, materials, finishes, and quality options do you currently offer, and what does each option cost?",
-    },
-    {
-      key: "file_check",
-      label: hasCustomServices ? "Check my design file" : "Can you check my file?",
-      customerText: "Can you check my PDF or image for size, resolution, bleed, margins, and print-readiness before I order?",
-    },
-    {
-      key: "turnaround",
-      label: "Ask about turnaround",
-      customerText: "What is the current turnaround for my print job? I can provide the quantity, specifications, and the date I need it.",
-    },
-    {
-      key: "fulfillment",
-      label: "Pickup or delivery?",
-      customerText: "Do you offer pickup or delivery? Please share the available area, delivery fee, and estimated delivery time.",
-    },
-  ];
-};
-
 function MessagesInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const initBizId = searchParams.get("business");
-  const initServiceId = searchParams.get("service");
 
   const [user, setUser] = useState(null);
   const [conversations, setConversations] = useState([]);
@@ -108,18 +60,19 @@ function MessagesInner() {
   const [menuMessageId, setMenuMessageId] = useState(null);
   const [jitsiRoom, setJitsiRoom] = useState(null);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
+  const [showDesignUpload, setShowDesignUpload] = useState(false);
+  const [designVersion, setDesignVersion] = useState("1");
   const [viewImagePopup, setViewImagePopup] = useState(null);
   const bottomRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const msgLimitRef = useRef(20);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
-  const pendingDesignUpload = useRef(false);
   const jitsiApiRef = useRef(null);
   const jitsiScriptRef = useRef(null);
 
   const shopQuestions = useMemo(
-    () => buildShopQuestions(activeConv?.businesses),
+    () => getShopQuestions(activeConv?.businesses),
     [activeConv]
   );
 
@@ -221,7 +174,7 @@ function MessagesInner() {
       .select(`
         id, created_at, business_id,
         businesses (
-          name, logo_url, description, products_summary, address, is_open,
+          name, logo_url, owner_id, description, products_summary, address, is_open, chat_suggested_questions,
           services ( id, name, item_type, price, price_max, description, category, available, is_customizable, specs_json )
         )
       `)
@@ -233,8 +186,33 @@ function MessagesInner() {
       return;
     }
 
+    let hydratedConversations = convsData;
+    const ownerIds = [...new Set(convsData.map((conversation) => conversation.businesses?.owner_id).filter(Boolean))];
+    if (ownerIds.length > 0) {
+      const { data: ownerProfiles, error: ownerProfileError } = await supabase
+        .from("profiles")
+        .select("id, full_name, avatar_url")
+        .in("id", ownerIds);
+
+      if (ownerProfileError) {
+        console.warn("[Messages] Could not load shop profile photos:", ownerProfileError.message);
+      } else {
+        const ownerProfileMap = (ownerProfiles || []).reduce((profiles, profile) => {
+          profiles[profile.id] = profile;
+          return profiles;
+        }, {});
+        hydratedConversations = convsData.map((conversation) => ({
+          ...conversation,
+          businesses: {
+            ...conversation.businesses,
+            owner_profile: ownerProfileMap[conversation.businesses?.owner_id] || null,
+          },
+        }));
+      }
+    }
+
     const unreadMap = {};
-    const conversationIds = convsData.map((conversation) => conversation.id);
+    const conversationIds = hydratedConversations.map((conversation) => conversation.id);
     if (conversationIds.length > 0) {
       const { data: unreadRows } = await supabase
         .from("chat_messages")
@@ -246,15 +224,16 @@ function MessagesInner() {
         unreadMap[row.conversation_id] = (unreadMap[row.conversation_id] || 0) + 1;
       });
     }
+    if (activeConv?.id) unreadMap[activeConv.id] = 0;
 
     setUnreadByConv(unreadMap);
-    setConversations(convsData);
+    setConversations(hydratedConversations);
 
     if (initBizId) {
-      const target = convsData.find((c) => c.business_id === initBizId);
+      const target = hydratedConversations.find((c) => c.business_id === initBizId);
       if (target) setActiveConv(target);
-    } else if (convsData.length > 0 && !activeConv) {
-      setActiveConv(convsData[0]);
+    } else if (hydratedConversations.length > 0 && !activeConv) {
+      setActiveConv(hydratedConversations[0]);
     }
 
     setLoadingConvs(false);
@@ -311,7 +290,11 @@ function MessagesInner() {
       .limit(limit);
 
     if (data) {
-      const orderedMessages = data.reverse();
+      const resolvedData = await Promise.all(data.map(async (message) => ({
+        ...message,
+        image_url: message.image_url ? await resolveStorageUrl(message.image_url) : null,
+      })));
+      const orderedMessages = resolvedData.reverse();
 
       if (prepend) {
         setMessages((currentMessages) => {
@@ -380,15 +363,24 @@ function MessagesInner() {
     setUnreadByConv((prev) => ({ ...prev, [convId]: 0 }));
   };
 
+  useEffect(() => {
+    if (!activeConv || !user) return;
+    void markConversationRead(activeConv.id);
+  }, [activeConv, user]);
+
+  const openConversation = (conversation) => {
+    setActiveConv(conversation);
+    setUnreadByConv((prev) => ({ ...prev, [conversation.id]: 0 }));
+    void markConversationRead(conversation.id);
+  };
+
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
     if (!input.trim() || !activeConv || !user || sending) return;
 
     setSending(true);
     const content = input.trim();
-    setInput("");
-
-    await supabase.from("chat_messages").insert({
+    const { error: messageError } = await supabase.from("chat_messages").insert({
       conversation_id: activeConv.id,
       sender_id: user.id,
       sender_role: "CUSTOMER",
@@ -396,15 +388,27 @@ function MessagesInner() {
       is_read: false,
     });
 
+    if (messageError) {
+      window.alert(messageError.message || "Could not send your message.");
+      setSending(false);
+      return;
+    }
+    setInput("");
+
     await supabase.from("chat_conversations").update({ updated_at: new Date().toISOString() }).eq("id", activeConv.id);
 
     setSending(false);
   };
 
-  const sendDesignUpload = async (file) => {
+  const sendDesignUpload = async (file, requestedVersion = designVersion) => {
     if (!file || !activeConv || !user) return;
     if (file.size > DESIGN_MAX_BYTES) {
       window.alert("Design files must be 10 MB or smaller.");
+      return;
+    }
+    const normalizedVersion = String(requestedVersion || "").trim();
+    if (!normalizedVersion) {
+      window.alert("Enter a proof version before selecting the file.");
       return;
     }
 
@@ -422,8 +426,9 @@ function MessagesInner() {
 
     const uploadProfile = getUploadProfile(uploadFile);
     const ext = uploadFile.type?.startsWith("image/") ? getUploadExtension(uploadFile) : (uploadProfile.extension || "file");
-    const filePath = `${activeConv.id}/${user.id}-customer-design-${Date.now()}.${ext}`;
-    const storageBucket = uploadFile.type?.startsWith("image/") ? IMAGE_BUCKET : "chat-images";
+    const safeVersion = normalizedVersion.replace(/[^a-z0-9._-]/gi, "-").slice(0, 24) || "1";
+    const filePath = `${activeConv.id}/${user.id}-customer-design-v${safeVersion}-${Date.now()}.${ext}`;
+    const storageBucket = CHAT_IMAGES_BUCKET;
 
     const { error: uploadErr } = await supabase.storage
       .from(storageBucket)
@@ -433,25 +438,66 @@ function MessagesInner() {
         contentType: uploadFile.type,
       });
 
-    if (!uploadErr) {
-      const { data } = supabase.storage.from(storageBucket).getPublicUrl(filePath);
-      await supabase.from("chat_messages").insert({
-        conversation_id: activeConv.id,
-        sender_id: user.id,
-        sender_role: "CUSTOMER",
-        content: "Customer design file uploaded for checking and quotation.",
-        message_type: "design_upload",
-        metadata: {
-          file_name: file.name,
-          file_size_bytes: uploadFile.size,
-          file_type: uploadProfile.fileType,
-          file_format: ext,
-          file_mime: uploadProfile.mime,
-          quality_notes: uploadProfile.quality,
-        },
-        image_url: data?.publicUrl || null,
-        is_read: false,
-      });
+    if (uploadErr) {
+      window.alert(uploadErr.message || "Could not upload this design proof.");
+      setSending(false);
+      return;
+    }
+
+    const storageRef = toStorageRef(storageBucket, filePath);
+    const proofPayload = {
+      conversation_id: activeConv.id,
+      version_number: Number.parseInt(normalizedVersion, 10) || 1,
+      file_url: storageRef,
+      file_name: file.name,
+      file_size_bytes: uploadFile.size,
+      file_type: uploadProfile.fileType,
+      file_format: ext,
+      quality_notes: uploadProfile.quality,
+      status: "PENDING",
+      uploaded_by: user.id,
+      uploaded_role: "CUSTOMER",
+    };
+
+    const { data: proofRow, error: proofError } = await supabase
+      .from("design_proofs")
+      .insert(proofPayload)
+      .select("id")
+      .maybeSingle();
+
+    if (proofError || !proofRow?.id) {
+      window.alert("The file uploaded, but the proof version could not be registered. Apply the design-proof database migration before continuing.");
+      setSending(false);
+      return;
+    }
+
+    const { error: messageError } = await supabase.from("chat_messages").insert({
+      conversation_id: activeConv.id,
+      sender_id: user.id,
+      sender_role: "CUSTOMER",
+      content: `Customer design proof version ${normalizedVersion} uploaded for review.`,
+      message_type: "design_version",
+      metadata: {
+        version: normalizedVersion,
+        proof_id: proofRow.id,
+        proof_status: "PENDING",
+        is_locked: false,
+        file_name: file.name,
+        file_size_bytes: uploadFile.size,
+        file_type: uploadProfile.fileType,
+        file_format: ext,
+        file_mime: uploadProfile.mime,
+        quality_notes: uploadProfile.quality,
+      },
+      image_url: storageRef,
+      is_read: false,
+    });
+
+    if (messageError) {
+      window.alert(messageError.message || "The proof was registered, but could not be added to the conversation.");
+    } else {
+      setShowDesignUpload(false);
+      setDesignVersion((prev) => String((Number.parseInt(prev, 10) || 1) + 1));
     }
 
     setSending(false);
@@ -460,22 +506,23 @@ function MessagesInner() {
   const requestVideoCall = async () => {
     if (!activeConv || !user || sending) return;
     setSending(true);
-    await supabase.from("chat_messages").insert({
+    const { error } = await supabase.from("chat_messages").insert({
       conversation_id: activeConv.id,
       sender_id: user.id,
       sender_role: "CUSTOMER",
       content: "[VIDEO_CALL_REQUEST]",
       message_type: "video_call",
       metadata: {
-        capabilities: ["camera", "microphone", "screen share", "chat", "raise hand", "tile view", "video quality controls"],
+        capabilities: ["camera", "microphone", "screen share", "chat", "raise hand", "tile view", "video quality controls", "whiteboard"],
       },
       is_read: false,
     });
+    if (error) window.alert(error.message || "Could not request a video call.");
     setSending(false);
   };
 
   const updateProofStatus = async (msg, status) => {
-    if (!activeConv || !user) return;
+    if (!activeConv || !user || msg.metadata?.is_locked || msg.sender_id === user.id) return;
     const metadata = {
       ...(msg.metadata || {}),
       proof_status: status,
@@ -486,7 +533,11 @@ function MessagesInner() {
     setSending(true);
     await supabase.from("chat_messages").update({ metadata }).eq("id", msg.id);
     if (msg.metadata?.proof_id) {
-      await supabase.from("design_proofs").update({ status }).eq("id", msg.metadata.proof_id);
+      await supabase.from("design_proofs").update({
+        status,
+        reviewed_by: user.id,
+        reviewed_at: metadata.reviewed_at,
+      }).eq("id", msg.metadata.proof_id);
     }
     await supabase.from("chat_messages").insert({
       conversation_id: activeConv.id,
@@ -528,32 +579,32 @@ function MessagesInner() {
   };
 
   return (
-    <main className="messages-page h-[calc(100vh-70px)] sm:h-[calc(100vh-86px)] min-h-0 overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 flex flex-col">
+    <main className="messages-page h-[calc(100dvh-70px)] min-h-0 overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 flex flex-col sm:h-[calc(100dvh-86px)]">
       
-      {/* Header */}
-      <section className="relative shrink-0 overflow-hidden border-b border-white/10 bg-[#1A1A1A] px-4 pb-8 pt-9 text-white sm:px-8 sm:pb-10 sm:pt-11 lg:px-12">
+      {/* Compact header keeps the conversation visible above the fold. */}
+      <section className="relative shrink-0 overflow-hidden border-b border-white/10 bg-[#1A1A1A] px-4 pb-4 pt-5 text-white sm:px-8 sm:pb-5 sm:pt-6 lg:px-10">
         <div className="cmyk-bar absolute left-0 right-0 top-0" />
-        <div className="pointer-events-none absolute -right-20 -top-28 h-80 w-80 rounded-full border border-white/10" />
-        <div className="pointer-events-none absolute bottom-5 left-8 hidden h-24 w-24 rotate-12 border border-[#EC008C]/30 sm:block" />
+        <div className="pointer-events-none absolute -right-12 -top-24 h-48 w-48 rounded-full border border-white/10" />
+        <div className="pointer-events-none absolute -bottom-8 left-8 hidden h-14 w-14 rotate-12 border border-[#EC008C]/30 sm:block" />
 
-        <div className="relative mx-auto max-w-6xl">
-          <div className="max-w-3xl">
-            <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">
+        <div className="relative mx-auto flex max-w-6xl flex-col gap-1.5 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-black uppercase leading-none tracking-tight sm:text-4xl">
               Message <span className="text-[#00FFFF]">print shops.</span>
             </h1>
-            <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/65 sm:text-base">
-              Chat with print partners, review files, and approve proofs in one place.
-            </p>
           </div>
+          <p className="max-w-xl text-xs leading-relaxed text-white/65 sm:text-right sm:text-sm">
+            Chat, review files, receive quotes, and approve proofs in one place.
+          </p>
         </div>
       </section>
 
       {/* Main Chat Container */}
-      <div className="max-w-[1800px] w-full mx-auto p-3 sm:p-4 flex-1 flex flex-col sm:flex-row gap-4 min-h-0 overflow-hidden">
+      <div className="mx-auto flex min-h-0 w-full max-w-[1800px] flex-1 flex-col gap-3 overflow-hidden p-2.5 sm:flex-row sm:p-3">
         
         {/* Sidebar Conversations List */}
-        <aside className="w-full sm:w-80 h-56 sm:h-auto min-h-0 shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-          <div className="p-4 border-b border-slate-100 bg-[#F6F6F2]">
+        <aside className="flex h-44 min-h-0 w-full shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:h-auto sm:w-80">
+          <div className="border-b border-slate-100 bg-[#F6F6F2] p-3.5">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#EC008C]">Inbox</p>
@@ -582,14 +633,17 @@ function MessagesInner() {
                 return (
                   <button
                     key={c.id}
-                    onClick={() => setActiveConv(c)}
+                    onClick={() => openConversation(c)}
                     className={`w-full p-4 text-left flex items-start gap-3 transition-colors border-l-4 ${
                       isActive ? "bg-[#EFFFFF] border-[#00FFFF] font-semibold" : "border-transparent hover:bg-slate-50"
                     }`}
                   >
-                    <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 shrink-0 font-bold text-sm">
-                      {biz.name ? biz.name.charAt(0) : <Store size={18} />}
-                    </div>
+                    <ProfileAvatar
+                      src={biz.owner_profile?.avatar_url || biz.logo_url}
+                      name={biz.owner_profile?.full_name || biz.name || "Print Shop"}
+                      className="h-10 w-10"
+                      fallbackClassName="bg-slate-100 text-slate-500"
+                    />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
                         <p className="text-xs font-bold text-slate-900 truncate">{biz.name || "Print Shop"}</p>
@@ -615,9 +669,13 @@ function MessagesInner() {
               {/* Active Header */}
               <div className="p-4 border-b border-slate-200 bg-white flex items-center justify-between gap-3 z-10 shrink-0">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-xs">
-                    {activeConv.businesses?.name?.charAt(0) || "S"}
-                  </div>
+                  <ProfileAvatar
+                    src={activeConv.businesses?.owner_profile?.avatar_url || activeConv.businesses?.logo_url}
+                    name={activeConv.businesses?.owner_profile?.full_name || activeConv.businesses?.name || "Print Shop"}
+                    className="h-9 w-9"
+                    fallbackClassName="bg-slate-900 text-white"
+                    sizes="36px"
+                  />
                   <div>
                     <h2 className="text-sm font-bold text-slate-900">{activeConv.businesses?.name || "Print Shop"}</h2>
                     <p className="text-[11px] text-slate-500">Live chat & proofing thread</p>
@@ -681,7 +739,16 @@ function MessagesInner() {
                     const isPreviewable = Boolean(m.image_url && (meta.file_mime?.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(uploadName)));
 
                     return (
-                      <div key={m.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                      <div key={m.id} className={`flex items-end gap-2 ${isMe ? "justify-end" : "justify-start"}`}>
+                        {!isMe && (
+                          <ProfileAvatar
+                            src={activeConv.businesses?.owner_profile?.avatar_url || activeConv.businesses?.logo_url}
+                            name={activeConv.businesses?.owner_profile?.full_name || activeConv.businesses?.name || "Print Shop"}
+                            className="h-8 w-8"
+                            fallbackClassName="bg-slate-900 text-[#00FFFF]"
+                            sizes="32px"
+                          />
+                        )}
                         <div className={`max-w-md p-4 rounded-2xl text-xs leading-relaxed ${
                           isMe 
                             ? "bg-slate-900 text-white rounded-br-none shadow-sm" 
@@ -735,35 +802,89 @@ function MessagesInner() {
                           ) : m.message_type === "quote" ? (
                             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-slate-900">
                               <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Formal quotation</p>
+                              {meta.service_name && <p className="mt-1 text-sm font-extrabold text-slate-900">{meta.service_name}</p>}
                               <p className="mt-1 text-2xl font-extrabold">PHP {Number(meta.total_cost || meta.quote_amount || 0).toFixed(2)}</p>
                               <div className="mt-2 grid grid-cols-2 gap-1 text-[11px]">
                                 <span className="text-slate-500">Subtotal</span><span className="text-right font-semibold">PHP {Number(meta.subtotal || meta.quote_amount || 0).toFixed(2)}</span>
                                 <span className="text-slate-500">Tax/VAT</span><span className="text-right font-semibold">PHP {Number(meta.taxes || 0).toFixed(2)}</span>
+                                <span className="text-slate-500">Discount</span><span className="text-right font-semibold">−PHP {Number(meta.discount || 0).toFixed(2)}</span>
+                                <span className="font-bold text-slate-800">Total</span><span className="text-right font-bold text-slate-800">PHP {Number(meta.total_cost || meta.quote_amount || 0).toFixed(2)}</span>
                                 <span className="text-slate-500">Valid until</span><span className="text-right font-semibold">{meta.valid_until ? new Date(meta.valid_until).toLocaleDateString() : "14 days"}</span>
                                 <span className="text-slate-500">Proof version</span><span className="text-right font-semibold">{meta.proof_version || "Not locked"}</span>
                               </div>
+                              {meta.terms && <p className="mt-3 text-[11px] text-slate-600">{meta.terms}</p>}
                               {m.content && <p className="mt-3 whitespace-pre-wrap">{m.content}</p>}
+                              {meta.ordered ? (
+                                <div className="mt-3 flex items-center gap-2 rounded-lg bg-emerald-100 px-3 py-2 text-[11px] font-bold text-emerald-800">
+                                  <CheckCircle2 size={14} /> Order placed from this quote
+                                </div>
+                              ) : meta.valid_until && new Date(meta.valid_until) < new Date() ? (
+                                <p className="mt-3 rounded-lg bg-rose-100 px-3 py-2 text-[11px] font-bold text-rose-700">This quotation has expired. Ask the shop for a new one.</p>
+                              ) : meta.service_id && Number(meta.total_cost || meta.quote_amount || 0) > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const query = new URLSearchParams({
+                                      checkout_service: String(meta.service_id),
+                                      quote: String(meta.total_cost || meta.quote_amount),
+                                      quote_id: String(m.id),
+                                    });
+                                    router.push(`/business/${activeConv.business_id}?${query.toString()}`);
+                                  }}
+                                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-[11px] font-bold text-white transition-colors hover:bg-[#EC008C]"
+                                >
+                                  Accept quote &amp; continue to checkout <ArrowRight size={14} />
+                                </button>
+                              ) : (
+                                <p className="mt-3 rounded-lg bg-white px-3 py-2 text-[11px] text-slate-600">This quote is missing its service reference. Ask the shop to resend it from your service request.</p>
+                              )}
                             </div>
-                          ) : m.message_type === "design_version" ? (
+                          ) : m.message_type === "service_inquiry" ? (
+                            <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-3 text-slate-900">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-cyan-700">Quote request</p>
+                              <p className="mt-1 text-sm font-extrabold">{meta.service_name || "Custom printing service"}</p>
+                              <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                                <dt className="text-slate-500">Quantity</dt><dd className="text-right font-semibold">{meta.quantity || 1}</dd>
+                                {meta.selected_specs?.size && <><dt className="text-slate-500">Size</dt><dd className="text-right font-semibold">{meta.selected_specs.size}</dd></>}
+                                {meta.selected_specs?.material && <><dt className="text-slate-500">Material</dt><dd className="text-right font-semibold">{meta.selected_specs.material}</dd></>}
+                                {meta.selected_specs?.quality && <><dt className="text-slate-500">Quality</dt><dd className="text-right font-semibold">{meta.selected_specs.quality}</dd></>}
+                                <dt className="text-slate-500">Files</dt><dd className="text-right font-semibold">{meta.attachment_count || 0}</dd>
+                              </dl>
+                              {meta.selected_specs?.notes && <p className="mt-2 rounded-lg bg-white p-2 text-[11px] text-slate-600">{meta.selected_specs.notes}</p>}
+                              {!meta.requires_seller_quote && m.content && (
+                                <p className="mt-3 whitespace-pre-wrap text-[11px] text-slate-600">{m.content}</p>
+                              )}
+                              <p className="mt-3 text-[10px] font-bold uppercase tracking-wide text-cyan-700">Waiting for the shop&apos;s formal quote</p>
+                            </div>
+                          ) : m.message_type === "design_version" || m.message_type === "design_upload" ? (
                             <div>
-                              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-slate-900">
-                                <div className="flex items-center justify-between gap-3">
-                                  <p className="text-[10px] font-bold uppercase tracking-wider text-[#EC008C]">Proof version {meta.version || "1"}</p>
-                                  <span className="rounded bg-slate-900 px-2 py-1 text-[9px] font-bold uppercase text-white">{meta.proof_status || "PENDING"}</span>
+                              <div className="overflow-hidden rounded-2xl border-2 border-cyan-200 bg-white text-slate-900 shadow-sm">
+                                <div className="flex items-start justify-between gap-3 bg-slate-900 px-4 py-3 text-white">
+                                  <div>
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#00FFFF]">Design proof</p>
+                                    <p className="mt-1 text-sm font-extrabold">Version {meta.version || "1"}</p>
+                                  </div>
+                                  <span className="rounded bg-[#FFF200] px-2 py-1 text-[9px] font-black uppercase text-slate-900">{meta.proof_status || "PENDING"}</span>
                                 </div>
-                                <div className="mt-2 grid grid-cols-2 gap-1 text-[11px]">
-                                  <span>Type: {meta.file_type || "Design proof"}</span>
-                                  <span>Format: {(meta.file_format || "file").toUpperCase()}</span>
-                                  <span>Size: {formatBytes(meta.file_size_bytes)}</span>
-                                  <span>Quality: print-ready review</span>
-                                </div>
-                                {meta.quality_notes && <p className="mt-2 text-[11px] text-slate-500">{meta.quality_notes}</p>}
-                                {!meta.is_locked && (
-                                  <div className="mt-3 flex gap-2">
+                                <div className="p-4">
+                                  <div className="mb-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                                    <FileText size={15} className="shrink-0 text-[#EC008C]" />
+                                    <span className="min-w-0 break-all text-[11px] font-bold">{meta.file_name || "Uploaded design proof"}</span>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+                                    <span className="text-slate-500">Type: <strong className="text-slate-800">{meta.file_type || "Design proof"}</strong></span>
+                                    <span className="text-slate-500">Format: <strong className="text-slate-800">{(meta.file_format || "file").toUpperCase()}</strong></span>
+                                    <span className="text-slate-500">Size: <strong className="text-slate-800">{formatBytes(meta.file_size_bytes)}</strong></span>
+                                    <span className="text-slate-500">Quality: <strong className="text-slate-800">Print-ready review</strong></span>
+                                  </div>
+                                  {meta.quality_notes && <p className="mt-3 rounded-lg bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-500">{meta.quality_notes}</p>}
+                                  {!meta.is_locked && meta.proof_id && !isMe && (
+                                  <div className="mt-4 flex flex-wrap gap-2">
                                     <button type="button" onClick={() => updateProofStatus(m, "APPROVED")} disabled={sending || meta.proof_status === "APPROVED"} className="rounded-lg bg-emerald-600 px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40">Approve</button>
                                     <button type="button" onClick={() => updateProofStatus(m, "NEEDS_CHANGES")} disabled={sending} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-[11px] font-bold text-slate-800 disabled:opacity-40">Request changes</button>
                                   </div>
                                 )}
+                                </div>
                               </div>
                               {m.content && m.content !== "[image]" && <p className="mt-2 whitespace-pre-wrap">{m.content}</p>}
                             </div>
@@ -784,6 +905,15 @@ function MessagesInner() {
                             {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </div>
+                        {isMe && (
+                          <ProfileAvatar
+                            src={user?.user_metadata?.avatar_url}
+                            name={user?.user_metadata?.full_name || user?.email || "You"}
+                            className="h-8 w-8"
+                            fallbackClassName="bg-[#EC008C] text-white"
+                            sizes="32px"
+                          />
+                        )}
                       </div>
                     );
                     })}
@@ -816,7 +946,7 @@ function MessagesInner() {
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
-                    if (file) sendDesignUpload(file);
+                    if (file) sendDesignUpload(file, designVersion);
                     e.target.value = "";
                   }}
                 />
@@ -827,15 +957,44 @@ function MessagesInner() {
                   placeholder="Type a message or inquiry..."
                   className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#EC008C]"
                 />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={sending}
-                  title="Upload design file for proofing"
-                  className="p-3 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-100 transition-colors disabled:opacity-50"
-                >
-                  <FileText size={18} />
-                </button>
+                <div className="relative shrink-0">
+                  {showDesignUpload && (
+                    <div className="absolute bottom-14 right-0 z-30 w-72 rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-[#EC008C]">Upload design proof version</p>
+                      <label className="mt-2 block text-[11px] font-semibold text-slate-700">
+                        Version number
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={designVersion}
+                          onChange={(e) => setDesignVersion(e.target.value)}
+                          className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-[#EC008C]"
+                        />
+                      </label>
+                      <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+                        PDF, PNG, JPG, WEBP, SVG, AI, PSD, EPS, TIF/TIFF · max 10 MB. Images are optimized to 5 MB.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={sending || !String(designVersion).trim()}
+                        className="mt-3 w-full rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-bold text-white hover:bg-[#EC008C] disabled:opacity-40"
+                      >
+                        {sending ? "Uploading…" : "Select proof file"}
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowDesignUpload((visible) => !visible)}
+                    disabled={sending}
+                    title="Upload design proof version"
+                    className="p-3 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-100 transition-colors disabled:opacity-50"
+                  >
+                    <FileText size={18} />
+                  </button>
+                </div>
                 <button
                   type="button"
                   onClick={requestVideoCall}

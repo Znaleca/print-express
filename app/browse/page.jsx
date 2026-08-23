@@ -5,6 +5,12 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Search, Star, Loader2, Map as MapIcon, ChevronRight, MapPin, SlidersHorizontal, LocateFixed, X } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { getRatingStats, ratingLabel } from "@/lib/rating";
+import { withTimeout } from "@/lib/withTimeout";
+
+const estimateTravelMinutes = (distanceKm) => (
+  distanceKm == null ? null : Math.max(1, Math.round(Number(distanceKm) * 2.5))
+);
 
 const MapComponent = dynamic(() => import("@/components/MapComponent"), {
   ssr: false,
@@ -62,79 +68,89 @@ export default function BrowsePage() {
     return 2 * R * Math.asin(Math.sqrt(a));
   };
 
-  const estimateTravelMinutes = (distanceKm) => {
-    if (distanceKm == null) return null;
-    return Math.max(1, Math.round(distanceKm * 2.5));
-  };
-
   useEffect(() => {
     async function loadBusinesses() {
-      const { data: bizData, error: bizError } = await supabase
-        .from("businesses")
-        .select(`
-          id, name, address, lat, lng, logo_url, is_open,
-          services ( name, category, available )
-        `)
-        .eq("status", "APPROVED")
-        .order("created_at", { ascending: false });
+      try {
+        const { data: bizData, error: bizError } = await withTimeout(
+          (signal) => supabase
+            .from("businesses")
+            .select(`
+              id, name, address, lat, lng, logo_url, is_open,
+              services ( name, category, available )
+            `)
+            .eq("status", "APPROVED")
+            .order("created_at", { ascending: false })
+            .range(0, 99)
+            .abortSignal(signal),
+          8000,
+          "Loading verified print shops timed out. Please try again."
+        );
 
-      if (bizError) {
-        console.error("Error loading businesses:", {
-          code: bizError.code,
-          message: bizError.message,
-          details: bizError.details,
-          hint: bizError.hint,
+        if (bizError) {
+          console.error("Error loading businesses:", {
+            code: bizError.code,
+            message: bizError.message,
+            details: bizError.details,
+            hint: bizError.hint,
+          });
+          setLoadError("We could not load verified print shops right now. Please refresh and try again.");
+          return;
+        }
+
+        // Keep reviews optional. Embedding the business_reviews view can fail when
+        // PostgREST has not inferred a relationship for the view yet.
+        const { data: reviewData, error: reviewError } = await withTimeout(
+          (signal) => supabase
+            .from("business_reviews")
+            .select("business_id, rating")
+            .range(0, 999)
+            .abortSignal(signal),
+          8000,
+          "Loading shop ratings timed out."
+        );
+        if (reviewError) {
+          console.warn("Reviews are temporarily unavailable:", {
+            code: reviewError.code,
+            message: reviewError.message,
+            details: reviewError.details,
+            hint: reviewError.hint,
+          });
+        }
+        const reviewsByBusiness = (reviewData || []).reduce((map, review) => {
+          map[review.business_id] = [...(map[review.business_id] || []), review];
+          return map;
+        }, {});
+
+        const formatted = (bizData || []).map((b) => {
+          const availableServices = (b.services || [])
+            .filter(s => s.available)
+            .map(s => s.name);
+
+          const reviews = reviewsByBusiness[b.id] || [];
+          const ratingStats = getRatingStats(reviews);
+
+          return {
+            id: b.id,
+            name: b.name || "Print Shop",
+            address: b.address || "Location unavailable",
+            lat: b.lat == null ? null : parseFloat(b.lat),
+            lng: b.lng == null ? null : parseFloat(b.lng),
+            logo_url: b.logo_url,
+            is_open: b.is_open ?? true,
+            rating: ratingStats.average,
+            reviewCount: ratingStats.count,
+            serviceCount: availableServices.length,
+            services: availableServices.slice(0, 3)
+          };
         });
-        setLoadError("We could not load verified print shops right now. Please refresh and try again.");
+
+        setBusinesses(formatted);
+      } catch (error) {
+        console.error("Error loading print shops:", error);
+        setLoadError(error.message || "We could not load verified print shops right now. Please refresh and try again.");
+      } finally {
         setLoading(false);
-        return;
       }
-
-      // Keep reviews optional. Embedding the business_reviews view can fail when
-      // PostgREST has not inferred a relationship for the view yet.
-      const { data: reviewData, error: reviewError } = await supabase
-        .from("business_reviews")
-        .select("business_id, rating");
-      if (reviewError) {
-        console.warn("Reviews are temporarily unavailable:", {
-          code: reviewError.code,
-          message: reviewError.message,
-          details: reviewError.details,
-          hint: reviewError.hint,
-        });
-      }
-      const reviewsByBusiness = (reviewData || []).reduce((map, review) => {
-        map[review.business_id] = [...(map[review.business_id] || []), review];
-        return map;
-      }, {});
-
-      const formatted = (bizData || []).map((b) => {
-        const availableServices = (b.services || [])
-          .filter(s => s.available)
-          .map(s => s.name);
-
-        const reviews = reviewsByBusiness[b.id] || [];
-        const avgRating = reviews.length > 0
-          ? (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1)
-          : 5.0;
-
-        return {
-          id: b.id,
-          name: b.name || "Print Shop",
-          address: b.address || "Location unavailable",
-          lat: b.lat == null ? null : parseFloat(b.lat),
-          lng: b.lng == null ? null : parseFloat(b.lng),
-          logo_url: b.logo_url,
-          is_open: b.is_open ?? true,
-          rating: parseFloat(avgRating),
-          reviewCount: reviews.length,
-          serviceCount: availableServices.length,
-          services: availableServices.slice(0, 3)
-        };
-      });
-
-      setBusinesses(formatted);
-      setLoading(false);
     }
 
     loadBusinesses();
@@ -320,7 +336,7 @@ export default function BrowsePage() {
                           <p className="mt-0.5 truncate text-xs text-slate-500">{shop.address}</p>
                         </div>
                         <div className="flex shrink-0 items-center gap-1 text-xs font-black text-[#1A1A1A]">
-                          <Star size={13} className="fill-[#FFF200] text-[#D6C900]" /> {shop.rating.toFixed(1)}
+                          <Star size={13} className="fill-[#FFF200] text-[#D6C900]" /> {ratingLabel(shop.rating)}
                           <ChevronRight size={15} className="text-[#EC008C] transition-transform group-hover:translate-x-0.5" />
                         </div>
                       </button>
@@ -361,7 +377,7 @@ export default function BrowsePage() {
             </button>
             {nearestBusiness && (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-[#FFF200]/45 bg-[#FFF200]/10 px-3 py-1.5 text-[11px] font-bold text-[#FFF200]">
-                Nearest: {nearestBusiness.name} · {nearestBusiness.distanceKm.toFixed(1)} km
+                Nearest: {nearestBusiness.name} · {nearestBusiness.distanceKm.toFixed(1)} km · ~{nearestBusiness.travelMinutes} min estimated travel
               </span>
             )}
           </div>

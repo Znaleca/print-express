@@ -33,9 +33,8 @@ SELECT
   END                                         AS item_name
 FROM public.orders o
 LEFT JOIN public.profiles p ON o.customer_id = p.id
-WHERE o.status = 'COMPLETED'
+WHERE o.status IN ('COMPLETED', 'DELIVERY_COMPLETED')
   AND o.rating IS NOT NULL;
 
 -- Grant access
 GRANT SELECT ON public.business_reviews TO anon, authenticated;
-

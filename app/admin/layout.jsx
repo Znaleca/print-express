@@ -7,7 +7,8 @@ import AdminSidebar from "@/components/admin/AdminSidebar";
 import {
   ShieldAlert,
   Loader2,
-  Activity
+  Activity,
+  Menu
 } from "lucide-react";
 
 export default function AdminLayout({ children }) {
@@ -17,6 +18,14 @@ export default function AdminLayout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [adminAccount, setAdminAccount] = useState({ name: "Admin", email: "" });
   const [signingOut, setSigningOut] = useState(false);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 767px)");
+    const syncSidebar = () => setSidebarOpen(!mediaQuery.matches);
+    syncSidebar();
+    mediaQuery.addEventListener?.("change", syncSidebar);
+    return () => mediaQuery.removeEventListener?.("change", syncSidebar);
+  }, []);
 
   useEffect(() => {
     setMounted(true);
@@ -134,7 +143,15 @@ export default function AdminLayout({ children }) {
 
   /* ── Approved Portal ── */
   return (
-    <div className="flex h-screen overflow-hidden bg-[#1A1A1A]">
+    <div className="relative flex h-screen overflow-hidden bg-[#1A1A1A]">
+      {sidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close admin sidebar"
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 z-40 bg-black/55 md:hidden"
+        />
+      )}
       <AdminSidebar
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen((current) => !current)}
@@ -143,7 +160,15 @@ export default function AdminLayout({ children }) {
         onSignOut={handleSignOut}
         signingOut={signingOut}
       />
-      <main className="min-h-0 min-w-0 flex-1 w-full overflow-y-auto">
+      <main className="min-h-0 min-w-0 flex-1 w-full overflow-y-auto pt-14 md:pt-0">
+        <button
+          type="button"
+          aria-label="Open admin sidebar"
+          onClick={() => setSidebarOpen(true)}
+          className="fixed left-4 top-4 z-30 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[#1A1A1A] text-[#00FFFF] shadow-lg md:hidden"
+        >
+          <Menu size={20} />
+        </button>
         <div className="relative min-h-full w-full">
           {children}
         </div>

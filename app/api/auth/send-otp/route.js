@@ -2,6 +2,32 @@ import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { getSupabaseAdminClient } from "@/lib/supabaseAdmin";
 import { sendResendEmail } from "@/lib/resendEmail";
+import {
+  getRequestDevice,
+  getRequestIp,
+  hashOtp,
+  hashRateLimitScope,
+} from "@/lib/otpSecurity";
+
+const GENERIC_OTP_RESPONSE = {
+  success: true,
+  message: "If the address is eligible, a verification code has been sent.",
+};
+
+function genericResponse(status = 200) {
+  return NextResponse.json(GENERIC_OTP_RESPONSE, { status });
+}
+
+async function consumeRateLimit(supabase, scope, limit, windowSeconds) {
+  const { data, error } = await supabase.rpc("consume_otp_rate_limit", {
+    p_scope: hashRateLimitScope(scope),
+    p_limit: limit,
+    p_window_seconds: windowSeconds,
+  });
+
+  if (error) throw error;
+  return data === true;
+}
 
 export async function POST(request) {
   try {
@@ -18,27 +44,36 @@ export async function POST(request) {
       return NextResponse.json({ error: "Missing email or type" }, { status: 400 });
     }
 
-    // 0. Check if user exists
-    const { data: existingUserId } = await supabase.rpc("get_user_id_by_email", { lookup_email: normalizedEmail });
-    
-    if (normalizedType === "signup" && existingUserId) {
-      return NextResponse.json({ error: "This email is already taken." }, { status: 400 });
-    }
-    if (normalizedType === "reset" && !existingUserId) {
-      return NextResponse.json({ error: "No account found with this email." }, { status: 404 });
+    // Rate-limit before the account lookup so the endpoint cannot be used to
+    // probe whether an email belongs to an account. All scopes are hashed.
+    const requestIp = getRequestIp(request);
+    const requestDevice = getRequestDevice(request);
+    const rateLimits = [
+      ["global", 100],
+      [`ip:${requestIp}`, 10],
+      [`device:${requestDevice}`, 5],
+      [`email:${normalizedEmail}`, 3],
+    ];
+
+    for (const [scope, limit] of rateLimits) {
+      if (!(await consumeRateLimit(supabase, `${normalizedType}:${scope}`, limit, 15 * 60))) {
+        return genericResponse(429);
+      }
     }
 
-    // Keep OTP requests bounded on the free tier and prevent mailbox abuse.
-    const oneMinuteAgo = new Date(Date.now() - 60_000).toISOString();
-    const { data: recentCodes } = await supabase
-      .from("otp_verifications")
-      .select("id")
-      .eq("email", normalizedEmail)
-      .eq("type", normalizedType)
-      .gte("created_at", oneMinuteAgo)
-      .limit(1);
-    if (recentCodes?.length) {
-      return NextResponse.json({ error: "Please wait a minute before requesting another code." }, { status: 429 });
+    const { data: existingUserId, error: lookupError } = await supabase.rpc(
+      "get_user_id_by_email",
+      { lookup_email: normalizedEmail }
+    );
+    if (lookupError) {
+      console.error("OTP account lookup error:", lookupError);
+      return genericResponse(503);
+    }
+
+    // Do not disclose whether an address is registered. The UI will continue
+    // to the code screen and verification will return the same generic result.
+    if ((normalizedType === "signup" && existingUserId) || (normalizedType === "reset" && !existingUserId)) {
+      return genericResponse();
     }
 
     // 1. Generate 6-digit code
@@ -53,14 +88,20 @@ export async function POST(request) {
       .eq("type", normalizedType);
 
     // 3. Save new code
-    const { error: dbError } = await supabase
+    const { data: savedOtp, error: dbError } = await supabase
       .from("otp_verifications")
       .insert({
         email: normalizedEmail,
-        otp_code: otpCode,
+        otp_hash: hashOtp({ email: normalizedEmail, type: normalizedType, code: otpCode }),
+        attempt_count: 0,
+        max_attempts: 5,
+        request_ip_hash: hashRateLimitScope(requestIp),
+        request_device_hash: hashRateLimitScope(requestDevice),
         type: normalizedType,
         expires_at: expiresAt,
-      });
+      })
+      .select("id")
+      .single();
 
     if (dbError) {
       console.error("Database error saving OTP:", dbError);
@@ -178,12 +219,15 @@ export async function POST(request) {
 
     if (emailError) {
       console.error("Resend error:", emailError);
-      return NextResponse.json({ error: emailError.message }, { status: 500 });
+      if (savedOtp?.id) {
+        await supabase.from("otp_verifications").delete().eq("id", savedOtp.id);
+      }
+      return NextResponse.json({ error: "We could not send the verification code. Please try again." }, { status: 502 });
     }
 
-    return NextResponse.json({ success: true, message: "Code sent successfully" });
+    return NextResponse.json(GENERIC_OTP_RESPONSE);
   } catch (err) {
     console.error("Send OTP API error:", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: "We could not start verification. Please try again." }, { status: 503 });
   }
 }

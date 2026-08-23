@@ -97,7 +97,7 @@ export default function LoginPage() {
         .eq("id", data.user.id)
         .single();
 
-      const role = profile?.role || data.user?.user_metadata?.role || "CUSTOMER";
+      const role = profile?.role || "CUSTOMER";
 
       const routes = {
         ADMIN: "/admin",

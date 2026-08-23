@@ -54,38 +54,23 @@ export async function PATCH(request) {
     const auth = await requireAdmin(request);
     if (auth.error) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
-    const { businessId, ownerId, action } = await request.json();
-    if (!businessId || !ownerId || !["APPROVE", "REJECT"].includes(action)) {
+    const { businessId, action } = await request.json();
+    if (!businessId || !["APPROVE", "REJECT"].includes(action)) {
       return NextResponse.json({ error: "PAYLOAD_INCOMPLETE" }, { status: 400 });
     }
 
     const { supabase } = auth;
-    const newStatus = action === "APPROVE" ? "APPROVED" : "REJECTED";
-
-    // 1. UPDATE BUSINESS STATUS
-    const { error: bizError } = await supabase
-      .from("businesses")
-      .update({ status: newStatus })
-      .eq("id", businessId);
-    if (bizError) throw bizError;
-
-    // 2. ROLE ELEVATION: Update public.profiles (linked to auth.users)
-    // Only happens on APPROVE to change role from 'CUSTOMER' to 'BUSINESS_OWNER'
-    if (action === "APPROVE") {
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update({ 
-          role: "BUSINESS_OWNER",
-          updated_at: new Date().toISOString() 
-        })
-        .eq("id", ownerId);
-      
-      if (profileError) throw profileError;
-    }
+    const { data: result, error } = await supabase.rpc("admin_set_business_status", {
+      p_business_id: businessId,
+      p_action: action,
+      p_requester_id: auth.user.id,
+    });
+    if (error) throw error;
 
     return NextResponse.json({ 
       success: true, 
-      status_applied: newStatus,
+      status_applied: result?.status,
+      owner_id: result?.owner_id,
       timestamp: new Date().toISOString()
     });
 

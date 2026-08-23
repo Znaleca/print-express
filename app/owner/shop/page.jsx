@@ -6,22 +6,11 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
 import {
-  Store, Save, Loader2, CheckCircle, AlertCircle,
-  UploadCloud, ImageOff, X, Printer, QrCode, Power, MapPin, CheckCircle2, ShieldCheck
+  Store, Save, Loader2, UploadCloud, QrCode, Power, MapPin, MapPinned,
+  CheckCircle2, ShieldCheck, Phone, Mail, Globe2, ExternalLink, Info
 } from "lucide-react";
 
 const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker"), { ssr: false });
-
-const FIELDS = [
-  { key: "name", label: "Business Name", type: "text", placeholder: "e.g. Apex Print Studio" },
-  { key: "description", label: "Business Background", type: "area", placeholder: "Tell customers when you started, what you specialize in, and what makes your shop reliable...", maxLength: 800 },
-  { key: "products_summary", label: "Products & Services Offered", type: "area", placeholder: "e.g. Business cards, flyers, posters, tarpaulins, stickers, photo printing, and rush orders...", maxLength: 500 },
-  { key: "phone", label: "Phone Number", type: "text", placeholder: "+63 912 345 6789" },
-  { key: "email", label: "Business Email", type: "email", placeholder: "contact@yourshop.com" },
-  { key: "website", label: "Website URL", type: "url", placeholder: "https://yourshop.com" },
-];
-
-const ADMIN_MANAGED_PROFILE_FIELDS = new Set(["description", "products_summary"]);
 
 const BUCKET = "shop-logos";
 const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif"];
@@ -119,6 +108,10 @@ export default function ShopProfilePage() {
   };
 
   const handleChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
+
+  const hasUnsavedChanges = Boolean(initialForm) && (
+    JSON.stringify(form) !== JSON.stringify(initialForm) || Boolean(logoFile) || Boolean(qrFile)
+  );
 
   const handleLogoSelected = async (file) => {
     if (!file) return;
@@ -242,222 +235,286 @@ export default function ShopProfilePage() {
   }
 
   return (
-    <main className="owner-shop-page min-h-screen bg-[#F6F6F2] font-sans text-slate-900 pb-20">
-      
-      {/* Header Banner */}
-      <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-10 pt-8 text-white sm:px-8 sm:pb-12 sm:pt-10 lg:px-10">
-        <div className="cmyk-bar absolute top-0 left-0 right-0" />
-        <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10" />
-        <div className="relative mx-auto flex max-w-6xl flex-col justify-between gap-6 md:flex-row md:items-end">
+    <main className="owner-shop-page min-h-screen bg-[#F6F6F2] pb-20 font-sans text-slate-900">
+      <section className="relative overflow-hidden border-b border-slate-200 bg-white px-4 pb-7 pt-8 sm:px-8 sm:pb-8 sm:pt-10 lg:px-10">
+        <div className="cmyk-bar absolute left-0 right-0 top-0" />
+        <div className="pointer-events-none absolute -right-24 -top-32 h-80 w-80 rounded-full border border-[#00AFC0]/15" />
+        <div className="relative mx-auto flex max-w-7xl flex-col justify-between gap-6 md:flex-row md:items-end">
           <div>
-            <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">My shop</h1>
-            <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">Keep your storefront, contact details, payment instructions, and map pin ready for customers.</p>
+            <p className="text-[10px] font-black uppercase tracking-[0.24em] text-[#EC008C]">Storefront settings</p>
+            <h1 className="mt-2 text-4xl font-black uppercase leading-[0.9] tracking-tight sm:text-6xl">
+              My shop<span className="text-[#00AFC0]">.</span>
+            </h1>
+            <p className="mt-3 max-w-2xl text-sm leading-relaxed text-slate-500">
+              Keep your public profile, customer contact details, payment QR, and shop location accurate.
+            </p>
           </div>
 
-          {/* Open/Closed Toggle Button */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-[#F6F6F2] p-2 shadow-sm">
+            <div className="flex items-center gap-2 px-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${isOpen ? "bg-emerald-500" : "bg-slate-400"}`} />
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Store status</p>
+                <p className="text-xs font-bold text-slate-800">{isOpen ? "Visible to customers" : "Temporarily closed"}</p>
+              </div>
+            </div>
             <button
+              type="button"
               onClick={handleToggleOpen}
               disabled={togglingOpen}
-              className={`flex items-center gap-2 rounded-full px-5 py-3 text-xs font-black transition-all shadow-md ${
-                isOpen ? "bg-[#00FFFF] text-[#1A1A1A] hover:bg-[#FFF200]" : "bg-white/10 text-white ring-1 ring-white/20 hover:bg-[#EC008C]"
+              className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-xs font-black transition-colors disabled:opacity-60 ${
+                isOpen ? "bg-[#00FFFF] text-[#1A1A1A] hover:bg-[#FFF200]" : "bg-slate-900 text-white hover:bg-[#EC008C]"
               }`}
             >
-              <Power size={14} /> {isOpen ? "Shop is Open" : "Shop is Closed"}
+              <Power size={14} /> {isOpen ? "Open" : "Closed"}
             </button>
           </div>
         </div>
       </section>
 
-      {/* Toast Notification */}
       {toast && (
-        <div className={`fixed bottom-6 right-6 z-[200] px-4 py-3 rounded-xl border text-xs font-semibold shadow-lg flex items-center gap-2 ${
-          toast.type === "error" ? "bg-rose-50 border-rose-200 text-rose-700" : "bg-emerald-50 border-emerald-200 text-emerald-700"
+        <div className={`fixed bottom-5 left-4 right-4 z-[200] flex items-center gap-2 rounded-xl border px-4 py-3 text-xs font-semibold shadow-lg sm:left-auto sm:right-6 ${
+          toast.type === "error" ? "border-rose-200 bg-rose-50 text-rose-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"
         }`}>
           <CheckCircle2 size={16} /> {toast.msg}
         </div>
       )}
 
-      {/* Form Container */}
-      <section className="mx-auto max-w-6xl px-4 pt-8 sm:px-8 lg:px-10">
-        <form onSubmit={handleSubmit} className="space-y-8">
-          
-          {/* Logo & QR Code Section */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            
-            {/* Logo Upload Card */}
-            <div className="relative overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
-              <div className="cmyk-bar-sm absolute left-0 right-0 top-0" />
-              <h2 className="mb-5 text-lg font-black text-slate-900">Storefront identity</h2>
-              <div className="flex items-center gap-4">
-                {logoPreview ? (
-                  <img src={logoPreview} alt="Logo" className="h-28 w-28 shrink-0 rounded-2xl border border-[#D8D6CE] object-cover" />
-                ) : (
-                  <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-2xl border border-[#D8D6CE] bg-[#ECECE8] text-slate-400">
-                    <Store size={34} />
-                  </div>
-                )}
-                <div className="flex-1">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => handleLogoSelected(e.target.files[0])}
-                    className="hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="mb-1 rounded-full bg-[#1A1A1A] px-4 py-2.5 text-xs font-black text-white transition-colors hover:bg-[#EC008C]"
-                  >
-                    Select Logo Image
-                  </button>
-                  <p className="text-[11px] text-slate-400">PNG, JPG, WebP · optimized to 5MB max</p>
-                  {logoError && <p className="text-xs text-rose-600 font-medium mt-1">{logoError}</p>}
+      <section className="mx-auto max-w-7xl px-4 pt-6 sm:px-8 sm:pt-8 lg:px-10">
+        <form onSubmit={handleSubmit}>
+          <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+            <div className="min-w-0 space-y-6">
+              <section className="overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white shadow-sm">
+                <div className="cmyk-bar-sm" />
+                <div className="border-b border-slate-100 px-5 py-5 sm:px-7">
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">01 / Identity</p>
+                  <h2 className="mt-1 text-xl font-black text-slate-900">Make your shop recognizable</h2>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">This name and logo are used across your storefront, orders, and customer messages.</p>
                 </div>
-              </div>
-            </div>
-
-            {/* QR Code Upload Card */}
-            <div className="relative overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
-              <div className="cmyk-bar-sm absolute left-0 right-0 top-0" />
-              <h2 className="mb-5 text-lg font-black text-slate-900">Payment details</h2>
-              <div className="flex items-center gap-4">
-                {qrPreview ? (
-                  <img src={qrPreview} alt="QR Code" className="h-28 w-28 shrink-0 rounded-2xl border border-[#D8D6CE] object-cover" />
-                ) : (
-                  <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-2xl border border-[#D8D6CE] bg-[#ECECE8] text-slate-400">
-                    <QrCode size={34} />
-                  </div>
-                )}
-                <div className="flex-1">
-                  <input
-                    ref={qrInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => handleQrSelected(e.target.files[0])}
-                    className="hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => qrInputRef.current?.click()}
-                    className="mb-1 rounded-full bg-[#1A1A1A] px-4 py-2.5 text-xs font-black text-white transition-colors hover:bg-[#EC008C]"
-                  >
-                    Select QR Image
-                  </button>
-                  <p className="text-[11px] text-slate-400">GCash / Maya QR image · optimized to 5MB max</p>
-                  {qrError && <p className="text-xs text-rose-600 font-medium mt-1">{qrError}</p>}
-                </div>
-              </div>
-            </div>
-
-          </div>
-
-          {/* Business Information Fields */}
-          <div className="space-y-5 rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
-            <div className="border-b border-slate-100 pb-4">
-              <h2 className="text-xl font-black text-slate-900">Business information</h2>
-              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
-                Give customers a quick, honest overview of your shop. Your background and product summary appear on your public profile.
-              </p>
-            </div>
-
-            {FIELDS.map((f) => (
-              <div key={f.key}>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">{f.label}</label>
-                {f.type === "area" ? (
-                  <>
-                    {ADMIN_MANAGED_PROFILE_FIELDS.has(f.key) ? (
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-relaxed text-slate-700">
-                        {form[f.key] || "Not provided yet."}
-                      </div>
+                <div className="grid gap-6 p-5 sm:p-7 lg:grid-cols-[190px_minmax(0,1fr)] lg:items-center">
+                  <div className="flex flex-col items-center gap-3">
+                    {logoPreview ? (
+                      <img src={logoPreview} alt="Shop logo preview" className="h-36 w-36 rounded-2xl border border-[#D8D6CE] bg-white object-contain p-2 shadow-sm" />
                     ) : (
-                      <textarea
-                        name={f.key}
-                        value={form[f.key]}
-                        onChange={handleChange}
-                        rows={3}
-                        placeholder={f.placeholder}
-                        className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3 text-xs outline-none focus:ring-2 focus:ring-[#00FFFF]"
-                      />
+                      <div className="flex h-36 w-36 items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-[#F6F6F2] text-slate-400">
+                        <Store size={38} />
+                      </div>
                     )}
-                    {(f.key === "description" || f.key === "products_summary") && (
-                      <p className="mt-1 text-[11px] text-slate-400">
-                        Read-only after submission · Request changes from the <Link href="/owner/documents" className="font-bold text-[#C40075] hover:underline">Documents</Link> page.
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleLogoSelected(e.target.files?.[0])}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={saving || logoUploading}
+                      className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3.5 py-2.5 text-xs font-black text-white transition-colors hover:bg-[#EC008C] disabled:opacity-50"
+                    >
+                      <UploadCloud size={14} /> {logoUploading ? "Uploading..." : "Change logo"}
+                    </button>
+                    <p className="text-center text-[10px] leading-relaxed text-slate-400">PNG, JPG, or WebP<br />Optimized on upload</p>
+                    {logoError && <p className="text-center text-[11px] font-medium text-rose-600">{logoError}</p>}
+                  </div>
+
+                  <div>
+                    <label htmlFor="shop-name" className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Business name</label>
+                    <input
+                      id="shop-name"
+                      type="text"
+                      name="name"
+                      value={form.name}
+                      onChange={handleChange}
+                      placeholder="e.g. Apex Print Studio"
+                      className="mt-2 w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3.5 text-sm font-semibold outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40"
+                    />
+                    <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-slate-400">
+                      <Info size={13} className="mt-0.5 shrink-0 text-[#00AFC0]" />
+                      Use the name customers will recognize on receipts and order updates.
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-3xl border border-[#D8D6CE] bg-white p-5 shadow-sm sm:p-7">
+                <div className="border-b border-slate-100 pb-4">
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">02 / Public profile</p>
+                  <h2 className="mt-1 text-xl font-black text-slate-900">Tell customers what you do</h2>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">These sections are reviewed and managed through your business documents.</p>
+                </div>
+                <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                  {[
+                    ["Business background", "description", "A short overview of your shop", "Tell customers when you started, what you specialize in, and what makes your shop reliable."],
+                    ["Products & services", "products_summary", "What customers can order", "Business cards, flyers, posters, tarpaulins, stickers, photo printing, and rush orders."],
+                  ].map(([label, key, helper, fallback]) => (
+                    <div key={key} className="rounded-2xl border border-slate-200 bg-[#F9F9F7] p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-black text-slate-800">{label}</p>
+                          <p className="mt-1 text-[10px] text-slate-400">{helper}</p>
+                        </div>
+                        <ShieldCheck size={16} className="shrink-0 text-[#00AFC0]" />
+                      </div>
+                      <p className={`mt-4 min-h-24 text-xs leading-relaxed ${form[key] ? "text-slate-700" : "italic text-slate-400"}`}>
+                        {form[key] || fallback}
                       </p>
+                      <p className="mt-3 border-t border-slate-200 pt-3 text-[10px] leading-relaxed text-slate-400">
+                        Read-only after submission. Request changes from the <Link href="/owner/documents" className="font-bold text-[#C40075] hover:underline">Documents</Link> page.
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-3xl border border-[#D8D6CE] bg-white p-5 shadow-sm sm:p-7">
+                <div className="border-b border-slate-100 pb-4">
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">03 / Contact</p>
+                  <h2 className="mt-1 text-xl font-black text-slate-900">How customers can reach you</h2>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">Keep these details current so customers know where to ask questions.</p>
+                </div>
+                <div className="mt-5 grid gap-4 md:grid-cols-2">
+                  <label className="block">
+                    <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Phone number</span>
+                    <span className="relative mt-2 block">
+                      <Phone size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#EC008C]" />
+                      <input type="text" name="phone" value={form.phone} onChange={handleChange} placeholder="+63 912 345 6789" className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] py-3.5 pl-10 pr-4 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
+                    </span>
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Business email</span>
+                    <span className="relative mt-2 block">
+                      <Mail size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#EC008C]" />
+                      <input type="email" name="email" value={form.email} onChange={handleChange} placeholder="contact@yourshop.com" className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] py-3.5 pl-10 pr-4 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
+                    </span>
+                  </label>
+                  <label className="block md:col-span-2">
+                    <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Website URL <span className="font-medium normal-case tracking-normal text-slate-400">(optional)</span></span>
+                    <span className="relative mt-2 block">
+                      <Globe2 size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#EC008C]" />
+                      <input type="url" name="website" value={form.website} onChange={handleChange} placeholder="https://yourshop.com" className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] py-3.5 pl-10 pr-4 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
+                    </span>
+                  </label>
+                </div>
+              </section>
+
+              <section className="rounded-3xl border border-[#D8D6CE] bg-white p-5 shadow-sm sm:p-7">
+                <div className="flex flex-col justify-between gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-start">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">04 / Location</p>
+                    <h2 className="mt-1 text-xl font-black text-slate-900">Help customers find you</h2>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">Add a clear address and place the marker at your shop entrance.</p>
+                  </div>
+                  <span className={`inline-flex items-center gap-1.5 self-start rounded-full px-3 py-1.5 text-[10px] font-bold ${form.lat && form.lng ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                    <MapPin size={12} /> {form.lat && form.lng ? "Map pin ready" : "Map pin needed"}
+                  </span>
+                </div>
+                <label className="mt-5 block">
+                  <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Address</span>
+                  <input type="text" name="address" value={form.address} onChange={handleChange} placeholder="e.g. 123 Main St, City" className="mt-2 w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3.5 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
+                </label>
+                <div className="mt-5 overflow-hidden rounded-2xl border border-[#D8D6CE] bg-[#ECECE8]">
+                  <div className="flex items-center gap-2 border-b border-[#D8D6CE] bg-white px-4 py-3 text-xs font-bold text-slate-700">
+                    <MapPinned size={15} className="text-[#00AFC0]" /> Drag the marker or click the map to adjust it.
+                  </div>
+                  <div className="relative h-[340px] sm:h-[420px]">
+                    <LocationPicker
+                      lat={form.lat}
+                      lng={form.lng}
+                      onChange={(lat, lng) => setForm((p) => ({ ...p, lat, lng }))}
+                    />
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <aside className="space-y-6 xl:sticky xl:top-6">
+              <section className="rounded-3xl border border-[#D8D6CE] bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">Customer view</p>
+                    <h2 className="mt-1 text-lg font-black text-slate-900">Your storefront preview</h2>
+                  </div>
+                  <Store size={20} className="text-[#00AFC0]" />
+                </div>
+                <div className="mt-5 rounded-2xl border border-slate-200 bg-[#F6F6F2] p-4">
+                  <div className="flex items-center gap-3">
+                    {logoPreview ? (
+                      <img src={logoPreview} alt="Preview logo" className="h-14 w-14 rounded-xl border border-slate-200 bg-white object-contain p-1" />
+                    ) : (
+                      <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-slate-900 text-[#00FFFF]"><Store size={22} /></div>
                     )}
-                  </>
-                ) : (
-                  <input
-                    type={f.type}
-                    name={f.key}
-                    value={form[f.key]}
-                    onChange={handleChange}
-                    placeholder={f.placeholder}
-                    className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3 text-xs outline-none focus:ring-2 focus:ring-[#00FFFF]"
-                  />
-                )}
-              </div>
-            ))}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-slate-900">{form.name || "Your shop name"}</p>
+                      <span className={`mt-1 inline-flex items-center gap-1 text-[10px] font-bold ${isOpen ? "text-emerald-700" : "text-slate-500"}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${isOpen ? "bg-emerald-500" : "bg-slate-400"}`} /> {isOpen ? "Open for orders" : "Currently closed"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-4 space-y-2 border-t border-slate-200 pt-4 text-[11px] text-slate-600">
+                    <p className="flex items-start gap-2"><MapPin size={13} className="mt-0.5 shrink-0 text-[#EC008C]" /> <span>{form.address || "Add your shop address"}</span></p>
+                    <p className="flex items-center gap-2"><Phone size={13} className="shrink-0 text-[#EC008C]" /> <span>{form.phone || "Add a contact number"}</span></p>
+                  </div>
+                </div>
+                <Link href="/browse" className="mt-4 inline-flex items-center gap-2 text-xs font-black text-[#C40075] hover:underline">
+                  <ExternalLink size={14} /> View customer marketplace
+                </Link>
+              </section>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Minimum Downpayment Percentage (%)</label>
-              <input
-                type="number"
-                min="1"
-                max="100"
-                name="min_downpayment_percent"
-                value={form.min_downpayment_percent}
-                onChange={handleChange}
-                className="w-full max-w-xs rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3 text-xs font-bold outline-none focus:ring-2 focus:ring-[#EC008C]"
-              />
-              <p className="text-[11px] text-slate-400 mt-1">Default minimum downpayment required at checkout (e.g. 30%).</p>
-            </div>
+              <section className="rounded-3xl border border-[#D8D6CE] bg-white p-5 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">Payments</p>
+                    <h2 className="mt-1 text-lg font-black text-slate-900">Payment QR code</h2>
+                  </div>
+                  <QrCode size={20} className="text-[#00AFC0]" />
+                </div>
+                <div className="mt-4 flex items-center gap-4 rounded-2xl border border-slate-200 bg-[#F6F6F2] p-3">
+                  {qrPreview ? (
+                    <img src={qrPreview} alt="Payment QR code preview" className="h-28 w-28 shrink-0 rounded-xl border border-slate-200 bg-white object-contain p-1" />
+                  ) : (
+                    <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white text-slate-400"><QrCode size={34} /></div>
+                  )}
+                  <div className="min-w-0">
+                    <input ref={qrInputRef} type="file" accept="image/*" onChange={(e) => handleQrSelected(e.target.files?.[0])} className="hidden" />
+                    <button type="button" onClick={() => qrInputRef.current?.click()} disabled={saving || qrUploading} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2.5 text-xs font-black text-white transition-colors hover:bg-[#EC008C] disabled:opacity-50">
+                      <UploadCloud size={14} /> {qrUploading ? "Uploading..." : "Change QR"}
+                    </button>
+                    <p className="mt-2 text-[10px] leading-relaxed text-slate-400">GCash or Maya QR image.<br />Customers can use it at checkout.</p>
+                    {qrError && <p className="mt-1 text-[11px] font-medium text-rose-600">{qrError}</p>}
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-3xl border border-[#D8D6CE] bg-white p-5 shadow-sm">
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">Checkout settings</p>
+                <h2 className="mt-1 text-lg font-black text-slate-900">Downpayment policy</h2>
+                <p className="mt-2 text-xs leading-relaxed text-slate-500">Set the minimum percentage customers must pay before production starts.</p>
+                <div className="mt-4 flex items-center gap-2">
+                  <input type="number" min="1" max="100" name="min_downpayment_percent" value={form.min_downpayment_percent} onChange={handleChange} className="w-24 rounded-xl border border-slate-200 bg-[#F6F6F2] px-3 py-3 text-sm font-black outline-none focus:border-[#EC008C] focus:bg-white focus:ring-2 focus:ring-[#EC008C]/20" />
+                  <span className="text-sm font-black text-slate-500">%</span>
+                </div>
+              </section>
+
+              <section className="rounded-3xl border-2 border-slate-900 bg-slate-900 p-5 text-white shadow-[6px_6px_0_rgba(0,255,255,0.8)]">
+                <div className="flex items-center gap-2">
+                  <Save size={17} className="text-[#00FFFF]" />
+                  <p className="text-sm font-black">Save your storefront</p>
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-white/60">Changes are not visible to customers until you save them.</p>
+                <p className={`mt-4 text-[10px] font-black uppercase tracking-[0.16em] ${hasUnsavedChanges ? "text-[#FFF200]" : "text-white/45"}`}>
+                  {hasUnsavedChanges ? "Unsaved changes" : "Everything is up to date"}
+                </p>
+                <button type="submit" disabled={saving || !hasUnsavedChanges} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-[#00FFFF] px-4 py-3.5 text-xs font-black text-slate-900 transition-colors hover:bg-[#FFF200] disabled:cursor-not-allowed disabled:opacity-45">
+                  {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                  {saving ? "Saving changes..." : "Save changes"}
+                </button>
+              </section>
+            </aside>
           </div>
-
-          {/* Location Picker Map Card */}
-          <div className="space-y-4 rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
-            <h2 className="border-b border-slate-100 pb-4 text-xl font-black text-slate-900">Location</h2>
-            
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Address Text</label>
-              <input
-                type="text"
-                name="address"
-                value={form.address}
-                onChange={handleChange}
-                placeholder="e.g. 123 Main St, City"
-                className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3 text-xs outline-none focus:ring-2 focus:ring-[#00FFFF]"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-2">Pin Map Location</label>
-              <div className="relative h-[420px] overflow-hidden rounded-2xl border border-[#D8D6CE]">
-                <LocationPicker
-                  lat={form.lat}
-                  lng={form.lng}
-                  onChange={(lat, lng) => setForm((p) => ({ ...p, lat, lng }))}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Submit Button */}
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              disabled={saving}
-              className="flex items-center gap-2 rounded-full bg-[#1A1A1A] px-8 py-4 text-xs font-black uppercase tracking-wider text-white shadow-md transition-all hover:bg-[#EC008C] disabled:opacity-50"
-            >
-              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              Save Shop Profile
-            </button>
-          </div>
-
         </form>
       </section>
-
     </main>
   );
 }

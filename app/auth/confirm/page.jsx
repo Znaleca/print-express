@@ -23,7 +23,13 @@ export default function AuthConfirmPage() {
         if (!active) return;
 
         if (user) {
-          const role = user.user_metadata?.role || "CUSTOMER";
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", user.id)
+            .maybeSingle();
+          if (!active) return;
+          const role = profile?.role || "CUSTOMER";
           setStatus("Verification complete. Redirecting...");
           
           if (role === "BUSINESS_OWNER") {

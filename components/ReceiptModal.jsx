@@ -15,13 +15,17 @@ export default function ReceiptModal({ order, onClose, isOwner, initialDocType =
 
   const bInfo = order.businesses || {};
   const dateStr = new Date(order.created_at).toLocaleDateString();
-  const subtotal = order.total_amount || 0;
+  const subtotal = Number(order.subtotal ?? order.total_amount ?? order.total ?? 0);
   const taxAmount = Number(order.tax_amount || 0);
   const discountAmount = Number(order.discount_amount || 0);
   const grandTotal = Math.max(0, subtotal + taxAmount - discountAmount);
-  const downpayment = order.downpayment_amount || (order.total_amount ? order.total_amount * 0.5 : 0);
-  const balance = grandTotal - downpayment;
-  const quoteValidUntil = new Date(Date.now() + 14 * 86400000).toLocaleDateString();
+  const downpayment = Number(order.downpayment_amount ?? 0);
+  const balance = Number.isFinite(Number(order.balance_amount))
+    ? Number(order.balance_amount)
+    : Math.max(0, grandTotal - downpayment);
+  const quoteValidUntil = order.quotation_valid_until
+    ? new Date(order.quotation_valid_until).toLocaleDateString()
+    : null;
 
   return (
     <>
@@ -128,7 +132,7 @@ export default function ReceiptModal({ order, onClose, isOwner, initialDocType =
                 {docType === "QUOTATION" && (
                   <div className="flex justify-between text-amber-700 font-semibold">
                     <span>VALID UNTIL:</span>
-                    <span>{quoteValidUntil}</span>
+                    <span>{quoteValidUntil || "Not specified"}</span>
                   </div>
                 )}
                 <div className="flex justify-between">
@@ -179,7 +183,7 @@ export default function ReceiptModal({ order, onClose, isOwner, initialDocType =
                           <span className="text-[9px] text-amber-800 italic block">"Notes: {item.selected_specs.notes}"</span>
                         )}
                         <span className="text-[9px] text-slate-500 block">
-                          {item.quantity || 1}x @ ₱{item.price?.toFixed(2)}
+                          {item.quantity || 1}x @ ₱{Number(item.price || 0).toFixed(2)}
                         </span>
                       </div>
                       <span className="font-bold text-slate-900 text-right shrink-0">
@@ -235,7 +239,8 @@ export default function ReceiptModal({ order, onClose, isOwner, initialDocType =
                 <>
                   <div className="text-[9px] text-slate-600 leading-tight space-y-1">
                     <p className="font-bold text-slate-900 uppercase">Quotation Terms</p>
-                    <p>Pricing is valid until {quoteValidUntil} and may change after material, quantity, finishing, or artwork revisions.</p>
+                    <p>{quoteValidUntil ? `Pricing is valid until ${quoteValidUntil} and may change after material, quantity, finishing, or artwork revisions.` : "Pricing validity was not recorded for this order."}</p>
+                    {order.quotation_terms && <p>{order.quotation_terms}</p>}
                     <p>Production starts after final design proof approval, cost lock, and required payment confirmation.</p>
                     <p>Uploaded files must match the agreed type, format, size, and print quality requirements.</p>
                   </div>

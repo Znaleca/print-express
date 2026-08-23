@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -46,39 +46,6 @@ export default function SignUpPage() {
   const [otpError, setOtpError] = useState(null);
   const [otpLoading, setOtpLoading] = useState(false);
 
-  // Live Email Validation State
-  const [emailStatus, setEmailStatus] = useState(null); // 'taken', 'available', 'unknown', null
-  const [emailCheckLoading, setEmailCheckLoading] = useState(false);
-
-  useEffect(() => {
-    const email = formData.email.trim();
-    if (!email || !email.includes("@") || !email.includes(".")) {
-      setEmailStatus(null);
-      return;
-    }
-
-    setEmailCheckLoading(true);
-    const timeoutId = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/auth/check-email?email=${encodeURIComponent(email)}`);
-        const data = await res.json();
-        if (!res.ok || data.checkUnavailable) {
-          setEmailStatus("unknown");
-        } else if (data.exists) {
-          setEmailStatus("taken");
-        } else {
-          setEmailStatus("available");
-        }
-      } catch (err) {
-        setEmailStatus("unknown");
-      } finally {
-        setEmailCheckLoading(false);
-      }
-    }, 600);
-
-    return () => clearTimeout(timeoutId);
-  }, [formData.email]);
-
   const passwordRequirements = {
     length:  formData.password.length >= 8,
     capital: /[A-Z]/.test(formData.password),
@@ -93,7 +60,6 @@ export default function SignUpPage() {
     setRole(nextRole);
     setOwnerStep(1);
     setError(null);
-    setEmailStatus(null);
   };
 
   /* Owner onboarding uses two short steps before email verification. */
@@ -106,8 +72,6 @@ export default function SignUpPage() {
       return;
     }
 
-    if (emailStatus === "taken") return;
-    
     setLoading(true);
     setError(null);
 
@@ -470,24 +434,11 @@ export default function SignUpPage() {
                     required 
                     value={formData.email} 
                     onChange={handleChange}
-                    className={`w-full px-4 py-2.5 bg-slate-50 border rounded-xl text-sm outline-none transition-all ${
-                      emailStatus === "taken" 
-                        ? "border-rose-400 focus:ring-2 focus:ring-rose-400" 
-                        : emailStatus === "available" 
-                        ? "border-emerald-400 focus:ring-2 focus:ring-emerald-400" 
-                        : "border-slate-200 focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400"
-                    }`} 
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm outline-none transition-all focus:border-slate-400 focus:ring-2 focus:ring-[#00FFFF]"
                     placeholder="name@example.com" 
                   />
                 </div>
-                
-                {/* Live validation feedback */}
-                <div className="mt-1 text-xs">
-                  {emailCheckLoading && <span className="text-slate-400 flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Checking availability...</span>}
-                  {emailStatus === "taken" && !emailCheckLoading && <span className="text-rose-600 font-medium">Email is already registered. Please sign in instead.</span>}
-                  {emailStatus === "available" && !emailCheckLoading && <span className="text-emerald-600 font-medium">Email is available</span>}
-                  {emailStatus === "unknown" && !emailCheckLoading && <span className="text-slate-500 font-medium">Could not check availability now. You can still continue; signup will verify the email before creating the account.</span>}
-                </div>
+                <p className="mt-1 text-[11px] text-slate-500">We&apos;ll verify this address before creating the account.</p>
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -564,7 +515,7 @@ export default function SignUpPage() {
 
               <button
                 type="submit"
-                disabled={loading || (ownerStep === 2 && emailStatus === "taken")}
+                disabled={loading}
                 className="flex w-full items-center justify-center gap-2 rounded-full bg-[#00FFFF] px-6 py-3.5 text-xs font-black uppercase tracking-wider text-[#1A1A1A] shadow-md transition-all hover:bg-[#FFF200] disabled:opacity-50"
               >
                 {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (

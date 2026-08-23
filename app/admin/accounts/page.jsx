@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { resolveStorageUrl } from "@/lib/imageUpload";
 import {
   Fingerprint, Mail, Shield, Loader2, X,
   CheckCircle, XCircle, Clock, ChevronDown, ChevronUp,
@@ -22,6 +23,7 @@ export default function AdminAccounts() {
   const [activeTab, setActiveTab] = useState("verifications");
   const [businesses, setBusinesses] = useState([]);
   const [loadingBiz, setLoadingBiz] = useState(true);
+  const [verificationError, setVerificationError] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [adminComments, setAdminComments] = useState({});
   const [actionLoading, setActionLoading] = useState({});
@@ -52,29 +54,43 @@ export default function AdminAccounts() {
     const source = doc?.file_name || doc?.file_url || "";
     return source.includes(".") ? source.split(".").pop().toUpperCase() : "Unknown";
   };
+  const openDocument = async (doc) => {
+    const url = await resolveStorageUrl(doc?.file_url);
+    if (url) setPreviewDocUrl(url);
+    else showToast("This document is unavailable or access was denied.", "error");
+  };
 
   const fetchVerifications = useCallback(async () => {
     setLoadingBiz(true);
+    setVerificationError(null);
     try {
-      const { data: bizList } = await supabase
+      const { data: bizList, error: businessError } = await supabase
         .from("businesses")
         .select(`id, name, description, products_summary, status, created_at, owner_id,
           business_documents (*)`)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .range(0, 99);
 
-      if (!bizList) return;
+      if (businessError) throw businessError;
+      if (!bizList) throw new Error("The verification list is unavailable.");
 
       const ownerIds = [...new Set(bizList.map((b) => b.owner_id))];
-      const { data: profiles } = await supabase
-        .from("profiles")
-        .select("id, full_name, email")
-        .in("id", ownerIds);
+      const { data: profiles, error: profilesError } = ownerIds.length > 0
+        ? await supabase
+          .from("profiles")
+          .select("id, full_name, email")
+          .in("id", ownerIds)
+          .range(0, 99)
+        : { data: [], error: null };
+      if (profilesError) throw profilesError;
 
       const profileMap = Object.fromEntries((profiles || []).map((p) => [p.id, p]));
-      const { data: profileRequests } = await supabase
+      const { data: profileRequests, error: profileRequestsError } = await supabase
         .from("business_profile_change_requests")
         .select("id, business_id, requested_description, requested_products_summary, reason, status, admin_comment, created_at, reviewed_at")
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .range(0, 99);
+      if (profileRequestsError) throw profileRequestsError;
       const requestsByBusiness = (profileRequests || []).reduce((map, request) => {
         map[request.business_id] = [...(map[request.business_id] || []), request];
         return map;
@@ -85,11 +101,18 @@ export default function AdminAccounts() {
         profile_change_requests: requestsByBusiness[b.id] || [],
       })));
 
-      const { data: requests } = await supabase
+      const { data: requests, error: categoryError } = await supabase
         .from("category_approval_requests")
         .select("id, business_id, category_name, reason, status, created_at, businesses(id, name, owner_id)")
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .range(0, 99);
+      if (categoryError) throw categoryError;
       setCategoryRequests(requests || []);
+    } catch (error) {
+      console.error("Admin verification load error:", error);
+      setBusinesses([]);
+      setCategoryRequests([]);
+      setVerificationError("We could not load verification data. Check your admin session and try again.");
     } finally {
       setLoadingBiz(false);
     }
@@ -107,7 +130,11 @@ export default function AdminAccounts() {
       const raw = await response.text();
       let payload = {};
       try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = {}; }
+      if (!response.ok) throw new Error(payload.error || "Could not load user accounts.");
       setUsers(payload.users || []);
+    } catch (error) {
+      console.error("Admin user directory load error:", error);
+      showToast(error.message || "Could not load user accounts.", "error");
     } finally {
       setLoadingUsers(false);
     }
@@ -118,13 +145,30 @@ export default function AdminAccounts() {
     if (users.length === 0) fetchUsers();
   }, [activeTab, users.length, fetchUsers]);
 
+  const updateBusinessStatus = async (businessId, action) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error("Your admin session has expired. Please sign in again.");
+
+    const response = await fetch("/api/admin/dashboard", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ businessId, action }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.details || payload.error || "Could not update business status.");
+    return payload;
+  };
+
   const autoApproveBusiness = async (businessId, updatedDocs) => {
     const allApproved = REQUIRED_DOC_TYPES.every((type) => {
       const d = updatedDocs.find((d) => d.doc_type === type);
       return d?.status === "APPROVED";
     });
     if (allApproved) {
-      await supabase.from("businesses").update({ status: "APPROVED" }).eq("id", businessId);
+      await updateBusinessStatus(businessId, "APPROVE");
       setBusinesses((prev) =>
         prev.map((b) => b.id === businessId ? { ...b, status: "APPROVED" } : b)
       );
@@ -147,16 +191,22 @@ export default function AdminAccounts() {
 
       if (error) throw error;
 
-      setBusinesses((prev) =>
-        prev.map((b) => {
-          if (b.id !== businessId) return b;
-          const updatedDocs = (b.business_documents || []).map((d) =>
-            d.id === docId ? { ...d, status: newStatus, admin_comment: comment } : d
-          );
-          autoApproveBusiness(businessId, updatedDocs);
-          return { ...b, business_documents: updatedDocs };
-        })
+      const targetBusiness = businesses.find((business) => business.id === businessId);
+      const updatedDocsForApproval = (targetBusiness?.business_documents || []).map((document) =>
+        document.id === docId ? { ...document, status: newStatus, admin_comment: comment } : document
       );
+      setBusinesses((prev) => prev.map((business) => (
+        business.id === businessId
+          ? { ...business, business_documents: updatedDocsForApproval }
+          : business
+      )));
+      const shouldAutoApprove = REQUIRED_DOC_TYPES.every((type) => {
+        const document = updatedDocsForApproval.find((item) => item.doc_type === type);
+        return document?.status === "APPROVED";
+      });
+      if (shouldAutoApprove) {
+        await autoApproveBusiness(businessId, updatedDocsForApproval);
+      }
       showToast(`Document ${newStatus.toLowerCase()}.`);
     } catch (err) {
       showToast(err.message || "Failed to update document status.", "error");
@@ -238,6 +288,25 @@ export default function AdminAccounts() {
         <div className="flex flex-col items-center gap-3">
           <Loader2 size={36} className="animate-spin text-[#EC008C]" />
           <p className="text-xs font-semibold uppercase tracking-wider">Loading verification portal...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (verificationError) {
+    return (
+      <main className="admin-page flex min-h-screen items-center justify-center bg-[#F6F6F2] px-6 font-sans text-slate-900">
+        <div className="w-full max-w-md rounded-3xl border border-rose-200 bg-white p-8 text-center shadow-sm">
+          <AlertCircle className="mx-auto mb-4 text-[#EC008C]" size={34} />
+          <h1 className="text-xl font-black">Verification data unavailable</h1>
+          <p className="mt-2 text-sm text-slate-600">{verificationError}</p>
+          <button
+            type="button"
+            onClick={fetchVerifications}
+            className="mt-6 inline-flex items-center gap-2 rounded-full bg-[#1A1A1A] px-5 py-3 text-xs font-black uppercase tracking-wider text-white hover:bg-[#EC008C]"
+          >
+            <RefreshCcw size={14} /> Retry
+          </button>
         </div>
       </main>
     );
@@ -468,7 +537,7 @@ export default function AdminAccounts() {
                               {doc?.file_url ? (
                                 <div className="space-y-2">
                                   <button
-                                    onClick={() => setPreviewDocUrl(doc.file_url)}
+                                    onClick={() => openDocument(doc)}
                                     className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5"
                                   >
                                     <Eye size={14} /> Review File

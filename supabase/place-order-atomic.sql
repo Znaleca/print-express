@@ -4,6 +4,9 @@
 alter table if exists public.inventory_movements
   add column if not exists created_by uuid;
 
+alter table if exists public.inventory_movements
+  add column if not exists note text;
+
 create or replace function public.place_order_atomic(
   p_business_id uuid,
   p_items jsonb,
@@ -25,6 +28,12 @@ declare
   item_name text;
   source_message_id uuid;
   quote_amount numeric;
+  quote_valid_until timestamptz;
+  quote_proof_id uuid;
+  quote_proof_status text;
+  quote_proof_locked boolean;
+  quote_ordered boolean;
+  quoted_message_ids uuid[] := '{}';
   unit_price numeric;
   modifier numeric;
   option_key text;
@@ -62,6 +71,10 @@ begin
   if p_order->>'delivery_type' not in ('PICKUP', 'DELIVERY') then
     raise exception 'Invalid fulfillment type';
   end if;
+  if p_order->>'delivery_type' = 'DELIVERY'
+     and nullif(trim(p_order->>'delivery_address'), '') is null then
+    raise exception 'A delivery address is required for delivery orders';
+  end if;
   if p_order->>'fulfillment_mode' not in ('NEED_NOW', 'ADVANCE') then
     raise exception 'Invalid fulfillment mode';
   end if;
@@ -70,6 +83,14 @@ begin
   if downpayment_percent < coalesce(business_row.min_downpayment_percent, 0)
      or downpayment_percent < 0 or downpayment_percent > 100 then
     raise exception 'Invalid downpayment percentage';
+  end if;
+  if downpayment_percent > 0
+     and nullif(trim(p_order->>'receipt_url'), '') is null then
+    raise exception 'Payment proof is required for orders with a downpayment';
+  end if;
+  if nullif(trim(p_order->>'receipt_url'), '') is not null
+     and p_order->>'receipt_url' !~ ('^private-assets:receipts/' || customer::text || '/') then
+    raise exception 'Invalid payment proof reference';
   end if;
 
   for item in select value from jsonb_array_elements(p_items)
@@ -94,6 +115,11 @@ begin
     item_specs := coalesce(item->'selected_specs', '{}'::jsonb);
     modifier := 0;
 
+    if item_type <> 'product'
+       and not coalesce((item->>'is_quoted_checkout')::boolean, false) then
+      raise exception 'Custom services require a formal seller quotation before checkout';
+    end if;
+
     if item_type <> 'product' then
       foreach option_key in array ARRAY['size', 'material', 'quality']
       loop
@@ -111,19 +137,45 @@ begin
         raise exception 'Quoted item is missing its quote reference';
       end if;
       source_message_id := (item->>'source_message_id')::uuid;
-      select coalesce((cm.metadata->>'total_cost')::numeric, (cm.metadata->>'quote_amount')::numeric)
-        into quote_amount
+      select
+        coalesce((cm.metadata->>'total_cost')::numeric, (cm.metadata->>'quote_amount')::numeric),
+        nullif(cm.metadata->>'valid_until', '')::timestamptz,
+        nullif(cm.metadata->>'proof_id', '')::uuid,
+        coalesce((cm.metadata->>'ordered')::boolean, false)
+        into quote_amount, quote_valid_until, quote_proof_id, quote_ordered
       from public.chat_messages cm
       join public.chat_conversations cc on cc.id = cm.conversation_id
       where cm.id = source_message_id
         and cm.message_type = 'quote'
         and cm.sender_role = 'BUSINESS_OWNER'
+        and cm.metadata->>'service_id' = service_row.id::text
         and cc.business_id = p_business_id
-        and cc.customer_id = customer;
+        and cc.customer_id = customer
+      for update of cm;
       if quote_amount is null or quote_amount < 0 then
         raise exception 'The quote is unavailable or no longer valid';
       end if;
+      if quote_valid_until is not null and quote_valid_until < now() then
+        raise exception 'The quotation has expired';
+      end if;
+      if quote_ordered then
+        raise exception 'This quotation has already been used for an order';
+      end if;
+      if quantity <> 1 then
+        raise exception 'A quoted custom job must be checked out as one quoted package';
+      end if;
+      if quote_proof_id is not null then
+        select dp.status, dp.is_locked
+          into quote_proof_status, quote_proof_locked
+        from public.design_proofs dp
+        where dp.id = quote_proof_id
+          and dp.conversation_id = (select conversation_id from public.chat_messages where id = source_message_id);
+        if quote_proof_status is distinct from 'APPROVED' or coalesce(quote_proof_locked, false) is not true then
+          raise exception 'The final design proof and cost must be locked before checkout';
+        end if;
+      end if;
       unit_price := quote_amount;
+      quoted_message_ids := array_append(quoted_message_ids, source_message_id);
     else
       unit_price := coalesce(service_row.price, 0) + modifier;
     end if;
@@ -191,6 +243,15 @@ begin
     'Production starts after customization approval, final proof approval, and required payment confirmation.',
     0, 0, downpayment, balance
   ) returning id into new_order_id;
+
+  if cardinality(quoted_message_ids) > 0 then
+    update public.chat_messages
+    set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+      'ordered', true,
+      'orderId', new_order_id
+    )
+    where id = any(quoted_message_ids);
+  end if;
 
   return new_order_id;
 end;

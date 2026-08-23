@@ -22,6 +22,7 @@ CHECK (status IN (
   'PREPARING',
   'READY_TO_PICK_UP',
   'RIDER_ON_THE_WAY',
+  'DELIVERY_COMPLETED',
   'COMPLETED',
   'CANCELLED',
   'REFUND_PENDING',
@@ -33,7 +34,7 @@ ALTER TABLE public.orders ALTER COLUMN status SET DEFAULT 'PENDING';
 
 UPDATE public.orders
 SET fully_paid = true, balance_amount = 0
-WHERE status = 'COMPLETED' AND fully_paid IS DISTINCT FROM true;
+WHERE status IN ('COMPLETED', 'DELIVERY_COMPLETED') AND fully_paid IS DISTINCT FROM true;
 
 DROP POLICY IF EXISTS "Customers can update cancellation and refund fields on own orders" ON public.orders;
 CREATE POLICY "Customers can update cancellation and refund fields on own orders"

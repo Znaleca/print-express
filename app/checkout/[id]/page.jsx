@@ -10,7 +10,13 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { normalizePhilippinePhone } from "@/lib/phone";
-import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
+import {
+  getUploadExtension,
+  PRIVATE_ASSETS_BUCKET,
+  optimizeImageForUpload,
+  resolveStorageUrl,
+  toStorageRef,
+} from "@/lib/imageUpload";
 
 const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker"), {
   ssr: false,
@@ -23,6 +29,19 @@ const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker")
 
 const MANILA_TIME_ZONE = "Asia/Manila";
 
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    if (!response.ok) throw new Error(`Geocoding request failed with status ${response.status}`);
+    return response.json();
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
 function getDesignFiles(item) {
   if (Array.isArray(item?.designFiles) && item.designFiles.length > 0) return item.designFiles;
   if (item?.designUrl) return [{ url: item.designUrl, name: item.designFileName || "Design file" }];
@@ -31,7 +50,7 @@ function getDesignFiles(item) {
 
 function getCartGroups(items) {
   return [
-    { key: "services", label: "Services", items: items.filter((item) => item.item_type !== "product") },
+    { key: "quotes", label: "Accepted service quotes", items: items.filter((item) => item.item_type !== "product" && item.isQuotedCheckout) },
     { key: "products", label: "Products", items: items.filter((item) => item.item_type === "product") },
   ].filter((group) => group.items.length > 0);
 }
@@ -126,17 +145,17 @@ export default function CheckoutPage({ params }) {
   }, [businessId]);
 
   const fetchInitialData = async () => {
+    let receiptStoragePath = null;
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setUserId(user.id);
-        const metadataRole = String(user.user_metadata?.role || "").toUpperCase();
         const { data: profile } = await supabase
           .from("profiles")
           .select("phone, role")
           .eq("id", user.id)
           .maybeSingle();
-        setIsCustomer(metadataRole === "CUSTOMER" || String(profile?.role || "").toUpperCase() === "CUSTOMER");
+        setIsCustomer(String(profile?.role || "").toUpperCase() === "CUSTOMER");
         setCustomerPhone(profile?.phone || user.user_metadata?.phone || "");
       }
 
@@ -150,7 +169,8 @@ export default function CheckoutPage({ params }) {
             price,
             image_url,
             stock_qty,
-            available
+            available,
+            item_type
           )
         `)
         .eq("id", businessId)
@@ -184,7 +204,7 @@ export default function CheckoutPage({ params }) {
             designUrl: merged.designUrl || merged.design_url || merged.designFiles?.[0]?.url || null,
             designFileName: merged.designFileName || merged.design_file_name || merged.designFiles?.[0]?.name || null,
           };
-        }));
+        }).filter((item) => item.item_type === "product" || item.isQuotedCheckout === true));
       }
 
     } catch (error) {
@@ -233,8 +253,10 @@ export default function CheckoutPage({ params }) {
           lng = decoded.longitudeCenter;
         } else if (olc.isShort(potentialCode) && parts.length > 1) {
           const referenceLoc = addressToSearch.replace(potentialCode, "").trim();
-          const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(referenceLoc)}`, { headers: { 'User-Agent': 'print-app-v1' }});
-          const data = await res.json();
+          const data = await fetchJsonWithTimeout(
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(referenceLoc)}`,
+            { headers: { "User-Agent": "print-app-v1" } }
+          );
 
           if (data && data.length > 0) {
             const refLat = Number.parseFloat(data[0].lat);
@@ -248,8 +270,10 @@ export default function CheckoutPage({ params }) {
       }
 
       if (!lat || !lng) {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressToSearch)}`, { headers: { 'User-Agent': 'print-app-v1' }});
-        const data = await res.json();
+        const data = await fetchJsonWithTimeout(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressToSearch)}`,
+          { headers: { "User-Agent": "print-app-v1" } }
+        );
         if (data && data.length > 0) {
           lat = Number.parseFloat(data[0].lat);
           lng = Number.parseFloat(data[0].lon);
@@ -273,8 +297,10 @@ export default function CheckoutPage({ params }) {
   const reverseGeocode = async (lat, lng) => {
     setDeliveryLocationLoading(true);
     try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
-      const data = await res.json();
+      const data = await fetchJsonWithTimeout(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+        { headers: { "User-Agent": "print-app-v1" } }
+      );
       if (data && data.display_name) {
         setDeliveryAddress(data.display_name);
       }
@@ -317,7 +343,10 @@ export default function CheckoutPage({ params }) {
     if (deliveryType === "DELIVERY" && !deliveryAddress) return rejectOrder("Add a delivery address before placing your order.");
     if (fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt) return rejectOrder("Choose the date and time for your scheduled order.");
     if (selectedServices.length === 0) return rejectOrder("Your cart is empty. Add a product or service first.");
-    if (!receiptFile) return rejectOrder("Upload your payment proof before placing the order.");
+    const effectiveDownpaymentPercent = userSelectedDownpaymentPercent !== null ? userSelectedDownpaymentPercent : minimumDownpaymentPercent;
+    if (effectiveDownpaymentPercent > 0 && !receiptFile) {
+      return rejectOrder("Upload payment proof for the required downpayment before placing your order.");
+    }
 
     setIsProcessing(true);
     setCheckoutMessage(null);
@@ -349,18 +378,17 @@ export default function CheckoutPage({ params }) {
         const optimizedReceipt = await optimizeImageForUpload(receiptFile);
         const fileExt = getUploadExtension(optimizedReceipt);
         const filePath = `receipts/${userId}/${Date.now()}.${fileExt}`;
+        receiptStoragePath = filePath;
         const { error: uploadError } = await supabase.storage
-          .from(IMAGE_BUCKET)
+          .from(PRIVATE_ASSETS_BUCKET)
           .upload(filePath, optimizedReceipt, {
             cacheControl: "31536000",
             contentType: optimizedReceipt.type,
           });
         if (uploadError) throw new Error("Failed to upload payment proof: " + uploadError.message);
-        const { data: { publicUrl } } = supabase.storage.from(IMAGE_BUCKET).getPublicUrl(filePath);
-        receiptUrl = publicUrl;
+        receiptUrl = toStorageRef(PRIVATE_ASSETS_BUCKET, filePath);
       }
 
-      const effectiveDownpaymentPercent = userSelectedDownpaymentPercent !== null ? userSelectedDownpaymentPercent : minimumDownpaymentPercent;
       const normalizedPhone = normalizePhilippinePhone(customerPhone);
       if (!normalizedPhone) {
         throw new Error("Enter a valid Philippine mobile number for SMS updates. Example: 09171234567 or +639171234567.");
@@ -419,11 +447,21 @@ export default function CheckoutPage({ params }) {
       router.push(`/track`);
 
     } catch (error) {
+      if (receiptStoragePath) {
+        await supabase.storage.from(PRIVATE_ASSETS_BUCKET).remove([receiptStoragePath]);
+      }
       console.error("Checkout execution error:", error);
       setCheckoutMessage({ type: "error", text: error.message || "Failed to place the order. Please try again." });
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const openDesignFiles = async (files) => {
+    const resolvedFiles = await Promise.all(
+      files.map(async (file) => ({ ...file, url: await resolveStorageUrl(file.url) }))
+    );
+    setDesignFilesToView(resolvedFiles.filter((file) => file.url));
   };
 
   if (loading) {
@@ -463,7 +501,7 @@ export default function CheckoutPage({ params }) {
     Boolean(normalizePhilippinePhone(customerPhone)) &&
     !(deliveryType === "DELIVERY" && !deliveryAddress) &&
     !(fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt) &&
-    !!receiptFile;
+    effectiveDownpaymentPercent === 0 || !!receiptFile;
 
   const minAdvanceDateTime = manilaStartOfTomorrow();
 
@@ -596,8 +634,8 @@ export default function CheckoutPage({ params }) {
                 <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-3">
                   <span className="w-6 h-6 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">0</span>
                   <div>
-                    <h2 className="font-bold text-sm text-slate-900">Review Customization & Cost Estimate</h2>
-                    <p className="text-[11px] text-slate-500">Ordering starts after your size, material, quality, and quantity estimate is confirmed.</p>
+                    <h2 className="font-bold text-sm text-slate-900">Review products &amp; accepted quotes</h2>
+                    <p className="text-[11px] text-slate-500">Products use catalog prices. Custom services use the formal quotation sent by the shop.</p>
                   </div>
                 </div>
                 <div className="p-6 space-y-3">
@@ -611,8 +649,8 @@ export default function CheckoutPage({ params }) {
                             <p className="font-bold text-slate-900">{s.name}</p>
                             <p className="mt-1 text-[11px] text-slate-500">
                               {s.item_type === "product"
-                                ? "Ready-made product — no customization required."
-                                : `Baseline: ${s.selected_specs?.size || "Default size"} / ${s.selected_specs?.material || "Default material"} / ${s.selected_specs?.quality || "Standard quality"}`}
+                                ? "Ready-made product — direct catalog checkout."
+                                : `Seller quotation · requested quantity ${s.selected_specs?.requested_quantity || 1}${s.selected_specs?.size ? ` · ${s.selected_specs.size}` : ""}`}
                             </p>
                           </div>
                           <div className="text-right">
@@ -621,14 +659,14 @@ export default function CheckoutPage({ params }) {
                           </div>
                         </div>
                         <div className="mt-3 flex justify-between border-t border-slate-200 pt-2 font-bold text-slate-900">
-                          <span>Estimated line total</span>
+                          <span>{s.isQuotedCheckout ? "Quoted total" : "Line total"}</span>
                           <span>PHP {(unit * qty).toFixed(2)}</span>
                         </div>
                         {s.selected_specs?.notes && <p className="mt-2 text-[11px] italic text-amber-700">Order notes: {s.selected_specs.notes}</p>}
                         {getDesignFiles(s).length > 0 && (
                           <button
                             type="button"
-                            onClick={() => setDesignFilesToView(getDesignFiles(s))}
+                            onClick={() => openDesignFiles(getDesignFiles(s))}
                             className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#009FA0] hover:text-[#EC008C]"
                           >
                             <FileText size={13} /> View files ({getDesignFiles(s).length})
@@ -656,7 +694,7 @@ export default function CheckoutPage({ params }) {
                       placeholder="e.g. 09XXXXXXXXX or +639XXXXXXXXX"
                       className="w-full border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-medium rounded-xl outline-none focus:ring-2 focus:ring-[#00FFFF]"
                     />
-                        <p className="mt-1 text-[11px] text-slate-500">SMS updates are sent when your order is placed, ready for pickup or out for delivery, completed, or cancelled.</p>
+                        <p className="mt-1 text-[11px] text-slate-500">If SMS is configured, updates are sent when the shop places, prepares, readies, delivers, completes, or cancels your order.</p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -798,7 +836,9 @@ export default function CheckoutPage({ params }) {
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-3">
                   <span className="w-6 h-6 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">4</span>
-                  <h2 className="font-bold text-sm text-slate-900">Upload Payment Proof</h2>
+                  <h2 className="font-bold text-sm text-slate-900">
+                    Upload Payment Proof{effectiveDownpaymentPercent === 0 ? " (Optional)" : ""}
+                  </h2>
                 </div>
 
                 <div className="p-6 space-y-4">
@@ -902,13 +942,14 @@ export default function CheckoutPage({ params }) {
                             {s.selected_specs.size && <div>• Size: <span className="font-semibold text-slate-800">{s.selected_specs.size}</span></div>}
                             {s.selected_specs.material && <div>• Material: <span className="font-semibold text-slate-800">{s.selected_specs.material}</span></div>}
                             {s.selected_specs.quality && <div>• Quality: <span className="font-semibold text-slate-800">{s.selected_specs.quality}</span></div>}
+                            {s.selected_specs.requested_quantity && <div>• Requested quantity: <span className="font-semibold text-slate-800">{s.selected_specs.requested_quantity}</span></div>}
                             {s.selected_specs.notes && <div className="text-amber-800 italic">"Notes: {s.selected_specs.notes}"</div>}
                           </div>
                         )}
                         {getDesignFiles(s).length > 0 && (
                           <button
                             type="button"
-                            onClick={() => setDesignFilesToView(getDesignFiles(s))}
+                            onClick={() => openDesignFiles(getDesignFiles(s))}
                             className="mt-1 inline-flex items-center gap-1.5 text-[10px] font-semibold text-[#009FA0] hover:text-[#EC008C]"
                           >
                             <FileText size={13} /> View files ({getDesignFiles(s).length})
@@ -973,7 +1014,7 @@ export default function CheckoutPage({ params }) {
 
                   {!isReadyToExecute && (
                     <p className="text-[11px] text-slate-400 text-center mt-2">
-                      Please complete all required fields and upload payment proof to submit order.
+                      Please complete all required fields{effectiveDownpaymentPercent > 0 ? " and upload payment proof" : ""} to submit order.
                     </p>
                   )}
                 </div>

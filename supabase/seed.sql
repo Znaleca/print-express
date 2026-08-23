@@ -1,0 +1,3 @@
+-- Press & Present intentionally has no demo or fake seed data.
+-- Keep this file present so `supabase db reset` has a valid configured seed
+-- path while real production records remain outside source control.

@@ -4,11 +4,11 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import OwnerSidebar from "@/components/owner/OwnerSidebar";
-import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
+import { getUploadExtension, PRIVATE_ASSETS_BUCKET, optimizeImageForUpload, toStorageRef } from "@/lib/imageUpload";
 import {
   ShieldAlert, ShieldCheck, Loader2, Construction, Activity,
   CheckCircle, XCircle, Clock, Upload, AlertCircle,
-  RefreshCcw, FileText, Hash, Trash2, Pencil, X, Lock
+  RefreshCcw, FileText, Hash, Trash2, Pencil, X, Lock, Menu
 } from "lucide-react";
 
 const REQUIRED_DOCS = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID"];
@@ -36,6 +36,14 @@ export default function OwnerLayout({ children }) {
   const [ownerDisplayName, setOwnerDisplayName] = useState("");
   const [ownerEmail, setOwnerEmail] = useState("");
   const [signingOut, setSigningOut] = useState(false);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 767px)");
+    const syncSidebar = () => setSidebarOpen(!mediaQuery.matches);
+    syncSidebar();
+    mediaQuery.addEventListener?.("change", syncSidebar);
+    return () => mediaQuery.removeEventListener?.("change", syncSidebar);
+  }, []);
 
   // Re-upload state per doc
   const [reuploadFiles, setReuploadFiles]       = useState({});
@@ -123,7 +131,8 @@ export default function OwnerLayout({ children }) {
       const { data: convRows } = await supabase
         .from("chat_conversations")
         .select("id")
-        .eq("business_id", businessId);
+        .eq("business_id", businessId)
+        .range(0, 99);
       const convIds = (convRows || []).map(c => c.id);
 
       if (convIds.length > 0) {
@@ -141,27 +150,36 @@ export default function OwnerLayout({ children }) {
     };
 
     fetchCounts();
+    let countTimer = null;
+    const scheduleFetchCounts = () => {
+      window.clearTimeout(countTimer);
+      countTimer = window.setTimeout(fetchCounts, 250);
+    };
 
     // Subscribe to realtime changes for live badge updates
     const channel = supabase.channel(`owner_layout_badges:${businessId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `business_id=eq.${businessId}` }, () => {
-        fetchCounts();
+        scheduleFetchCounts();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_conversations', filter: `business_id=eq.${businessId}` }, () => {
         // The chat schema updates the conversation timestamp for each new
         // message, so this business-scoped channel avoids listening to every
         // message in the entire marketplace.
-        fetchCounts();
+        scheduleFetchCounts();
       })
       .subscribe();
 
     return () => {
+      window.clearTimeout(countTimer);
       supabase.removeChannel(channel);
     };
   }, [businessId, userId]);
 
   // URL protection: instead of redirecting, we will show a watermark overlay
-  const ALLOWED_UNVERIFIED = ["/owner", "/owner/documents"];
+  // The verification page is the only owner route available before approval.
+  // The dashboard must remain behind the gate even when the business record
+  // has not yet received all required documents.
+  const ALLOWED_UNVERIFIED = ["/owner/documents"];
   const isLockedPage = state === "unverified" && !ALLOWED_UNVERIFIED.includes(pathname);
 
   useEffect(() => {
@@ -191,8 +209,8 @@ export default function OwnerLayout({ children }) {
       const file = reuploadFiles[docTypeStr];
       const uploadFile = file.type?.startsWith("image/") ? await optimizeImageForUpload(file) : file;
       const ext  = uploadFile.type?.startsWith("image/") ? getUploadExtension(uploadFile) : uploadFile.name.split(".").pop();
-      const path = `${userId}/${docTypeStr}-${Date.now()}.${ext}`;
-      const uploadBucket = uploadFile.type?.startsWith("image/") ? IMAGE_BUCKET : "business-documents";
+      const path = `documents/${userId}/${docTypeStr}-${Date.now()}.${ext}`;
+      const uploadBucket = PRIVATE_ASSETS_BUCKET;
       const { error: upErr } = await supabase.storage
         .from(uploadBucket)
         .upload(path, uploadFile, {
@@ -201,8 +219,7 @@ export default function OwnerLayout({ children }) {
           contentType: uploadFile.type,
         });
       if (upErr) throw upErr;
-      const { data: { publicUrl } } = supabase.storage.from(uploadBucket).getPublicUrl(path);
-      payload.file_url = publicUrl;
+      payload.file_url = toStorageRef(uploadBucket, path);
 
       if (doc?.id) {
         const { error: updateErr } = await supabase.from("business_documents").update(payload).eq("id", doc.id);
@@ -244,9 +261,13 @@ export default function OwnerLayout({ children }) {
 
     try {
       if (doc.file_url) {
+        const storageRefMatch = doc.file_url.match(/^(private-assets|chat-images|business-documents|image-assets):(.+)$/i);
+        if (storageRefMatch) {
+          await supabase.storage.from(storageRefMatch[1]).remove([storageRefMatch[2]]);
+        }
         const marker = "/storage/v1/object/public/business-documents/";
         const idx = doc.file_url.indexOf(marker);
-        if (idx !== -1) {
+        if (idx !== -1 && !storageRefMatch) {
           const filePath = decodeURIComponent(doc.file_url.slice(idx + marker.length));
           await supabase.storage.from("business-documents").remove([filePath]);
         }
@@ -666,7 +687,15 @@ export default function OwnerLayout({ children }) {
 
   /* ── PORTAL (all verified and unverified owners) ── */
   return (
-    <div className="flex h-screen overflow-hidden bg-[#1A1A1A]">
+    <div className="relative flex h-screen overflow-hidden bg-[#1A1A1A]">
+      {sidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close owner sidebar"
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 z-40 bg-black/55 md:hidden"
+        />
+      )}
       <OwnerSidebar
         businessName={businessName}
         ownerDisplayName={ownerDisplayName}
@@ -679,7 +708,15 @@ export default function OwnerLayout({ children }) {
         pendingOrders={pendingOrders}
         unreadMessages={unreadMessages}
       />
-      <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-[#F6F6F2]">
+      <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-[#F6F6F2] pt-14 md:pt-0">
+        <button
+          type="button"
+          aria-label="Open owner sidebar"
+          onClick={() => setSidebarOpen(true)}
+          className="fixed left-4 top-4 z-30 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[#1A1A1A] text-[#00FFFF] shadow-lg md:hidden"
+        >
+          <Menu size={20} />
+        </button>
         <div className="min-h-full w-full relative">
           {isLockedPage ? (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#1A1A1A]/90 p-6 backdrop-blur-sm">

@@ -5,12 +5,20 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { supabase } from "@/lib/supabaseClient";
-import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
+import {
+  CHAT_IMAGES_BUCKET,
+  getUploadExtension,
+  optimizeImageForUpload,
+  resolveStorageUrl,
+  toStorageRef,
+} from "@/lib/imageUpload";
 import {
   UploadCloud, CheckCircle2, CreditCard,
   FileText, Star, MapPin, Loader2, ArrowRight,
   ChevronRight, Info, AlertTriangle, MessageSquare, Package, Minus, Plus, Clock, X, Power, ShieldCheck
 } from "lucide-react";
+import { getRatingStats, ratingLabel } from "@/lib/rating";
+import { getCategoryOptionConfig, normalizeConfiguredOptions } from "@/lib/serviceOptions";
 
 const MAX_DESIGN_FILES = 5;
 const MAX_DESIGN_FILE_BYTES = 10 * 1024 * 1024;
@@ -24,7 +32,7 @@ function getDesignFiles(item) {
 
 function getCartGroups(items) {
   return [
-    { key: "services", label: "Services", items: items.filter((item) => item.item_type !== "product") },
+    { key: "quotes", label: "Accepted service quotes", items: items.filter((item) => item.item_type !== "product" && item.isQuotedCheckout) },
     { key: "products", label: "Products", items: items.filter((item) => item.item_type === "product") },
   ].filter((group) => group.items.length > 0);
 }
@@ -33,13 +41,116 @@ function getCartItemKey(item) {
   return item.cart_item_id || `${item.id}${JSON.stringify(item.selected_specs || {})}`;
 }
 
+function parseSpecs(value) {
+  if (!value) return {};
+  if (typeof value === "object") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
+function mergePricingRulesIntoService(service, rules = []) {
+  const storedSpecs = parseSpecs(service.specs_json);
+  const ruleSpecs = {
+    allowed_sizes: [],
+    allowed_materials: [],
+    quality_levels: [],
+    price_modifiers: {},
+  };
+
+  rules.forEach((rule) => {
+    if (rule.option_type === "SIZE") ruleSpecs.allowed_sizes.push(rule.option_name);
+    if (rule.option_type === "MATERIAL") ruleSpecs.allowed_materials.push(rule.option_name);
+    if (rule.option_type === "QUALITY") ruleSpecs.quality_levels.push(rule.option_name);
+    if (rule.option_name) ruleSpecs.price_modifiers[rule.option_name] = Number(rule.price_modifier || 0);
+  });
+
+  const optionConfig = getCategoryOptionConfig(getServiceOptionKey(service));
+  const hasConfiguredOptions = service.item_type !== "product"
+    || rules.length > 0
+    || storedSpecs.allowed_materials?.length > 0
+    || storedSpecs.quality_levels?.length > 0;
+  const allowedMaterials = hasConfiguredOptions
+    ? normalizeConfiguredOptions(
+      storedSpecs.allowed_materials?.length ? storedSpecs.allowed_materials : ruleSpecs.allowed_materials,
+      optionConfig,
+      "materials",
+    )
+    : [];
+  const qualityLevels = hasConfiguredOptions
+    ? normalizeConfiguredOptions(
+      storedSpecs.quality_levels?.length ? storedSpecs.quality_levels : ruleSpecs.quality_levels,
+      optionConfig,
+      "qualities",
+    )
+    : [];
+  const selectedOptionNames = new Set([
+    ...(storedSpecs.allowed_sizes || []),
+    ...allowedMaterials,
+    ...qualityLevels,
+  ]);
+  const priceModifiers = Object.fromEntries(
+    Object.entries({ ...ruleSpecs.price_modifiers, ...(storedSpecs.price_modifiers || {}) })
+      .filter(([optionName]) => selectedOptionNames.has(optionName)),
+  );
+
+  return {
+    ...service,
+    specs_json: {
+      ...storedSpecs,
+      allowed_sizes: storedSpecs.allowed_sizes?.length ? storedSpecs.allowed_sizes : ruleSpecs.allowed_sizes,
+      allowed_materials: allowedMaterials,
+      quality_levels: qualityLevels,
+      price_modifiers: priceModifiers,
+      default_material: allowedMaterials.includes(storedSpecs.default_material) ? storedSpecs.default_material : (allowedMaterials[0] || null),
+      default_quality: qualityLevels.includes(storedSpecs.default_quality) ? storedSpecs.default_quality : (qualityLevels[0] || null),
+      size_chart: Array.isArray(storedSpecs.size_chart) ? storedSpecs.size_chart : [],
+    },
+  };
+}
+
+const DEFAULT_CLOTHING_SIZE_CHART = [
+  { size: "XS", chest_width: "42–45 cm", body_length: "65–68 cm", fits_chest: "80–85 cm", price_modifier: 0 },
+  { size: "S", chest_width: "45–48 cm", body_length: "68–71 cm", fits_chest: "86–91 cm", price_modifier: 0 },
+  { size: "M", chest_width: "50–53 cm", body_length: "71–74 cm", fits_chest: "96–101 cm", price_modifier: 0 },
+  { size: "L", chest_width: "55–58 cm", body_length: "74–77 cm", fits_chest: "106–111 cm", price_modifier: 0 },
+  { size: "XL", chest_width: "60–63 cm", body_length: "77–80 cm", fits_chest: "116–121 cm", price_modifier: 0 },
+  { size: "XXL", chest_width: "65–68 cm", body_length: "80–83 cm", fits_chest: "126–131 cm", price_modifier: 20 },
+  { size: "XXXL", chest_width: "70–73 cm", body_length: "83–86 cm", fits_chest: "136–141 cm", price_modifier: 20 },
+];
+
+function getServiceOptionKey(service) {
+  const text = `${service.category || ""} ${service.name || ""}`;
+  if (/(?:t[\s-]?shirt|tee|polo|shirt|cloth|clothing|textile|fabric|apparel|screen printing)/i.test(text)) return "apparel";
+  if (/(?:tarpaulin|banner|large format)/i.test(text)) return "tarpaulin";
+  if (/poster/i.test(text)) return "poster";
+  if (/(?:mug|tumbler)/i.test(text)) return "mug";
+  if (/(?:sticker|label)/i.test(text)) return "sticker";
+  if (/(?:business card)/i.test(text)) return "business-card";
+  if (/(?:id card|identification card)/i.test(text)) return "id-card";
+  if (/(?:photo|photocopy|passport)/i.test(text)) return "photo";
+  return "paper";
+}
+
+function getVisibleSizeChart(specs, service) {
+  const allowedSizes = Array.isArray(specs.allowed_sizes) ? specs.allowed_sizes : [];
+  const storedChart = Array.isArray(specs.size_chart) ? specs.size_chart : [];
+  const isClothing = getServiceOptionKey(service) === "apparel";
+  const chart = storedChart.length > 0
+    ? storedChart
+    : (isClothing && allowedSizes.length > 0 ? DEFAULT_CLOTHING_SIZE_CHART : []);
+
+  return allowedSizes.length > 0 ? chart.filter((row) => allowedSizes.includes(row.size)) : chart;
+}
+
 export default function BusinessDetailsPage({ params }) {
   const { id } = use(params);
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const checkoutServiceId = searchParams.get("checkout_service");
-  const quoteAmount = searchParams.get("quote");
   const quoteId = searchParams.get("quote_id");
   const designUrl = searchParams.get("design_url");
   const designVersion = searchParams.get("design_version");
@@ -63,7 +174,6 @@ export default function BusinessDetailsPage({ params }) {
 
   const [previewImage, setPreviewImage] = useState(null);
   const [quantityInput, setQuantityInput] = useState("1");
-  const [inquiryModalService, setInquiryModalService] = useState(null);
   
   // Printing Specs Customizer Modal State
   const [specModalItem, setSpecModalItem] = useState(null);
@@ -78,7 +188,7 @@ export default function BusinessDetailsPage({ params }) {
 
   const openSpecCustomizer = (svc) => {
     setSpecModalItem(svc);
-    const specs = svc.specs_json || {};
+    const specs = parseSpecs(svc.specs_json);
     const defaultSz = specs.default_size || (specs.allowed_sizes && specs.allowed_sizes[0]) || "";
     const defaultMat = specs.default_material || (specs.allowed_materials && specs.allowed_materials[0]) || "";
     const defaultQual = specs.default_quality || (specs.quality_levels && specs.quality_levels[0]) || "";
@@ -98,8 +208,13 @@ export default function BusinessDetailsPage({ params }) {
     async function init() {
       const { data: { user } } = await supabase.auth.getUser();
       setUser(user);
-      if (user && user.user_metadata?.role === "CUSTOMER") {
-        setIsCustomer(true);
+      if (user) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", user.id)
+          .maybeSingle();
+        setIsCustomer(profile?.role === "CUSTOMER");
       }
 
       if (id) {
@@ -114,7 +229,23 @@ export default function BusinessDetailsPage({ params }) {
           .single();
 
         if (!error && data) {
-          data.services = (data.services || []).filter(s => s.available);
+          const serviceIds = (data.services || []).map((service) => service.id);
+          const { data: pricingRules } = serviceIds.length > 0
+            ? await supabase
+              .from("service_pricing_rules")
+              .select("service_id, option_type, option_name, price_modifier")
+              .eq("business_id", id)
+              .in("service_id", serviceIds)
+            : { data: [] };
+          const rulesByService = {};
+          (pricingRules || []).forEach((rule) => {
+            if (!rulesByService[rule.service_id]) rulesByService[rule.service_id] = [];
+            rulesByService[rule.service_id].push(rule);
+          });
+
+          data.services = (data.services || [])
+            .filter((service) => service.available)
+            .map((service) => mergePricingRulesIntoService(service, rulesByService[service.id] || []));
 
           // Keep the business query small and avoid relying on a nested view
           // relationship, which can fail when the view is recreated in Supabase.
@@ -122,13 +253,14 @@ export default function BusinessDetailsPage({ params }) {
             .from("business_reviews")
             .select("order_id, rating, feedback, created_at, customer_name, item_name")
             .eq("business_id", id)
-            .order("created_at", { ascending: false });
+            .order("created_at", { ascending: false })
+            .range(0, 999);
           const allReviews = reviewRows || [];
           const visibleReviews = allReviews.filter(r => !!r.feedback);
-          data.reviewCount = visibleReviews.length;
-          data.ratingAvg = data.reviewCount > 0 
-            ? (visibleReviews.reduce((sum, r) => sum + r.rating, 0) / data.reviewCount).toFixed(1)
-            : "5.0";
+          const ratingStats = getRatingStats(allReviews);
+          data.reviewCount = ratingStats.count;
+          data.ratingAvg = ratingStats.average;
+          data.writtenReviewCount = visibleReviews.length;
           data.reviews = visibleReviews.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
 
           // Compute best seller ranking
@@ -172,19 +304,38 @@ export default function BusinessDetailsPage({ params }) {
               designUrl: merged.designUrl || merged.design_url || merged.designFiles?.[0]?.url || null,
               designFileName: merged.designFileName || merged.design_file_name || merged.designFiles?.[0]?.name || null,
             };
-          });
+          }).filter((item) => item.item_type === "product" || item.isQuotedCheckout === true);
 
-          if (checkoutServiceId) {
+          if (checkoutServiceId && quoteId && user) {
             const svc = data.services.find(s => s.id === checkoutServiceId);
-            if (svc && quoteAmount) {
-              const exists = existingCart.some(item => item.id === svc.id && item.isQuotedCheckout && item.price === quoteAmount && item.sourceMessageId === quoteId);
+            const { data: quoteMessage } = await supabase
+              .from("chat_messages")
+              .select("id, message_type, sender_role, metadata")
+              .eq("id", quoteId)
+              .maybeSingle();
+            const quoteMetadata = quoteMessage?.metadata || {};
+            const verifiedQuoteAmount = Number(quoteMetadata.total_cost ?? quoteMetadata.quote_amount);
+            const quoteIsValid = quoteMessage?.message_type === "quote"
+              && quoteMessage?.sender_role === "BUSINESS_OWNER"
+              && quoteMetadata.service_id === checkoutServiceId
+              && Number.isFinite(verifiedQuoteAmount)
+              && verifiedQuoteAmount >= 0
+              && quoteMetadata.ordered !== true
+              && (!quoteMetadata.valid_until || new Date(quoteMetadata.valid_until) >= new Date());
+
+            if (svc && quoteIsValid) {
+              const exists = existingCart.some(item => item.id === svc.id && item.isQuotedCheckout && item.sourceMessageId === quoteId);
               if (!exists) {
                 existingCart.push({ 
                   ...svc, 
                   quantity: 1, 
-                  price: quoteId ? quoteAmount : svc.price,
-                  isQuotedCheckout: Boolean(quoteId),
+                  price: verifiedQuoteAmount,
+                  isQuotedCheckout: true,
                   sourceMessageId: quoteId,
+                  selected_specs: {
+                    ...(quoteMetadata.selected_specs || {}),
+                    requested_quantity: Number(quoteMetadata.requested_quantity || 1),
+                  },
                   designUrl: designUrl,
                   designVersion: designVersion
                 });
@@ -208,7 +359,7 @@ export default function BusinessDetailsPage({ params }) {
       setLoading(false);
     }
     init();
-  }, [id, checkoutServiceId, quoteAmount, quoteId, designUrl, designVersion]);
+  }, [id, checkoutServiceId, quoteId, designUrl, designVersion]);
 
   const cartItemCount = useMemo(
     () => selectedServices.reduce((total, item) => total + (Number(item.quantity) || 0), 0),
@@ -284,7 +435,7 @@ export default function BusinessDetailsPage({ params }) {
     if (!specModalItem || designUploading) return;
 
     const isProduct = specModalItem.item_type === "product";
-    const requiresDesignUpload = !isProduct;
+    const requiresDesignUpload = !isProduct && specModalItem.is_customizable !== false;
     if (requiresDesignUpload && designFiles.length === 0) {
       setDesignUploadError("Upload your design file before adding this custom service.");
       return;
@@ -298,106 +449,178 @@ export default function BusinessDetailsPage({ params }) {
     setDesignUploading(true);
     setDesignUploadError("");
 
+    const uploadedPaths = [];
     try {
-      const uploadedDesigns = [];
-
-      for (const [fileIndex, designFile] of designFiles.entries()) {
-        const isImage = designFile.type?.startsWith("image/");
-        const uploadFile = isImage
-          ? await optimizeImageForUpload(designFile, { maxBytes: MAX_DESIGN_IMAGE_BYTES })
-          : designFile;
-        const maxBytes = isImage ? MAX_DESIGN_IMAGE_BYTES : MAX_DESIGN_FILE_BYTES;
-        if (uploadFile.size > maxBytes) {
-          throw new Error(isImage
-            ? `${designFile.name} is still larger than 5 MB after compression.`
-            : `${designFile.name} is larger than 10 MB.`);
-        }
-
-        const rawExtension = isImage
-          ? getUploadExtension(uploadFile)
-          : (designFile.name.split(".").pop()?.toLowerCase() || "bin");
-        const extension = rawExtension.replace(/[^a-z0-9]/g, "").slice(0, 10) || "bin";
-        const storageBucket = isImage ? IMAGE_BUCKET : "chat-images";
-        const filePath = `designs/${user.id}/${specModalItem.id}-${Date.now()}-${fileIndex}.${extension}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from(storageBucket)
-          .upload(filePath, uploadFile, {
-            upsert: false,
-            cacheControl: "31536000",
-            contentType: uploadFile.type || "application/octet-stream",
-          });
-
-        if (uploadError) throw new Error(`Could not upload ${designFile.name}: ${uploadError.message}`);
-
-        const { data: publicData } = supabase.storage.from(storageBucket).getPublicUrl(filePath);
-        if (!publicData?.publicUrl) throw new Error(`The file ${designFile.name} uploaded but could not be linked to the order.`);
-
-        uploadedDesigns.push({
-          url: publicData.publicUrl,
-          name: designFile.name,
-          type: uploadFile.type || designFile.type || "application/octet-stream",
-          size: uploadFile.size,
-        });
-      }
-
       const specs = specModalItem.specs_json || {};
+      const optionConfig = getCategoryOptionConfig(getServiceOptionKey(specModalItem));
       const modifiers = specs.price_modifiers || {};
       const basePrice = Number(specModalItem.price || 0);
-      const sizeAddon = isProduct ? 0 : Number(modifiers[selectedSize] || 0);
-      const materialAddon = isProduct ? 0 : Number(modifiers[selectedMaterial] || 0);
-      const qualityAddon = isProduct ? 0 : Number(modifiers[selectedQuality] || 0);
+      const sizeAddon = Number(modifiers[selectedSize] || 0);
+      const materialAddon = Number(modifiers[selectedMaterial] || 0);
+      const qualityAddon = Number(modifiers[selectedQuality] || 0);
       const unitPrice = basePrice + sizeAddon + materialAddon + qualityAddon;
       const requestedQty = Math.max(1, parseInt(quantityInput, 10) || 1);
       const stockLimit = isProduct ? Math.max(1, Number(specModalItem.stock_qty || 0)) : Infinity;
       const qty = Math.min(stockLimit, requestedQty);
       const noteValue = customNotes.trim() || null;
-      const selectedSpecs = isProduct
-        ? (noteValue ? { notes: noteValue } : null)
-        : {
-            size: selectedSize || null,
-            material: selectedMaterial || null,
-            quality: selectedQuality || null,
-            notes: noteValue,
-          };
+      const selectedSpecs = Object.fromEntries(
+        Object.entries({
+          size: selectedSize || null,
+          material: selectedMaterial || null,
+          quality: selectedQuality || null,
+          notes: noteValue,
+        }).filter(([, value]) => value)
+      );
+
+      if (!isProduct) {
+        if (!user || !isCustomer) {
+          throw new Error("Sign in with a customer account before requesting a service quote.");
+        }
+
+        const { data: existingConversation, error: conversationLookupError } = await supabase
+          .from("chat_conversations")
+          .select("id")
+          .eq("customer_id", user.id)
+          .eq("business_id", business.id)
+          .maybeSingle();
+
+        if (conversationLookupError) throw conversationLookupError;
+
+        let conversation = existingConversation;
+        if (!conversation) {
+          const { data: newConversation, error: conversationCreateError } = await supabase
+            .from("chat_conversations")
+            .insert({ customer_id: user.id, business_id: business.id })
+            .select("id")
+            .single();
+          if (conversationCreateError) throw conversationCreateError;
+          conversation = newConversation;
+        }
+
+        const uploadedDesigns = [];
+        for (const [fileIndex, designFile] of designFiles.entries()) {
+          const isImage = designFile.type?.startsWith("image/");
+          const uploadFile = isImage
+            ? await optimizeImageForUpload(designFile, { maxBytes: MAX_DESIGN_IMAGE_BYTES })
+            : designFile;
+          const maxBytes = isImage ? MAX_DESIGN_IMAGE_BYTES : MAX_DESIGN_FILE_BYTES;
+          if (uploadFile.size > maxBytes) {
+            throw new Error(isImage
+              ? `${designFile.name} is still larger than 5 MB after compression.`
+              : `${designFile.name} is larger than 10 MB.`);
+          }
+
+          const rawExtension = isImage
+            ? getUploadExtension(uploadFile)
+            : (designFile.name.split(".").pop()?.toLowerCase() || "bin");
+          const extension = rawExtension.replace(/[^a-z0-9]/g, "").slice(0, 10) || "bin";
+          const filePath = `${conversation.id}/${user.id}-service-${specModalItem.id}-${Date.now()}-${fileIndex}.${extension}`;
+
+          const { error: uploadError } = await supabase.storage
+            .from(CHAT_IMAGES_BUCKET)
+            .upload(filePath, uploadFile, {
+              upsert: false,
+              cacheControl: "31536000",
+              contentType: uploadFile.type || "application/octet-stream",
+            });
+
+          if (uploadError) throw new Error(`Could not upload ${designFile.name}: ${uploadError.message}`);
+          uploadedPaths.push(filePath);
+          uploadedDesigns.push({
+            url: toStorageRef(CHAT_IMAGES_BUCKET, filePath),
+            name: designFile.name,
+            type: uploadFile.type || designFile.type || "application/octet-stream",
+            size: uploadFile.size,
+            extension,
+          });
+        }
+
+        const selectedDetails = [
+          selectedSpecs.size && `Size: ${selectedSpecs.size}`,
+          selectedSpecs.material && `${optionConfig.materialLabel}: ${selectedSpecs.material}`,
+          selectedSpecs.quality && `${optionConfig.qualityLabel}: ${selectedSpecs.quality}`,
+          selectedSpecs.notes && `Notes: ${selectedSpecs.notes}`,
+        ].filter(Boolean);
+        const estimatedUnitPrice = basePrice + sizeAddon + materialAddon + qualityAddon;
+        const messageRows = [
+          {
+            conversation_id: conversation.id,
+            sender_id: user.id,
+            sender_role: "CUSTOMER",
+            content: [
+              `I would like a formal quote for ${specModalItem.name}.`,
+              `Quantity: ${qty}`,
+              ...selectedDetails,
+              "Please review the requirements and confirm the final price before checkout.",
+            ].join("\n"),
+            message_type: "service_inquiry",
+            metadata: {
+              service_id: specModalItem.id,
+              service_name: specModalItem.name,
+              service_category: specModalItem.category || null,
+              quantity: qty,
+              selected_specs: selectedSpecs,
+              catalog_estimate_unit: estimatedUnitPrice,
+              catalog_estimate_total: estimatedUnitPrice * qty,
+              attachment_count: uploadedDesigns.length,
+              requires_seller_quote: true,
+            },
+            is_read: false,
+          },
+          ...uploadedDesigns.map((file) => ({
+            conversation_id: conversation.id,
+            sender_id: user.id,
+            sender_role: "CUSTOMER",
+            content: `Design file attached for ${specModalItem.name}: ${file.name}`,
+            message_type: "design_upload",
+            metadata: {
+              service_id: specModalItem.id,
+              service_name: specModalItem.name,
+              file_name: file.name,
+              file_size_bytes: file.size,
+              file_type: file.type?.startsWith("image/") ? "Artwork image" : file.type === "application/pdf" ? "Print PDF" : "Source design file",
+              file_format: file.extension,
+              file_mime: file.type,
+            },
+            image_url: file.url,
+            is_read: false,
+          })),
+        ];
+
+        const { error: messageError } = await supabase.from("chat_messages").insert(messageRows);
+        if (messageError) throw messageError;
+
+        setSpecModalItem(null);
+        router.push(`/messages?business=${business.id}`);
+        return;
+      }
+
       const cartItem = {
         ...specModalItem,
         price: unitPrice,
         base_price: basePrice,
         quantity: qty,
         selected_specs: selectedSpecs,
-        designFiles: isProduct ? [] : uploadedDesigns,
-        designUrl: uploadedDesigns[0]?.url || null,
-        designFileName: uploadedDesigns[0]?.name || null,
-        designFileType: uploadedDesigns[0]?.type || null,
-        designFileSize: uploadedDesigns[0]?.size || null,
+        designFiles: [],
+        designUrl: null,
+        designFileName: null,
+        designFileType: null,
+        designFileSize: null,
+        designVersion: null,
       };
 
-      const matchKey = isProduct
-        ? `${specModalItem.id}-product-${noteValue || "no-note"}`
-        : specModalItem.id + JSON.stringify(selectedSpecs);
+      const matchKey = `${specModalItem.id}-product-${JSON.stringify(selectedSpecs)}`;
       cartItem.cart_item_id = matchKey;
 
       setSelectedServices((prev) => {
         const existingIndex = prev.findIndex((item) => (
-          isProduct
-            ? item.id === specModalItem.id && item.item_type === "product" && (item.selected_specs?.notes || null) === noteValue
-            : (item.cart_item_id || item.id + JSON.stringify(item.selected_specs || {})) === matchKey
+          item.id === specModalItem.id && item.item_type === "product" && JSON.stringify(item.selected_specs || {}) === JSON.stringify(selectedSpecs)
         ));
         if (existingIndex >= 0) {
           const updated = [...prev];
           updated[existingIndex] = {
             ...updated[existingIndex],
-            quantity: isProduct
-              ? Math.min(stockLimit, updated[existingIndex].quantity + qty)
-              : updated[existingIndex].quantity + qty,
-            ...(uploadedDesigns.length > 0 ? {
-              designFiles: uploadedDesigns,
-              designUrl: uploadedDesigns[0].url,
-              designFileName: uploadedDesigns[0].name,
-              designFileType: uploadedDesigns[0].type,
-              designFileSize: uploadedDesigns[0].size,
-            } : {}),
+            quantity: Math.min(stockLimit, updated[existingIndex].quantity + qty),
           };
           return updated;
         }
@@ -406,10 +629,22 @@ export default function BusinessDetailsPage({ params }) {
 
       setSpecModalItem(null);
     } catch (error) {
-      setDesignUploadError(error.message || "Could not add this service to your cart.");
+      if (uploadedPaths.length > 0) {
+        await supabase.storage.from(CHAT_IMAGES_BUCKET).remove(uploadedPaths);
+      }
+      setDesignUploadError(error.message || (specModalItem?.item_type === "product"
+        ? "Could not add this product to your cart."
+        : "Could not send this quote request."));
     } finally {
       setDesignUploading(false);
     }
+  };
+
+  const openDesignFiles = async (files) => {
+    const resolvedFiles = await Promise.all(
+      files.map(async (file) => ({ ...file, url: await resolveStorageUrl(file.url) }))
+    );
+    setDesignFilesToView(resolvedFiles.filter((file) => file.url));
   };
 
   if (loading) {
@@ -471,8 +706,8 @@ export default function BusinessDetailsPage({ params }) {
 
                 <div className="flex items-center gap-1 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 font-bold text-white">
                   <Star size={14} className="fill-[#FFF200] text-[#FFF200]" />
-                  <span>{business.ratingAvg}</span>
-                  <span className="font-normal text-white/50">({business.reviewCount} reviews)</span>
+                  <span>{ratingLabel(business.ratingAvg)}</span>
+                  <span className="font-normal text-white/50">({business.reviewCount} ratings)</span>
                 </div>
 
                 <span className={`rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-wider ${
@@ -579,21 +814,41 @@ export default function BusinessDetailsPage({ params }) {
             {/* SERVICES */}
             {business.services.filter(s => s.item_type !== "product").length > 0 && (
               <section>
-                <h2 className="mb-4 flex items-center gap-2 text-xl font-black text-slate-900">
-                  <span>Printing Services</span>
-                  <span className="text-xs text-slate-400 font-normal">({business.services.filter(s => s.item_type !== "product").length})</span>
-                </h2>
+                <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <h2 className="flex items-center gap-2 text-xl font-black text-slate-900">
+                      <span>Custom Printing Services</span>
+                      <span className="text-xs font-normal text-slate-400">({business.services.filter(s => s.item_type !== "product").length})</span>
+                    </h2>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">Made-to-order work is priced by the shop after reviewing your requirements.</p>
+                  </div>
+                  <Link
+                    href={`/messages?business=${business.id}`}
+                    className="inline-flex w-fit items-center gap-2 text-xs font-bold text-[#009FA0] transition-colors hover:text-[#EC008C]"
+                  >
+                    <MessageSquare size={15} /> Open Messages
+                  </Link>
+                </div>
+
+                <div className="mb-4 grid gap-2 rounded-2xl border border-[#00FFFF]/40 bg-[#00FFFF]/[0.06] p-4 sm:grid-cols-4">
+                  {["Choose a service", "Send requirements", "Receive shop quote", "Checkout securely"].map((step, index) => (
+                    <div key={step} className="flex items-center gap-2 text-[11px] font-bold text-slate-700">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[10px] text-white">{index + 1}</span>
+                      <span>{step}</span>
+                    </div>
+                  ))}
+                </div>
 
                 <div className="border-y border-[#D8D6CE]">
                   {business.services.filter(s => s.item_type !== "product").map((svc) => {
-                    const isSelected = selectedServices.some((s) => s.id === svc.id);
+                    const hasAcceptedQuote = selectedServices.some((s) => s.id === svc.id && s.isQuotedCheckout);
                     return (
                       <button
                         type="button"
                         key={svc.id}
                         onClick={() => openSpecCustomizer(svc)}
-                        className={`group flex w-full items-center gap-4 border-b border-[#D8D6CE] py-5 text-left transition-colors last:border-b-0 hover:bg-white/70 ${
-                          isSelected ? "bg-[#00FFFF]/[0.04]" : ""
+                        className={`group flex w-full items-center gap-4 border-b border-[#D8D6CE] px-3 py-5 text-left transition-colors last:border-b-0 hover:bg-white/70 ${
+                          hasAcceptedQuote ? "bg-[#00FFFF]/[0.04]" : ""
                         }`}
                       >
                         <div className="min-w-0 flex-1">
@@ -601,9 +856,9 @@ export default function BusinessDetailsPage({ params }) {
                             <span className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
                               {svc.category || "General"}
                             </span>
-                            {isSelected && (
+                            {hasAcceptedQuote && (
                               <span className="text-[10px] font-bold uppercase tracking-wider text-[#009FA0]">
-                                In cart · {getSelectedQty(svc.id)}
+                                Seller quote ready in cart
                               </span>
                             )}
                           </div>
@@ -612,19 +867,22 @@ export default function BusinessDetailsPage({ params }) {
                             <h3 className="truncate font-bold text-base text-slate-900 transition-colors group-hover:text-[#EC008C]">
                               {svc.name}
                             </h3>
-                            <p className="shrink-0 text-sm font-extrabold text-slate-900">
-                              {svc.price_max && parseFloat(svc.price_max) > parseFloat(svc.price)
-                                ? `₱${Number(svc.price).toFixed(2)} – ₱${Number(svc.price_max).toFixed(2)}`
-                                : `From ₱${Number(svc.price).toFixed(2)}`}
-                            </p>
+                            <div className="shrink-0 text-right">
+                              <p className="text-xs font-extrabold text-[#EC008C]">Quote required</p>
+                              <p className="mt-0.5 text-[10px] font-semibold text-slate-500">
+                                {svc.price_max && parseFloat(svc.price_max) > parseFloat(svc.price)
+                                  ? `Catalog estimate ₱${Number(svc.price).toFixed(2)}–₱${Number(svc.price_max).toFixed(2)}`
+                                  : `Catalog estimate from ₱${Number(svc.price).toFixed(2)}`}
+                              </p>
+                            </div>
                           </div>
 
                           {svc.description && (
                             <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500">{svc.description}</p>
                           )}
-                          <div className="mt-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                            <UploadCloud size={14} className="text-[#009FA0]" />
-                            Made to order · design upload required
+                          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                            <span className="inline-flex items-center gap-1.5"><MessageSquare size={14} className="text-[#009FA0]" /> Discuss details with the shop</span>
+                            <span className="text-[#009FA0]">Request a quote →</span>
                           </div>
                         </div>
 
@@ -711,7 +969,7 @@ export default function BusinessDetailsPage({ params }) {
             {/* REVIEWS */}
             <section className="rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
               <h3 className="mb-6 flex items-center gap-2 text-xl font-black text-slate-900">
-                <Star size={18} className="fill-[#FFF200] text-[#D6C900]" /> Customer reviews ({business.reviewCount})
+                <Star size={18} className="fill-[#FFF200] text-[#D6C900]" /> Customer reviews ({business.writtenReviewCount || 0})
               </h3>
 
               {(business.reviews || []).length > 0 ? (
@@ -750,7 +1008,7 @@ export default function BusinessDetailsPage({ params }) {
               
               <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">Your cart</h2>
+                  <h2 className="text-base font-bold text-slate-900">Products &amp; accepted quotes</h2>
                   <p className="mt-0.5 text-[11px] text-slate-500">{cartItemCount} {cartItemCount === 1 ? "item" : "items"}</p>
                 </div>
                 {selectedServices.length > 0 && (
@@ -765,8 +1023,10 @@ export default function BusinessDetailsPage({ params }) {
               </div>
 
               {selectedServices.length === 0 ? (
-                <div className="py-8 text-center text-xs text-slate-400">
-                  Your cart is empty. Select services or products above to proceed.
+                <div className="space-y-2 py-8 text-center text-xs text-slate-400">
+                  <Package size={24} className="mx-auto text-slate-300" />
+                  <p>Ready-made products can be checked out directly.</p>
+                  <p>Custom services appear here only after the shop sends a formal quote.</p>
                 </div>
               ) : (
                 <div className="mb-6 space-y-5">
@@ -790,20 +1050,21 @@ export default function BusinessDetailsPage({ params }) {
                         )}
                         <div className="min-w-0 space-y-0.5">
                           <p className="font-semibold text-slate-900">{s.name || s.item_name || s.service_name || "Print item"}</p>
-                        <p className="text-slate-400 text-[11px]">Qty: {s.quantity || 1}</p>
+                        <p className="text-slate-400 text-[11px]">{s.isQuotedCheckout ? "Quoted custom job" : `Qty: ${s.quantity || 1}`}</p>
                         
                         {s.selected_specs && (s.selected_specs.size || s.selected_specs.material || s.selected_specs.quality || s.selected_specs.notes) && (
                           <div className="text-[10px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-200 mt-1 space-y-0.5">
                             {s.selected_specs.size && <div>• Size: <span className="font-semibold text-slate-800">{s.selected_specs.size}</span></div>}
                             {s.selected_specs.material && <div>• Material: <span className="font-semibold text-slate-800">{s.selected_specs.material}</span></div>}
                             {s.selected_specs.quality && <div>• Quality: <span className="font-semibold text-slate-800">{s.selected_specs.quality}</span></div>}
+                            {s.selected_specs.requested_quantity && <div>• Requested quantity: <span className="font-semibold text-slate-800">{s.selected_specs.requested_quantity}</span></div>}
                             {s.selected_specs.notes && <div className="text-amber-800 italic truncate">"Notes: {s.selected_specs.notes}"</div>}
                           </div>
                         )}
                         {getDesignFiles(s).length > 0 && (
                           <button
                             type="button"
-                            onClick={() => setDesignFilesToView(getDesignFiles(s))}
+                            onClick={() => openDesignFiles(getDesignFiles(s))}
                             className="mt-1 inline-flex items-center gap-1.5 text-[10px] font-semibold text-[#009FA0] hover:text-[#EC008C]"
                           >
                             <FileText size={13} /> View files ({getDesignFiles(s).length})
@@ -813,7 +1074,7 @@ export default function BusinessDetailsPage({ params }) {
                       </div>
                       <div className="flex flex-col items-end gap-2 shrink-0">
                         <span className="font-bold text-slate-900">₱{(Number(s.price) * (s.quantity || 1)).toFixed(2)}</span>
-                        <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+                        {s.item_type === "product" && <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5">
                           <button
                             type="button"
                             onClick={() => upsertServiceQuantity(s, (s.quantity || 1) - 1)}
@@ -831,7 +1092,7 @@ export default function BusinessDetailsPage({ params }) {
                           >
                             <Plus size={12} />
                           </button>
-                        </div>
+                        </div>}
                         <button
                           type="button"
                           onClick={() => upsertServiceQuantity(s, 0)}
@@ -850,7 +1111,7 @@ export default function BusinessDetailsPage({ params }) {
 
               <div className="pt-4 border-t border-slate-200 space-y-4">
                 <div className="flex justify-between items-center">
-                  <span className="text-xs font-semibold text-slate-600">Estimated Total</span>
+                  <span className="text-xs font-semibold text-slate-600">Cart total</span>
                   <span className="text-2xl font-extrabold text-slate-900">
                     ₱{cartSubtotal.toFixed(2)}
                   </span>
@@ -885,18 +1146,22 @@ export default function BusinessDetailsPage({ params }) {
 
             {(() => {
               const isProduct = specModalItem.item_type === "product";
-              const specs = specModalItem.specs_json || {};
+              const specs = parseSpecs(specModalItem.specs_json);
+              const optionConfig = getCategoryOptionConfig(getServiceOptionKey(specModalItem));
               const modifiers = specs.price_modifiers || {};
+              const visibleSizeChart = getVisibleSizeChart(specs, specModalItem);
+              const selectedSizeChartRow = visibleSizeChart.find((row) => row.size === selectedSize);
               const basePrice = Number(specModalItem.price || 0);
-              const sizeAddon = isProduct ? 0 : Number(modifiers[selectedSize] || 0);
-              const materialAddon = isProduct ? 0 : Number(modifiers[selectedMaterial] || 0);
-              const qualityAddon = isProduct ? 0 : Number(modifiers[selectedQuality] || 0);
+              const sizeAddon = Number(modifiers[selectedSize] ?? selectedSizeChartRow?.price_modifier ?? 0);
+              const materialAddon = Number(modifiers[selectedMaterial] || 0);
+              const qualityAddon = Number(modifiers[selectedQuality] || 0);
+              const getChartAddon = (row) => Number(modifiers[row.size] ?? row.price_modifier ?? 0);
 
               const unitPrice = basePrice + sizeAddon + materialAddon + qualityAddon;
               const stockLimit = isProduct ? Math.max(1, Number(specModalItem.stock_qty || 0)) : Infinity;
               const qty = Math.min(stockLimit, Math.max(1, parseInt(quantityInput, 10) || 1));
               const totalPrice = unitPrice * qty;
-              const requiresDesignUpload = !isProduct;
+              const requiresDesignUpload = !isProduct && specModalItem.is_customizable !== false;
 
               return (
                 <div className="p-6 sm:p-7 space-y-5">
@@ -915,7 +1180,7 @@ export default function BusinessDetailsPage({ params }) {
                         {specModalItem.category || "General Printing"}
                       </span>
                       <h3 className="text-lg font-extrabold text-slate-900 mt-1">{specModalItem.name}</h3>
-                      <p className="text-xs text-slate-500">{isProduct ? "Ready-Made Physical Product" : "Made to Order Custom Service"}</p>
+                      <p className="text-xs text-slate-500">{isProduct ? "Ready-made product · direct checkout" : "Made-to-order service · seller quotation"}</p>
                     </div>
                   </div>
 
@@ -936,10 +1201,10 @@ export default function BusinessDetailsPage({ params }) {
                         <UploadCloud size={18} className="mt-0.5 shrink-0 text-[#009FA0]" />
                         <div className="min-w-0 flex-1">
                           <label htmlFor="design-file" className="block text-xs font-bold text-slate-900">
-                            Upload your design file <span className="text-[#EC008C]">Required</span>
+                            Attach your design files <span className="text-[#EC008C]">Required</span>
                           </label>
                           <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                            Add up to 5 files. Images are compressed to 5 MB; PDF and design files can be up to 10 MB each.
+                            These files and your selected options will be sent privately to the shop in Messages. Add up to 5 files; each file can be up to 10 MB.
                           </p>
                         </div>
                       </div>
@@ -948,7 +1213,7 @@ export default function BusinessDetailsPage({ params }) {
                         id="design-file"
                         type="file"
                         multiple
-                        accept=".pdf,.png,.jpg,.jpeg,.webp,.svg,.ai,.psd,.doc,.docx,image/*,application/pdf"
+                        accept=".pdf,.png,.jpg,.jpeg,.webp,.svg,.ai,.psd,.eps,.tif,.tiff,image/*,application/pdf"
                         onChange={handleDesignFileChange}
                         className="mt-3 block w-full cursor-pointer rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-900 file:px-3 file:py-2 file:text-[11px] file:font-bold file:text-white hover:file:bg-[#EC008C]"
                       />
@@ -982,14 +1247,76 @@ export default function BusinessDetailsPage({ params }) {
                     </div>
                   )}
 
+                  {visibleSizeChart.length > 0 && (
+                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                      <div className="flex items-start gap-3 bg-slate-900 px-4 py-3 text-white">
+                        <Info size={16} className="mt-0.5 shrink-0 text-[#00FFFF]" />
+                        <div>
+                          <p className="text-xs font-extrabold">Available size guide</p>
+                          <p className="mt-0.5 text-[10px] text-white/65">Measurements may vary slightly by garment batch.</p>
+                        </div>
+                      </div>
+                      <div className="hidden overflow-hidden p-3 sm:block">
+                        <table className="w-full table-fixed text-left text-[10px]">
+                          <thead className="border-b border-slate-200 text-[9px] uppercase tracking-wider text-slate-500">
+                            <tr>
+                              <th className="w-[15%] px-2 py-2">Size</th>
+                              <th className="w-[21%] px-2 py-2">Chest width</th>
+                              <th className="w-[21%] px-2 py-2">Body length</th>
+                              <th className="w-[21%] px-2 py-2">Fits chest</th>
+                              <th className="w-[22%] px-2 py-2 text-right">Price add-on</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {visibleSizeChart.map((row, index) => (
+                              <tr key={`${row.size || "size"}-${index}`} className="border-b border-slate-100 last:border-0">
+                                <td className="break-words px-2 py-2 font-extrabold text-slate-900">{row.size || "—"}</td>
+                                <td className="break-words px-2 py-2 text-slate-600">{row.chest_width || "—"}</td>
+                                <td className="break-words px-2 py-2 text-slate-600">{row.body_length || "—"}</td>
+                                <td className="break-words px-2 py-2 text-slate-600">{row.fits_chest || "—"}</td>
+                                <td className="break-words px-2 py-2 text-right font-bold text-[#EC008C]">{getChartAddon(row) > 0 ? `+₱${getChartAddon(row).toFixed(2)}` : "Base price"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="space-y-2 p-3 sm:hidden">
+                        {visibleSizeChart.map((row, index) => (
+                          <article key={`size-card-${row.size || "size"}-${index}`} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-2">
+                              <p className="text-sm font-black text-slate-900">Size {row.size || "—"}</p>
+                              <p className="text-[11px] font-black text-[#EC008C]">
+                                {getChartAddon(row) > 0 ? `+₱${getChartAddon(row).toFixed(2)}` : "Base price"}
+                              </p>
+                            </div>
+                            <dl className="mt-3 grid grid-cols-3 gap-2">
+                              <div>
+                                <dt className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Chest</dt>
+                                <dd className="mt-1 text-[11px] font-semibold text-slate-700">{row.chest_width || "—"}</dd>
+                              </div>
+                              <div>
+                                <dt className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Length</dt>
+                                <dd className="mt-1 text-[11px] font-semibold text-slate-700">{row.body_length || "—"}</dd>
+                              </div>
+                              <div>
+                                <dt className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Fits</dt>
+                                <dd className="mt-1 text-[11px] font-semibold text-slate-700">{row.fits_chest || "—"}</dd>
+                              </div>
+                            </dl>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Size Selection */}
-                  {!isProduct && specs.allowed_sizes && specs.allowed_sizes.length > 0 && (
+                  {specs.allowed_sizes && specs.allowed_sizes.length > 0 && (
                     <div>
                       <label className="block text-xs font-bold text-slate-800 mb-1.5">Select Print Size</label>
                       <div className="flex flex-wrap gap-2">
                         {specs.allowed_sizes.map((sz) => {
                           const isSel = selectedSize === sz;
-                          const addon = modifiers[sz] || 0;
+                          const addon = Number(modifiers[sz] ?? visibleSizeChart.find((row) => row.size === sz)?.price_modifier ?? 0);
                           return (
                             <button
                               key={sz}
@@ -1008,9 +1335,9 @@ export default function BusinessDetailsPage({ params }) {
                   )}
 
                   {/* Material Selection */}
-                  {!isProduct && specs.allowed_materials && specs.allowed_materials.length > 0 && (
+                  {specs.allowed_materials && specs.allowed_materials.length > 0 && (
                     <div>
-                      <label className="block text-xs font-bold text-slate-800 mb-1.5">Paper Stock / Material</label>
+                      <label className="block text-xs font-bold text-slate-800 mb-1.5">{optionConfig.materialLabel}</label>
                       <div className="flex flex-wrap gap-2">
                         {specs.allowed_materials.map((mat) => {
                           const isSel = selectedMaterial === mat;
@@ -1033,9 +1360,9 @@ export default function BusinessDetailsPage({ params }) {
                   )}
 
                   {/* Print Quality */}
-                  {!isProduct && specs.quality_levels && specs.quality_levels.length > 0 && (
+                  {specs.quality_levels && specs.quality_levels.length > 0 && (
                     <div>
-                      <label className="block text-xs font-bold text-slate-800 mb-1.5">Print Quality Resolution</label>
+                      <label className="block text-xs font-bold text-slate-800 mb-1.5">{optionConfig.qualityLabel}</label>
                       <div className="flex flex-wrap gap-2">
                         {specs.quality_levels.map((q) => {
                           const isSel = selectedQuality === q;
@@ -1075,10 +1402,10 @@ export default function BusinessDetailsPage({ params }) {
                     <p className="mt-1 text-right text-[10px] text-slate-400">{customNotes.length}/500</p>
                   </div>
 
-                  {/* Live Calculated Price Breakdown */}
-                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs">
+                  {/* Product price or non-binding service estimate */}
+                  <div className={`space-y-1.5 rounded-xl border p-4 text-xs ${isProduct ? "border-slate-200 bg-slate-50" : "border-amber-200 bg-amber-50"}`}>
                     <div className="flex justify-between text-slate-600">
-                      <span>Base Unit Price:</span>
+                      <span>{isProduct ? "Base unit price:" : "Catalog starting price:"}</span>
                       <span>₱{basePrice.toFixed(2)}</span>
                     </div>
                     {(sizeAddon > 0 || materialAddon > 0 || qualityAddon > 0) && (
@@ -1088,13 +1415,18 @@ export default function BusinessDetailsPage({ params }) {
                       </div>
                     )}
                     <div className="flex justify-between text-slate-900 font-extrabold text-sm pt-2 border-t border-slate-200">
-                      <span>Calculated Unit Price:</span>
+                      <span>{isProduct ? "Calculated unit price:" : "Estimated configuration:"}</span>
                       <span>₱{unitPrice.toFixed(2)}</span>
                     </div>
+                    {!isProduct && (
+                      <p className="pt-2 text-[10px] leading-relaxed text-amber-800">
+                        This is not the final charge. The shop will check your files, quantity, material, finishing, and deadline before sending a formal quote.
+                      </p>
+                    )}
                   </div>
 
                   {/* Quantity & Cart Action */}
-                  <div className="flex items-center justify-between pt-2">
+                  <div className="flex flex-col gap-4 pt-2 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-bold text-slate-700">Qty:</span>
                       <button
@@ -1124,9 +1456,12 @@ export default function BusinessDetailsPage({ params }) {
                       type="button"
                       onClick={handleAddCustomizedService}
                       disabled={designUploading}
-                      className="px-6 py-3 bg-slate-900 text-white font-bold text-xs rounded-xl hover:bg-[#EC008C] transition-all flex items-center gap-2 shadow-md disabled:cursor-wait disabled:opacity-60"
+                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-6 py-3 text-xs font-bold text-white shadow-md transition-all hover:bg-[#EC008C] disabled:cursor-wait disabled:opacity-60 sm:w-auto"
                     >
-                      {designUploading ? "Uploading design…" : `Add to Cart (₱${totalPrice.toFixed(2)})`} <ArrowRight size={16} />
+                      {designUploading
+                        ? (isProduct ? "Adding product…" : "Sending request…")
+                        : (isProduct ? `Add to Cart (₱${totalPrice.toFixed(2)})` : "Send quote request")}
+                      {isProduct ? <ArrowRight size={16} /> : <MessageSquare size={16} />}
                     </button>
                   </div>
 

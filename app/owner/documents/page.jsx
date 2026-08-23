@@ -1,7 +1,13 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
+import {
+  getUploadExtension,
+  PRIVATE_ASSETS_BUCKET,
+  optimizeImageForUpload,
+  resolveStorageUrl,
+  toStorageRef,
+} from "@/lib/imageUpload";
 import {
   FileText, CheckCircle, XCircle, Clock, Eye, AlertCircle, Loader2, X, Upload, ShieldCheck, File, Info, Image as ImageIcon,
   LockKeyhole, Send, MessageSquare
@@ -69,6 +75,11 @@ export default function OwnerDocuments() {
       .eq("business_id", bizId);
     return data || [];
   }, []);
+  const openDocument = async (doc) => {
+    const url = await resolveStorageUrl(doc?.file_url);
+    if (url) setPreviewDocUrl(url);
+    else setReuploadError("This document is unavailable or you do not have permission to view it.");
+  };
   useEffect(() => {
     const fetchDocs = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -175,7 +186,6 @@ export default function OwnerDocuments() {
       if (next[docType]) URL.revokeObjectURL(next[docType]);
       if (!file) {
         delete next[docType];
-        return next;
       }
       if (file.type.startsWith("image/")) {
         next[docType] = URL.createObjectURL(file);
@@ -193,8 +203,8 @@ export default function OwnerDocuments() {
     try {
       const uploadFile = file.type?.startsWith("image/") ? await optimizeImageForUpload(file) : file;
       const fileExt = uploadFile.type?.startsWith("image/") ? getUploadExtension(uploadFile) : uploadFile.name.split('.').pop();
-      const fileName = `${businessId}/${docType.toLowerCase()}_${Date.now()}.${fileExt}`;
-      const uploadBucket = uploadFile.type?.startsWith("image/") ? IMAGE_BUCKET : "business-documents";
+      const fileName = `documents/${userId}/${docType.toLowerCase()}_${Date.now()}.${fileExt}`;
+      const uploadBucket = PRIVATE_ASSETS_BUCKET;
       const { error: uploadError } = await supabase.storage
         .from(uploadBucket)
         .upload(fileName, uploadFile, {
@@ -203,9 +213,7 @@ export default function OwnerDocuments() {
           contentType: uploadFile.type,
         });
       if (uploadError) throw uploadError;
-      const { data: { publicUrl } } = supabase.storage
-        .from(uploadBucket)
-        .getPublicUrl(fileName);
+      const storageRef = toStorageRef(uploadBucket, fileName);
       const existingDoc = docStatuses.find((d) => getDocType(d) === docType);
       const metadata = {
         file_name: file.name,
@@ -216,7 +224,7 @@ export default function OwnerDocuments() {
       };
       const saveDocument = async (includeMetadata = true) => {
         const basePayload = {
-          file_url: publicUrl,
+          file_url: storageRef,
           status: "PENDING",
           owner_comment: "Uploaded by owner for admin verification",
           admin_comment: null,
@@ -508,7 +516,7 @@ export default function OwnerDocuments() {
                   {doc?.file_url && (
                     <button
                       type="button"
-                      onClick={() => setPreviewDocUrl(doc.file_url)}
+                      onClick={() => openDocument(doc)}
                       className="w-full px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
                     >
                       <Eye size={15} /> View High-Res Document Preview

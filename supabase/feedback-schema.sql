@@ -14,7 +14,7 @@ alter table public.orders
 alter table public.orders
   add constraint orders_feedback_only_after_completed
   check (
-    status = 'COMPLETED'
+    status in ('COMPLETED', 'DELIVERY_COMPLETED')
     or (
       rating is null
       and (feedback is null or length(trim(feedback)) = 0)

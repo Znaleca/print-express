@@ -14,7 +14,7 @@ select
   p.full_name as customer_name
 from public.orders o
 left join public.profiles p on o.customer_id = p.id
-where o.status = 'COMPLETED' and o.rating is not null;
+where o.status in ('COMPLETED', 'DELIVERY_COMPLETED') and o.rating is not null;
 
 -- Grant access to public roles
 grant select on public.business_reviews to anon, authenticated;

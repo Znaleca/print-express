@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Package, Plus } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Loader2, Package, Plus } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import ServiceFormModal from "@/components/owner/ServiceFormModal";
 import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
@@ -20,6 +20,8 @@ function mergeSpecs(service, rules) {
     default_size: baseSpecs.default_size || null,
     default_material: baseSpecs.default_material || null,
     default_quality: baseSpecs.default_quality || null,
+    size_chart: Array.isArray(baseSpecs.size_chart) ? baseSpecs.size_chart : [],
+    is_customizable: baseSpecs.is_customizable !== false,
   };
 
   (rules || []).forEach((rule) => {
@@ -176,39 +178,61 @@ export default function ServiceEditorPage() {
   }
 
   const title = isCreate ? (forcedType === "product" ? "Add ready product" : "Add custom service") : "Edit catalog item";
-  const description = isCreate ? "Create a customer-ready item with pricing, images, stock, and printable options." : "Update the item details, pricing, image, inventory, and customer-facing options.";
+  const editorType = isCreate ? forcedType : (initialValues?.item_type || "service");
+  const description = isCreate
+    ? "Add the item customers will see in your shop. Choose the category first so the right size list appears."
+    : "Update the customer-facing details, available sizes, pricing, and inventory in one simple flow.";
 
   return (
-    <main className="min-h-screen bg-white pb-20 font-sans text-slate-900">
-      <section className="relative overflow-hidden border-b border-[#D8D6CE] bg-white px-4 pb-9 pt-8 text-slate-900 sm:px-8 lg:px-10">
-        <div className="cmyk-bar absolute left-0 right-0 top-0" />
-        <div className="relative mx-auto max-w-[1800px]">
-          <Link href="/owner/services" className="inline-flex items-center gap-2 text-xs font-bold text-slate-500 transition-colors hover:text-[#EC008C]"><ArrowLeft size={15} /> Back to services & products</Link>
-          <div className="mt-7 flex items-end justify-between gap-5">
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[#00FFFF]">Catalog workspace</p>
-              <h1 className="mt-2 text-3xl font-black uppercase tracking-tight sm:text-5xl">{title}</h1>
-              <p className="mt-3 max-w-2xl text-xs leading-relaxed text-slate-500 sm:text-sm">{description}</p>
-            </div>
-            {forcedType === "product" && isCreate && <Package size={42} className="hidden text-[#EC008C] sm:block" />}
-            {forcedType === "service" && isCreate && <Plus size={42} className="hidden text-[#00FFFF] sm:block" />}
-          </div>
+    <main className="min-h-screen bg-[#F4F5F3] pb-16 font-sans text-slate-900">
+      <div className="cmyk-bar" />
+      <div className="mx-auto max-w-6xl px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
+        <div className="flex items-center justify-between gap-4">
+          <Link href="/owner/services" className="inline-flex items-center gap-2 text-xs font-bold text-slate-500 transition-colors hover:text-[#EC008C]"><ArrowLeft size={15} /> Back to catalog</Link>
+          <span className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">{isCreate ? "New item" : "Editing item"}</span>
         </div>
-      </section>
 
-      <section className="mx-auto max-w-[1800px] bg-white px-3 pt-2 sm:px-6 lg:px-10">
-        <div className="border-b border-[#D8D6CE] bg-white">
+        <header className="mt-7 flex items-start justify-between gap-5">
+          <div className="max-w-3xl">
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#009FA0]">Catalog editor</p>
+            <h1 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">{title}</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-500">{description}</p>
+          </div>
+          <div className="hidden h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-[#00FFFF] sm:flex">
+            {editorType === "product" ? <Package size={22} /> : <Plus size={22} />}
+          </div>
+        </header>
+
+        <div className="mt-6 grid grid-cols-1 gap-2 sm:grid-cols-4">
+          {[
+            ["1", "Details", "Name, category, image"],
+            ["2", "Sizes", "Only the sizes you offer"],
+            ["3", "Price & stock", "Base price and inventory"],
+            ["4", "Extras", "Materials and quality"],
+          ].map(([number, label, hint]) => (
+            <div key={number} className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-xs font-black text-[#00FFFF]">{number}</span>
+              <span className="min-w-0">
+                <span className="block text-xs font-black text-slate-900">{label}</span>
+                <span className="mt-0.5 block truncate text-[10px] text-slate-500">{hint}</span>
+              </span>
+              <CheckCircle2 size={15} className="ml-auto shrink-0 text-slate-300" />
+            </div>
+          ))}
+        </div>
+
+        <section className="mt-5 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.06)]">
           <ServiceFormModal
             embedded
             mode={isCreate ? "create" : "edit"}
             initialValues={initialValues}
-            forcedType={forcedType}
+            forcedType={isCreate ? forcedType : undefined}
             businessId={businessId}
             onSave={handleSave}
             onClose={() => router.push("/owner/services")}
           />
-        </div>
-      </section>
+        </section>
+      </div>
     </main>
   );
 }

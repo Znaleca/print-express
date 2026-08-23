@@ -3,13 +3,13 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
-  ChevronDown, CheckCircle, Eye,
+  ChevronDown, CheckCircle, Eye, UserRound, Phone,
   ExternalLink, Activity, Package, Clock,
-  CreditCard, AlertCircle, MapPin, Truck, X, ShoppingBag, Printer, Upload, RefreshCcw, FileText, Loader2
+  CreditCard, AlertCircle, MapPin, Truck, X, ShoppingBag, Printer, Upload, RefreshCcw, FileText, Loader2, Search, SlidersHorizontal
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import ReceiptModal from "@/components/ReceiptModal";
-import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
+import { getUploadExtension, PRIVATE_ASSETS_BUCKET, optimizeImageForUpload, resolveStorageUrl, toStorageRef } from "@/lib/imageUpload";
 import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
 
 const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker"), { ssr: false });
@@ -36,6 +36,7 @@ const STATUS_META = {
   PREPARING: { label: "In production", className: "bg-[#00FFFF]/20 text-[#006B6B] ring-[#00BABA]" },
   READY_TO_PICK_UP: { label: "Ready for pickup", className: "bg-[#00FFFF]/20 text-[#006B6B] ring-[#00BABA]" },
   RIDER_ON_THE_WAY: { label: "On the way", className: "bg-[#00FFFF]/20 text-[#006B6B] ring-[#00BABA]" },
+  DELIVERY_COMPLETED: { label: "Delivery completed", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
   COMPLETED: { label: "Completed", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
   CANCELLED: { label: "Cancelled", className: "bg-rose-50 text-rose-700 ring-rose-200" },
   REFUNDED: { label: "Refunded", className: "bg-rose-50 text-rose-700 ring-rose-200" },
@@ -49,6 +50,7 @@ const STATUS_BUTTON_STYLES = {
   PREPARING: "border-[#00BABA] bg-[#00FFFF]/15 text-[#006B6B] hover:bg-[#00FFFF]/30",
   READY_TO_PICK_UP: "border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100",
   RIDER_ON_THE_WAY: "border-blue-400 bg-blue-50 text-blue-700 hover:bg-blue-100",
+  DELIVERY_COMPLETED: "border-slate-700 bg-slate-800 text-white hover:bg-slate-700",
   COMPLETED: "border-slate-700 bg-slate-800 text-white hover:bg-slate-700",
 };
 
@@ -64,7 +66,8 @@ function StatusProgress({ status, deliveryType, onSelect, onCancel }) {
   }
 
   const finalStep = deliveryType === "DELIVERY" ? "RIDER_ON_THE_WAY" : "READY_TO_PICK_UP";
-  const orderSteps = ["PENDING", "PLACED", "PREPARING", finalStep, "COMPLETED"];
+  const completionStep = deliveryType === "DELIVERY" ? "DELIVERY_COMPLETED" : "COMPLETED";
+  const orderSteps = ["PENDING", "PLACED", "PREPARING", finalStep, completionStep];
   const currentIndex = Math.max(0, orderSteps.indexOf(status));
   return (
     <div className="rounded-2xl border border-[#D8D6CE] bg-[#F6F6F2] px-3 py-3 sm:px-4">
@@ -85,7 +88,7 @@ function StatusProgress({ status, deliveryType, onSelect, onCancel }) {
           )}
         </div>
       </div>
-      <div className="flex items-center justify-between gap-1 sm:gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {orderSteps.map((step, index) => {
           const isComplete = index <= currentIndex;
           const isCurrent = status === step;
@@ -94,26 +97,23 @@ function StatusProgress({ status, deliveryType, onSelect, onCancel }) {
             : STATUS_META[step];
           const buttonColor = STATUS_BUTTON_STYLES[step] || "border-[#D8D6CE] bg-white text-slate-600 hover:bg-slate-50";
           return (
-            <div key={step} className="flex min-w-0 flex-1 items-center gap-1 sm:gap-2">
-              <button
-                type="button"
-                onClick={() => onSelect?.(step)}
-                disabled={status === step}
-                title={`Set status: ${meta.label}`}
-                aria-label={`Set order status to ${meta.label}`}
-                className={`group flex min-w-0 flex-1 items-center gap-1.5 rounded-xl border px-1.5 py-1.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EC008C] sm:gap-2 sm:px-2 ${buttonColor} ${isCurrent ? "-translate-y-0.5 shadow-[0_4px_0_rgba(26,26,26,0.25)]" : "opacity-75 hover:-translate-y-0.5 hover:opacity-100 hover:shadow-sm"} disabled:cursor-default disabled:opacity-100`}
-              >
-                <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-black transition-transform group-hover:scale-110 ${isComplete ? "bg-[#1A1A1A] text-[#00FFFF]" : "bg-white text-slate-400 ring-1 ring-[#D8D6CE]"}`}>
-                  {isComplete ? <CheckCircle size={14} /> : index + 1}
-                </div>
-                <span className="truncate text-[9px] font-bold text-current sm:text-[10px]">
-                  {meta.label}
-                </span>
-              </button>
-              {index < orderSteps.length - 1 && (
-                <div className={`h-0.5 min-w-2 flex-1 ${index < currentIndex ? "bg-[#00FFFF]" : "bg-[#D8D6CE]"}`} />
-              )}
-            </div>
+            <button
+              key={step}
+              type="button"
+              onClick={() => onSelect?.(step)}
+              disabled={status === step}
+              title={`Set status: ${meta.label}`}
+              aria-label={`Set order status to ${meta.label}`}
+              aria-current={isCurrent ? "step" : undefined}
+              className={`group flex min-h-14 w-full min-w-0 items-center justify-center gap-1.5 rounded-xl border px-2 py-2 text-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EC008C] sm:gap-2 ${buttonColor} ${isCurrent ? "-translate-y-0.5 shadow-[0_4px_0_rgba(26,26,26,0.25)]" : "opacity-75 hover:-translate-y-0.5 hover:opacity-100 hover:shadow-sm"} disabled:cursor-default disabled:opacity-100`}
+            >
+              <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-black transition-transform group-hover:scale-110 ${isComplete ? "bg-[#1A1A1A] text-[#00FFFF]" : "bg-white text-slate-400 ring-1 ring-[#D8D6CE]"}`}>
+                {isComplete ? <CheckCircle size={14} /> : index + 1}
+              </div>
+              <span className="min-w-0 whitespace-normal text-[9px] font-bold leading-tight text-current sm:text-[10px]">
+                {meta.label}
+              </span>
+            </button>
           );
         })}
       </div>
@@ -125,6 +125,7 @@ export default function OwnerOrdersPage() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMapOrder, setViewMapOrder] = useState(null);
   const [cancelModal, setCancelModal] = useState(null);
@@ -166,10 +167,34 @@ export default function OwnerOrdersPage() {
           .eq("business_id", biz.id)
           .order("created_at", { ascending: false });
 
-        if (ordersData) {
-           const ordersWithBiz = ordersData.map(o => ({ ...o, businesses: biz }));
-           setOrders(ordersWithBiz);
-        }
+        const attachCustomerProfiles = async (rows) => {
+          const customerIds = [...new Set((rows || []).map((order) => order.customer_id).filter(Boolean))];
+          let profileMap = {};
+
+          if (customerIds.length > 0) {
+            const { data: profileRows, error: profileError } = await supabase
+              .from("profiles")
+              .select("id, full_name, email, phone")
+              .in("id", customerIds);
+
+            if (profileError) {
+              console.warn("[Orders] Could not fetch customer profiles:", profileError.message);
+            }
+
+            profileMap = (profileRows || []).reduce((map, profile) => {
+              map[profile.id] = profile;
+              return map;
+            }, {});
+          }
+
+          return (rows || []).map((order) => ({
+            ...order,
+            businesses: biz,
+            customer_profile: profileMap[order.customer_id] || null,
+          }));
+        };
+
+        if (ordersData) setOrders(await attachCustomerProfiles(ordersData));
 
         subscription = supabase
           .channel(`owner_orders_status_${biz.id}_${Date.now()}`)
@@ -183,13 +208,15 @@ export default function OwnerOrdersPage() {
             },
             (payload) => {
               if (payload.eventType === "INSERT") {
-                const newOrder = { ...payload.new, businesses: biz };
-                setOrders((prev) => [newOrder, ...prev]);
+                void attachCustomerProfiles([payload.new]).then(([newOrder]) => {
+                  setOrders((prev) => [newOrder, ...prev]);
+                });
               } else if (payload.eventType === "UPDATE") {
-                const updatedOrder = { ...payload.new, businesses: biz };
-                setOrders((prev) =>
-                  prev.map((o) => (o.id === payload.new.id ? updatedOrder : o))
-                );
+                void attachCustomerProfiles([payload.new]).then(([updatedOrder]) => {
+                  setOrders((prev) =>
+                    prev.map((o) => (o.id === payload.new.id ? updatedOrder : o))
+                  );
+                });
               }
             }
           )
@@ -216,7 +243,7 @@ export default function OwnerOrdersPage() {
         prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
       );
 
-      if (["PLACED", "READY_TO_PICK_UP", "RIDER_ON_THE_WAY", "COMPLETED"].includes(newStatus)) {
+      if (["PLACED", "PREPARING", "READY_TO_PICK_UP", "RIDER_ON_THE_WAY", "DELIVERY_COMPLETED", "COMPLETED"].includes(newStatus)) {
         await sendStatusSms(orderId, newStatus);
       }
     } catch (err) {
@@ -235,7 +262,9 @@ export default function OwnerOrdersPage() {
           body: JSON.stringify({ orderId, status }),
         });
     const smsData = await smsRes.json().catch(() => ({}));
-    if (!smsRes.ok) {
+    if (smsData.skipped && smsRes.status === 409) {
+      console.info("[Orders] SMS skipped because the order status changed before notification.");
+    } else if (!smsRes.ok) {
       console.warn("[Orders] SMS notification failed:", smsData);
       alert(`Order status updated, but SMS failed: ${smsData.error || "Unknown SMS error"}`);
     } else if (smsData.skipped) {
@@ -293,25 +322,25 @@ export default function OwnerOrdersPage() {
       const optimizedRefund = await optimizeImageForUpload(refundFile);
       const fileExt = getUploadExtension(optimizedRefund);
       const filePath = `refunds/${refundModal.orderId}/${Date.now()}.${fileExt}`;
-      const { error: uploadErr } = await supabase.storage.from(IMAGE_BUCKET).upload(filePath, optimizedRefund, {
+      const { error: uploadErr } = await supabase.storage.from(PRIVATE_ASSETS_BUCKET).upload(filePath, optimizedRefund, {
         cacheControl: "31536000",
         contentType: optimizedRefund.type,
       });
       if (uploadErr) throw uploadErr;
 
-      const { data: { publicUrl } } = supabase.storage.from(IMAGE_BUCKET).getPublicUrl(filePath);
+      const storageRef = toStorageRef(PRIVATE_ASSETS_BUCKET, filePath);
 
       const { error } = await supabase
         .from("orders")
         .update({
           status: "REFUNDED",
-          refund_proof_url: publicUrl,
+          refund_proof_url: storageRef,
           refunded_at: new Date().toISOString(),
         })
         .eq("id", refundModal.orderId);
 
       if (error) throw error;
-      setOrders(prev => prev.map(o => o.id === refundModal.orderId ? { ...o, status: "REFUNDED", refund_proof_url: publicUrl } : o));
+      setOrders(prev => prev.map(o => o.id === refundModal.orderId ? { ...o, status: "REFUNDED", refund_proof_url: storageRef } : o));
       setRefundModal(null);
       setRefundFile(null);
       setRefundPreview(null);
@@ -323,15 +352,32 @@ export default function OwnerOrdersPage() {
     }
   };
 
+  const normalizedSearch = searchQuery.trim().toLowerCase();
   const filteredOrders = orders.filter(o => {
-    if (activeTab === "ALL") return true;
-    if (activeTab === "PENDING") return ["PLACED", "PENDING"].includes(o.status);
-    if (activeTab === "PREPARING") return o.status === "PREPARING";
-    if (activeTab === "READY") return ["READY_TO_PICK_UP", "RIDER_ON_THE_WAY"].includes(o.status);
-    if (activeTab === "COMPLETED") return o.status === "COMPLETED";
-    if (activeTab === "CANCELLED") return ["CANCELLED", "REFUNDED", "REFUND_PENDING", "REFUND_CONFIRMED"].includes(o.status);
-    return true;
+    if (activeTab === "PENDING" && !["PLACED", "PENDING"].includes(o.status)) return false;
+    if (activeTab === "PREPARING" && o.status !== "PREPARING") return false;
+    if (activeTab === "READY" && !["READY_TO_PICK_UP", "RIDER_ON_THE_WAY"].includes(o.status)) return false;
+    if (activeTab === "COMPLETED" && !["COMPLETED", "DELIVERY_COMPLETED"].includes(o.status)) return false;
+    if (activeTab === "CANCELLED" && !["CANCELLED", "REFUNDED", "REFUND_PENDING", "REFUND_CONFIRMED"].includes(o.status)) return false;
+    if (!normalizedSearch) return true;
+    const orderNumber = String(o.id || "").split("-")[0];
+    const searchableText = [
+      orderNumber,
+      o.status,
+      o.customer_name,
+      o.customer_profile?.full_name,
+      o.customer_profile?.email,
+      o.customer_phone,
+      o.customer_profile?.phone,
+      ...(o.items || []).flatMap((item) => [item.name, item.selected_specs?.size, item.selected_specs?.material, item.selected_specs?.quality]),
+    ].filter(Boolean).join(" ").toLowerCase();
+    return searchableText.includes(normalizedSearch);
   });
+
+  const needsActionCount = orders.filter((order) => ["PENDING", "PLACED", "PREPARING"].includes(order.status)).length;
+  const readyCount = orders.filter((order) => ["READY_TO_PICK_UP", "RIDER_ON_THE_WAY"].includes(order.status)).length;
+  const completedCount = orders.filter((order) => ["COMPLETED", "DELIVERY_COMPLETED"].includes(order.status)).length;
+  const refundCount = orders.filter((order) => ["CANCELLED", "REFUND_PENDING", "REFUNDED", "REFUND_CONFIRMED"].includes(order.status)).length;
 
   const totalPages = Math.max(1, Math.ceil(filteredOrders.length / ORDER_PAGE_SIZE));
   const pageStart = (currentPage - 1) * ORDER_PAGE_SIZE;
@@ -339,7 +385,7 @@ export default function OwnerOrdersPage() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab]);
+  }, [activeTab, searchQuery]);
 
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
@@ -462,34 +508,84 @@ export default function OwnerOrdersPage() {
         <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-8 pt-8 text-white sm:px-8 sm:pb-9 sm:pt-10 lg:px-10">
           <div className="cmyk-bar absolute top-0 left-0 right-0" />
           <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10" />
-          <div className="relative mx-auto flex max-w-6xl flex-col justify-between gap-6 md:flex-row md:items-end">
+          <div className="relative mx-auto flex max-w-6xl flex-col justify-between gap-6 md:flex-row md:items-start">
             <div>
-              <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">Orders</h1>
-              <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">Review customer orders, move jobs through production, and manage receipts or refunds.</p>
-            </div>
-
-            {/* Filter Tabs */}
-            <div className="flex gap-1 overflow-x-auto rounded-2xl bg-white/10 p-1 ring-1 ring-white/15">
-              {["ALL", "PENDING", "PREPARING", "READY", "COMPLETED", "CANCELLED"].map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                    activeTab === tab ? "bg-[#00FFFF] text-[#1A1A1A] shadow-sm" : "text-white/65 hover:text-white"
-                  }`}
-                >
-                  {tab}
-                </button>
-              ))}
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[#00FFFF]">Order workspace</p>
+              <h1 className="mt-2 text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">Orders</h1>
+              <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">See what needs attention, move each job through production, and keep customer documents in one place.</p>
             </div>
           </div>
         </section>
 
         {/* Orders Table & Cards */}
-        <section className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-5">
+        <section className="mx-auto max-w-[1600px] px-4 pt-5 sm:px-6 lg:px-8">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {[
+              ["Needs action", needsActionCount, "Pending or in production", "border-amber-200 bg-amber-50"],
+              ["Ready", readyCount, "Pickup or delivery", "border-cyan-200 bg-cyan-50"],
+              ["Completed", completedCount, "Finished orders", "border-emerald-200 bg-emerald-50"],
+              ["Refunds / cancelled", refundCount, "Review if needed", "border-rose-200 bg-rose-50"],
+            ].map(([label, count, hint, tone]) => (
+              <div key={label} className={`rounded-2xl border px-4 py-3 shadow-sm ${tone}`}>
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">{label}</p>
+                <div className="mt-1 flex items-end justify-between gap-2">
+                  <p className="text-2xl font-black text-slate-900">{count}</p>
+                  <p className="text-right text-[10px] font-semibold text-slate-500">{hint}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 rounded-3xl border border-[#D8D6CE] bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal size={16} className="text-[#009FA0]" />
+                <div>
+                  <p className="text-xs font-black text-slate-900">Find an order</p>
+                  <p className="text-[10px] text-slate-500">Search by order number, customer, or item.</p>
+                </div>
+              </div>
+              <div className="relative w-full lg:max-w-sm">
+                <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search orders"
+                  aria-label="Search orders"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-9 text-xs font-medium outline-none transition-colors focus:border-[#00AFC0] focus:bg-white"
+                />
+                {searchQuery && (
+                  <button type="button" onClick={() => setSearchQuery("")} aria-label="Clear order search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700"><X size={14} /></button>
+                )}
+              </div>
+            </div>
+            <div className="mt-3 flex gap-2 overflow-x-auto border-t border-slate-100 pt-3">
+              {[
+                ["ALL", `All orders · ${orders.length}`],
+                ["PENDING", `Needs action · ${needsActionCount}`],
+                ["PREPARING", `In production · ${orders.filter((order) => order.status === "PREPARING").length}`],
+                ["READY", `Ready · ${readyCount}`],
+                ["COMPLETED", `Completed · ${completedCount}`],
+                ["CANCELLED", `Refunds / cancelled · ${refundCount}`],
+              ].map(([tab, label]) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  aria-pressed={activeTab === tab}
+                  className={`shrink-0 rounded-xl px-3.5 py-2 text-xs font-bold transition-all ${activeTab === tab ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-700 hover:border-[#00AFC0] hover:bg-[#EFFFFF]"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {filteredOrders.length === 0 ? (
             <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-xs font-medium text-slate-500 max-w-md mx-auto">
-              No orders found under "{activeTab}" filter.
+              <p className="text-sm font-black text-slate-800">{normalizedSearch ? `No orders match “${searchQuery.trim()}”.` : "No orders found in this view."}</p>
+              <p className="mt-1">{normalizedSearch ? "Try a different order number, customer, or item." : "New customer orders will appear here."}</p>
             </div>
           ) : (
             <div className="space-y-4">
@@ -505,7 +601,17 @@ export default function OwnerOrdersPage() {
                           {STATUS_META[o.status]?.label || o.status.replaceAll("_", " ")}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-500 mt-0.5">Placed on {new Date(o.created_at).toLocaleString()}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">Placed on {formatManilaDateTime(o.created_at)}</p>
+                      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+                        <span className="inline-flex items-center gap-1.5 font-bold text-slate-800">
+                          <UserRound size={14} className="text-[#00AFC0]" />
+                          {o.customer_profile?.full_name || o.customer_name || "Customer"}
+                        </span>
+                        <span className="inline-flex items-center gap-1.5 text-slate-600">
+                          <Phone size={14} className="text-[#EC008C]" />
+                          {o.customer_phone || o.customer_profile?.phone || "Phone not provided"}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
@@ -536,7 +642,11 @@ export default function OwnerOrdersPage() {
 
                       {o.receipt_url && (
                         <button
-                          onClick={() => setViewDpReceipt(o.receipt_url)}
+                          onClick={async () => {
+                            const url = await resolveStorageUrl(o.receipt_url);
+                            if (url) setViewDpReceipt(url);
+                            else alert("This payment proof is unavailable or access was denied.");
+                          }}
                           className="px-3 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5"
                         >
                           <Eye size={14} /> Payment Proof
@@ -555,7 +665,7 @@ export default function OwnerOrdersPage() {
                   {/* Items List & Customer Details */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-xs">
                     <div className="md:col-span-2 space-y-2">
-                      <p className="font-bold text-slate-400 uppercase tracking-wider text-[11px]">Items Ordered</p>
+                      <p className="font-bold text-slate-400 uppercase tracking-wider text-[11px]">Items ordered · {(o.items || []).length}</p>
                       {(o.items || []).map((it, idx) => (
                         <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
                           <div className="flex justify-between items-center">

@@ -1,23 +1,39 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { User, Lock, Mail, Save, Loader2, ShieldCheck, AlertTriangle, Phone } from "lucide-react";
+import { User, Lock, Mail, Save, Loader2, ShieldCheck, AlertTriangle, Phone, Camera, Trash2 } from "lucide-react";
 import { normalizePhilippinePhone } from "@/lib/phone";
 import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
+import ProfileAvatar from "@/components/ProfileAvatar";
+import {
+  PROFILE_AVATARS_BUCKET,
+  getUploadExtension,
+  optimizeImageForUpload,
+} from "@/lib/imageUpload";
+
+const AVATAR_MAX_BYTES = 1024 * 1024;
+const AVATAR_SOURCE_MAX_BYTES = 10 * 1024 * 1024;
+const AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export default function AccountSettingsPage({ isOwnerPortal = false, portalRole = "customer" } = {}) {
   const router = useRouter();
   const [user, setUser] = useState(null);
+  const [accountRole, setAccountRole] = useState("CUSTOMER");
   const [loading, setLoading] = useState(true);
 
   // Form states
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState(""); // Read-only
   const [phone, setPhone] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const [avatarPreview, setAvatarPreview] = useState("");
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [removeAvatar, setRemoveAvatar] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const avatarInputRef = useRef(null);
 
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isSavingSecurity, setIsSavingSecurity] = useState(false);
@@ -36,21 +52,58 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
       setEmail(user.email || "");
       const { data: profile } = await supabase
         .from("profiles")
-        .select("full_name, phone, role")
+        .select("full_name, phone, role, avatar_url")
         .eq("id", user.id)
         .maybeSingle();
+      setAccountRole(profile?.role || "CUSTOMER");
 
-      if (!isOwnerPortal && (profile?.role === "BUSINESS_OWNER" || user.user_metadata?.role === "BUSINESS_OWNER")) {
+      if (!isOwnerPortal && profile?.role === "BUSINESS_OWNER") {
         router.replace("/owner/account-settings");
         return;
       }
 
       setFullName(profile?.full_name || user.user_metadata?.full_name || "");
       setPhone(profile?.phone || user.user_metadata?.phone || "");
+      const savedAvatar = profile?.avatar_url || user.user_metadata?.avatar_url || "";
+      setAvatarUrl(savedAvatar);
+      setAvatarPreview(savedAvatar);
       setLoading(false);
     }
     getUser();
   }, [router]);
+
+  useEffect(() => {
+    return () => {
+      if (avatarPreview?.startsWith("blob:")) URL.revokeObjectURL(avatarPreview);
+    };
+  }, [avatarPreview]);
+
+  const handleAvatarSelection = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    if (!AVATAR_TYPES.has(file.type)) {
+      setProfileMessage({ text: "Choose a JPG, PNG, or WebP profile photo.", type: "error" });
+      return;
+    }
+    if (file.size > AVATAR_SOURCE_MAX_BYTES) {
+      setProfileMessage({ text: "The selected photo must be 10 MB or smaller.", type: "error" });
+      return;
+    }
+
+    setAvatarFile(file);
+    setRemoveAvatar(false);
+    setAvatarPreview(URL.createObjectURL(file));
+    setProfileMessage({ text: "", type: "" });
+  };
+
+  const handleRemoveAvatar = () => {
+    setAvatarFile(null);
+    setAvatarPreview("");
+    setRemoveAvatar(true);
+    setProfileMessage({ text: "Profile photo will be removed when you save.", type: "success" });
+  };
 
   const handleUpdateProfile = async (e) => {
     e.preventDefault();
@@ -64,25 +117,60 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
       return;
     }
 
-    const { data: sessionData } = await supabase.auth.getSession();
-    const res = await fetch("/api/account/profile", {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${sessionData?.session?.access_token || ""}`,
-      },
-      body: JSON.stringify({ fullName, phone: normalizedPhone }),
-    });
-    const data = await res.json();
+    let uploadedAvatarPath = null;
 
-    setIsSavingProfile(false);
+    try {
+      if (avatarFile) {
+        const optimizedAvatar = await optimizeImageForUpload(avatarFile, {
+          maxBytes: AVATAR_MAX_BYTES,
+          maxDimension: 512,
+        });
+        uploadedAvatarPath = `${user.id}/avatars/avatar-${Date.now()}.${getUploadExtension(optimizedAvatar)}`;
+        const { error: uploadError } = await supabase.storage
+          .from(PROFILE_AVATARS_BUCKET)
+          .upload(uploadedAvatarPath, optimizedAvatar, {
+            cacheControl: "31536000",
+            contentType: optimizedAvatar.type,
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+      }
 
-    if (!res.ok) {
-      setProfileMessage({ text: data.error || "Failed to update profile.", type: "error" });
-    } else {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const res = await fetch("/api/account/profile", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sessionData?.session?.access_token || ""}`,
+        },
+        body: JSON.stringify({
+          fullName,
+          phone: normalizedPhone,
+          avatarPath: uploadedAvatarPath || undefined,
+          removeAvatar,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (uploadedAvatarPath) {
+          await supabase.storage.from(PROFILE_AVATARS_BUCKET).remove([uploadedAvatarPath]);
+        }
+        throw new Error(data.error || "Failed to update profile.");
+      }
+
+      const savedAvatar = data.profile?.avatar_url || "";
       setFullName(data.profile?.full_name || fullName.trim());
       setPhone(data.profile?.phone || normalizedPhone);
+      setAvatarUrl(savedAvatar);
+      setAvatarPreview(savedAvatar);
+      setAvatarFile(null);
+      setRemoveAvatar(false);
       setProfileMessage({ text: "Profile updated successfully.", type: "success" });
+    } catch (error) {
+      setProfileMessage({ text: error.message || "Failed to update profile.", type: "error" });
+    } finally {
+      setIsSavingProfile(false);
     }
   };
 
@@ -136,7 +224,7 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
               
               <div className="flex flex-wrap items-center gap-6">
                 <div className="mt-5 flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 font-mono text-[10px] font-black uppercase tracking-widest text-white ring-1 ring-white/15">
-                  <ShieldCheck size={14} className="text-[#00FFFF]" /> Account role · {user.user_metadata?.role || "CUSTOMER"}
+                  <ShieldCheck size={14} className="text-[#00FFFF]" /> Account role · {accountRole}
                 </div>
               </div>
             </div>
@@ -159,6 +247,51 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
                   {profileMessage.text}
                 </div>
               )}
+
+              <div className="rounded-2xl border border-[#D8D6CE] bg-[#F6F6F2] p-4">
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={handleAvatarSelection}
+                />
+                <div className="flex flex-col items-center gap-4 sm:flex-row">
+                  <ProfileAvatar
+                    src={avatarPreview}
+                    name={fullName || email}
+                    className="h-24 w-24"
+                    fallbackClassName="bg-[#1A1A1A] text-[#00FFFF]"
+                    sizes="96px"
+                  />
+                  <div className="min-w-0 flex-1 text-center sm:text-left">
+                    <p className="text-sm font-extrabold text-slate-900">Message profile photo</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                      Shown beside your messages. JPG, PNG, or WebP; automatically optimized to 512 px and 1 MB.
+                    </p>
+                    <div className="mt-3 flex flex-wrap justify-center gap-2 sm:justify-start">
+                      <button
+                        type="button"
+                        onClick={() => avatarInputRef.current?.click()}
+                        disabled={isSavingProfile}
+                        className="inline-flex items-center gap-2 rounded-xl bg-[#1A1A1A] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#EC008C] disabled:opacity-50"
+                      >
+                        <Camera size={14} /> {avatarPreview ? "Change photo" : "Choose photo"}
+                      </button>
+                      {(avatarPreview || avatarUrl) && (
+                        <button
+                          type="button"
+                          onClick={handleRemoveAvatar}
+                          disabled={isSavingProfile}
+                          className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 transition-colors hover:border-[#EC008C] hover:text-[#EC008C] disabled:opacity-50"
+                        >
+                          <Trash2 size={14} /> Remove
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-600 flex items-center gap-2">

@@ -66,17 +66,17 @@ This document summarizes the senior developer capability audit and platform upgr
 
 ### Capability G — Feedback & Rating Controls
 - **Updated [app/track/page.jsx](file:///d:/My%20Work/print-app/app/track/page.jsx)**:
-  - Restrict review submissions strictly to orders with `COMPLETED` status.
+  - Restrict review submissions to orders with `COMPLETED` status for pickup or `DELIVERY_COMPLETED` status for delivery.
 
 ### Capability H — Specialized Print-Shop Quick Questions
 - **Updated [app/messages/page.jsx](file:///d:/My%20Work/print-app/app/messages/page.jsx)**:
-  - Added 10 specialized print industry quick replies (paper stock advice, urgent same-day printing, file formats, digital proofs, bulk quantity discounts).
+  - Added 10 specialized print-industry quick replies covering files, proofs, paper/options, urgent jobs, turnaround, fulfillment, quotes, and bulk discounts.
 
 ---
 
 ## 4. What Needs SQL Editor Execution
 
-Execute [supabase/printing-capabilities-upgrade.sql](file:///d:/My%20Work/print-app/supabase/printing-capabilities-upgrade.sql) in your Supabase SQL Editor to enable:
+Execute [supabase/printing-capabilities-upgrade.sql](file:///d:/My%20Work/print-app/supabase/printing-capabilities-upgrade.sql) and [supabase/delivery-completion-status.sql](file:///d:/My%20Work/print-app/supabase/delivery-completion-status.sql) in your Supabase SQL Editor to enable:
 1. `service_pricing_rules`: Stores custom sizes, materials, and print quality modifiers.
 2. `inventory_movements`: Stock movement logs for physical products.
 3. `design_proofs`: Design proofing version control history.

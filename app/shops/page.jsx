@@ -5,87 +5,102 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { Search, Star, Loader2, Store, ChevronRight, MapPin, ArrowRight } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { getRatingStats, ratingLabel } from "@/lib/rating";
+import { withTimeout } from "@/lib/withTimeout";
 
 export default function ShopsPage() {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [businesses, setBusinesses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
   useEffect(() => {
     async function loadBusinesses() {
-      const { data: bizData, error: bizError } = await supabase
-        .from("businesses")
-        .select(`
-          id, name, address, lat, lng, logo_url, is_open,
-          services ( name, category, available )
-        `)
-        .eq("status", "APPROVED")
-        .order("created_at", { ascending: false });
+      try {
+        const { data: bizData, error: bizError } = await withTimeout(
+          (signal) => supabase
+            .from("businesses")
+            .select(`
+              id, name, address, lat, lng, logo_url, is_open,
+              services ( name, category, available )
+            `)
+            .eq("status", "APPROVED")
+            .order("created_at", { ascending: false })
+            .range(0, 99)
+            .abortSignal(signal),
+          8000,
+          "Loading verified print shops timed out. Please try again."
+        );
 
-      if (bizError) {
-        console.error("Error loading businesses:", {
-          code: bizError.code,
-          message: bizError.message,
-          details: bizError.details,
-          hint: bizError.hint,
+        if (bizError) {
+          console.error("Error loading businesses:", {
+            code: bizError.code,
+            message: bizError.message,
+            details: bizError.details,
+            hint: bizError.hint,
+          });
+          setLoadError("We could not load verified print shops right now. Please refresh and try again.");
+          return;
+        }
+
+        const { data: reviewData, error: reviewError } = await withTimeout(
+          (signal) => supabase
+            .from("business_reviews")
+            .select("business_id, rating")
+            .range(0, 999)
+            .abortSignal(signal),
+          8000,
+          "Loading shop ratings timed out."
+        );
+        if (reviewError) {
+          console.warn("Reviews are temporarily unavailable:", {
+            code: reviewError.code,
+            message: reviewError.message,
+            details: reviewError.details,
+            hint: reviewError.hint,
+          });
+        }
+        const reviewsByBusiness = (reviewData || []).reduce((map, review) => {
+          map[review.business_id] = [...(map[review.business_id] || []), review];
+          return map;
+        }, {});
+
+        const formatted = (bizData || []).map((b) => {
+          const availableServices = (b.services || [])
+            .filter(s => s.available)
+            .map(s => s.name);
+
+          const reviews = reviewsByBusiness[b.id] || [];
+          const ratingStats = getRatingStats(reviews);
+
+          return {
+            id: b.id,
+            name: b.name || "Print Shop",
+            address: b.address || "Location unavailable",
+            lat: b.lat == null ? null : parseFloat(b.lat),
+            lng: b.lng == null ? null : parseFloat(b.lng),
+            logo_url: b.logo_url,
+            is_open: b.is_open ?? true,
+            rating: ratingStats.average,
+            reviewCount: ratingStats.count,
+            services: availableServices.slice(0, 5)
+          };
         });
+
+        setBusinesses(formatted);
+      } catch (error) {
+        console.error("Error loading print shops:", error);
+        setLoadError(error.message || "We could not load verified print shops right now. Please refresh and try again.");
+      } finally {
         setLoading(false);
-        return;
       }
-
-      const { data: reviewData, error: reviewError } = await supabase
-        .from("business_reviews")
-        .select("business_id, rating");
-      if (reviewError) {
-        console.warn("Reviews are temporarily unavailable:", {
-          code: reviewError.code,
-          message: reviewError.message,
-          details: reviewError.details,
-          hint: reviewError.hint,
-        });
-      }
-      const reviewsByBusiness = (reviewData || []).reduce((map, review) => {
-        map[review.business_id] = [...(map[review.business_id] || []), review];
-        return map;
-      }, {});
-
-      const formatted = (bizData || []).map((b) => {
-        const availableServices = (b.services || [])
-          .filter(s => s.available)
-          .map(s => s.name);
-
-        const reviews = reviewsByBusiness[b.id] || [];
-        const avgRating = reviews.length > 0
-          ? (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1)
-          : 5.0;
-
-        return {
-          id: b.id,
-          name: b.name || "Print Shop",
-          address: b.address || "Location unavailable",
-          lat: b.lat == null ? null : parseFloat(b.lat),
-          lng: b.lng == null ? null : parseFloat(b.lng),
-          logo_url: b.logo_url,
-          is_open: b.is_open ?? true,
-          rating: parseFloat(avgRating),
-          reviewCount: reviews.length,
-          services: availableServices.slice(0, 5)
-        };
-      });
-
-      setBusinesses(formatted);
-      setLoading(false);
     }
 
     loadBusinesses();
   }, []);
 
-  const mappedBusinesses = businesses.filter(
-    (b) => Number.isFinite(b.lat) && Number.isFinite(b.lng)
-  );
-
-  const filtered = mappedBusinesses.filter(
+  const filtered = businesses.filter(
     (b) =>
       (
         b.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -118,7 +133,7 @@ export default function ShopsPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search shop, service, or area..."
-              aria-label="Search mapped print shops"
+              aria-label="Search verified print shops"
               className="shops-search h-14 w-full rounded-full border border-white/25 bg-white/10 pl-12 pr-5 text-sm font-semibold text-white outline-none transition-all placeholder:text-white/45 focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/20 sm:text-base"
             />
           </div>
@@ -128,26 +143,33 @@ export default function ShopsPage() {
       <section className="mx-auto w-full max-w-[1800px] px-4 pt-8 sm:px-6 lg:px-8">
         <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
-            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-[#EC008C]">Directory / mapped partners</p>
+            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-[#EC008C]">Directory / verified partners</p>
             <h2 className="mt-1 text-2xl font-black tracking-tight sm:text-3xl">Choose your print shop.</h2>
           </div>
           <div className="flex items-center gap-2 text-xs font-bold text-[#676762]">
             <MapPin size={14} className="text-[#EC008C]" />
-            {loading ? "Loading..." : `${filtered.length} shop${filtered.length === 1 ? "" : "s"} with map location`}
+            {loading ? "Loading..." : `${filtered.length} verified shop${filtered.length === 1 ? "" : "s"}`}
           </div>
         </div>
 
         {loading ? (
           <div className="flex flex-col items-center justify-center rounded-3xl border border-[#D8D6CE] bg-white/60 py-24 text-xs font-bold text-[#676762]">
             <Loader2 className="mb-3 animate-spin text-[#EC008C]" size={34} />
-            <p>Loading mapped print shops...</p>
+            <p>Loading verified print shops...</p>
+          </div>
+        ) : loadError ? (
+          <div className="mx-auto max-w-lg rounded-3xl border border-rose-200 bg-rose-50 p-12 text-center">
+            <MapPin className="mx-auto mb-4 text-rose-600" size={30} />
+            <h3 className="text-lg font-black text-rose-900">Print shops are temporarily unavailable</h3>
+            <p className="mt-2 text-sm leading-relaxed text-rose-800">{loadError}</p>
+            <button type="button" onClick={() => window.location.reload()} className="mt-5 rounded-full bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-[#EC008C]">Refresh</button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="mx-auto max-w-lg rounded-3xl border border-dashed border-[#D8D6CE] bg-white/60 p-12 text-center">
             <MapPin className="mx-auto mb-4 text-[#EC008C]" size={30} />
-            <h3 className="text-lg font-black">No mapped shops found</h3>
+            <h3 className="text-lg font-black">No verified shops found</h3>
             <p className="mt-2 text-sm leading-relaxed text-[#676762]">
-              Try another search, or check the browse map for verified partners with a saved location.
+              Try another search. Shops can still be opened while their map location is being completed.
             </p>
           </div>
         ) : (
@@ -193,11 +215,12 @@ export default function ShopsPage() {
                 <div className="mt-3 flex items-center justify-between border-y border-[#ECECE8] py-2.5">
                   <div className="flex items-center gap-1 text-sm font-black">
                     <Star size={15} className="fill-[#FFF200] text-[#D6C900]" />
-                    {b.rating.toFixed(1)}
+                    {ratingLabel(b.rating)}
                     <span className="text-xs font-medium text-[#676762]">({b.reviewCount} reviews)</span>
                   </div>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-[#676762]">
-                    <MapPin size={12} className="text-[#00A5A5]" /> Mapped
+                    <span className={`inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider ${Number.isFinite(b.lat) && Number.isFinite(b.lng) ? "text-[#676762]" : "text-amber-700"}`}>
+                    <MapPin size={12} className={Number.isFinite(b.lat) && Number.isFinite(b.lng) ? "text-[#00A5A5]" : "text-amber-600"} />
+                    {Number.isFinite(b.lat) && Number.isFinite(b.lng) ? "Mapped" : "Location pending"}
                   </span>
                 </div>
 

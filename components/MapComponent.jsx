@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from "react-leaflet";
 import L from "leaflet";
 import { useRouter } from "next/navigation";
 import { Star, ChevronRight, MapPin } from "lucide-react";
+import { ratingLabel } from "@/lib/rating";
 import "leaflet/dist/leaflet.css";
 
 const createCmykIcon = (color = "#00FFFF", isClosed = false) => {
@@ -67,28 +68,6 @@ const createUserLocationIcon = () => new L.DivIcon({
   popupAnchor: [0, -36],
 });
 
-// React-Leaflet removes its map on unmount. Explicitly removing the instance
-// here as well protects Fast Refresh/Strict Mode from reusing a DOM node that
-// still carries Leaflet's internal _leaflet_id.
-function SafeMapContainer({ children, ...props }) {
-  const mapRef = useRef(null);
-
-  useEffect(() => () => {
-    const map = mapRef.current;
-    try {
-      const container = map?.getContainer?.();
-      map?.remove?.();
-      if (container?._leaflet_id) delete container._leaflet_id;
-    } catch {
-      // Leaflet may already have removed the map during React cleanup.
-    } finally {
-      mapRef.current = null;
-    }
-  }, []);
-
-  return <MapContainer ref={mapRef} {...props}>{children}</MapContainer>;
-}
-
 function MapController({ center, selectedBusinessId, markerRefs, routePoints }) {
   const map = useMap();
 
@@ -98,7 +77,8 @@ function MapController({ center, selectedBusinessId, markerRefs, routePoints }) 
     const isMapReady = () => {
       try {
         const container = map.getContainer?.();
-        return Boolean(map._loaded && container?.isConnected && container?._leaflet_id);
+        map.getCenter?.();
+        return Boolean(container?.isConnected);
       } catch {
         return false;
       }
@@ -140,7 +120,6 @@ function MapController({ center, selectedBusinessId, markerRefs, routePoints }) 
       popupTimer = setTimeout(() => {
         if (!isMapReady()) return;
         const marker = markerRefs.current[selectedBusinessId];
-        if (marker?._map !== map) return;
         try {
           marker.openPopup();
         } catch { /* marker was disposed during a route change */ }
@@ -166,7 +145,19 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
     setIsMounted(true);
   }, []);
 
-  const mapBusinesses = businesses.filter((b) => Number.isFinite(b.lat) && Number.isFinite(b.lng));
+  const mapBusinesses = useMemo(
+    () => businesses.filter((b) => Number.isFinite(b.lat) && Number.isFinite(b.lng)),
+    [businesses]
+  );
+  const userLocationIcon = useMemo(() => createUserLocationIcon(), []);
+  const markerIcons = useMemo(() => Object.fromEntries(
+    mapBusinesses.map((business) => {
+      const isSelected = selectedBusinessId === business.id;
+      const isNearest = nearestBusinessId === business.id;
+      const color = isSelected ? "#EC008C" : isNearest ? "#FFF200" : "#00FFFF";
+      return [business.id, createCmykIcon(color, !business.is_open)];
+    })
+  ), [mapBusinesses, nearestBusinessId, selectedBusinessId]);
   const selected = mapBusinesses.find((b) => b.id === selectedBusinessId);
   const nearest = mapBusinesses.find((b) => b.id === nearestBusinessId);
   const routeTarget = selected || nearest;
@@ -179,7 +170,7 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
 
   return (
     <div className="w-full h-full relative bg-slate-200">
-      <SafeMapContainer
+      <MapContainer
         center={defaultCenter}
         zoom={13}
         scrollWheelZoom={true}
@@ -201,7 +192,7 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
         {userLocation && (
           <Marker
             position={[userLocation.lat, userLocation.lng]}
-            icon={createUserLocationIcon()}
+            icon={userLocationIcon}
             zIndexOffset={1000}
           >
             <Popup closeButton={false}>Your exact location</Popup>
@@ -223,7 +214,7 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
             <Marker
               key={b.id}
               position={[b.lat, b.lng]}
-              icon={createCmykIcon(isSelected ? "#EC008C" : isNearest ? "#FFF200" : "#00FFFF", isClosed)}
+              icon={markerIcons[b.id]}
               ref={(el) => {
                 if (el) {
                   markerRefs.current[b.id] = el;
@@ -258,10 +249,16 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
                     <span className="truncate">{b.address}</span>
                   </p>
 
+                  {userLocation && b.distanceKm != null && (
+                    <p className="mb-3 rounded-lg bg-[#FFF200]/20 px-2.5 py-2 text-[10px] font-bold text-slate-700">
+                      {b.distanceKm.toFixed(1)} km · ~{b.travelMinutes || Math.max(1, Math.round(b.distanceKm * 2.5))} min estimated travel time
+                    </p>
+                  )}
+
                   <div className="flex items-center justify-between border-t border-slate-100 pt-3">
                     <div className="flex items-center gap-1 font-bold text-xs text-slate-900">
                       <Star size={14} className="fill-amber-400 text-amber-400" />
-                      <span>{b.rating.toFixed(1)}</span>
+                      <span>{ratingLabel(b.rating)}</span>
                     </div>
 
                     <button
@@ -276,7 +273,7 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
             </Marker>
           );
         })}
-      </SafeMapContainer>
+      </MapContainer>
 
       <style jsx global>{`
         .clean-map-popup .leaflet-popup-content-wrapper {

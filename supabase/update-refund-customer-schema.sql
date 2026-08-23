@@ -13,6 +13,7 @@ ALTER TABLE public.orders ADD CONSTRAINT orders_status_check
     'PREPARING',
     'READY_TO_PICK_UP',
     'RIDER_ON_THE_WAY',
+    'DELIVERY_COMPLETED',
     'COMPLETED',
     'CANCELLED',
     'REFUND_PENDING',
@@ -24,5 +25,4 @@ ALTER TABLE public.orders ADD CONSTRAINT orders_status_check
 ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS fully_paid BOOLEAN DEFAULT false;
 
 -- update existing COMPLETED orders to be fully_paid = true
-UPDATE public.orders SET fully_paid = true, balance_amount = 0 WHERE status = 'COMPLETED';
-
+UPDATE public.orders SET fully_paid = true, balance_amount = 0 WHERE status IN ('COMPLETED', 'DELIVERY_COMPLETED');

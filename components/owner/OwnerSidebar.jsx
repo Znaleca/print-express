@@ -23,7 +23,7 @@ import {
 const NAV_ITEMS = [
   { href: "/owner",           label: "Overview",   icon: BarChart2,     badge: null },
   { href: "/owner/shop",      label: "My Shop",    icon: Store,         badge: null },
-  { href: "/owner/services",  label: "Services",   icon: Layers,        badge: null },
+  { href: "/owner/services",  label: "Products & services", icon: Layers, badge: null },
   { href: "/owner/orders",    label: "Orders",     icon: ShoppingBag,   badge: "orders" },
   { href: "/owner/messages",  label: "Messages",   icon: MessageSquare, badge: "messages" },
   { href: "/owner/reviews",   label: "Reviews",    icon: Star,          badge: null },
@@ -52,14 +52,15 @@ export default function OwnerSidebar({
 
   return (
     <aside
-      className={`relative z-50 h-screen shrink-0 overflow-visible bg-[#1A1A1A] text-white border-r border-[#2D2D2D] transition-all duration-300 ease-in-out flex flex-col
-        ${isOpen ? "w-72" : "w-20"}`}
+      className={`fixed inset-y-0 left-0 z-50 h-screen shrink-0 overflow-visible bg-[#1A1A1A] text-white border-r border-[#2D2D2D] transition-all duration-300 ease-in-out flex flex-col md:relative md:inset-auto md:translate-x-0
+        ${isOpen ? "w-72 translate-x-0" : "w-20 -translate-x-full md:translate-x-0"} max-md:w-72`}
     >
       <div className="cmyk-bar" />
 
       {/* Toggle Arrow */}
       <button
         onClick={onToggle}
+        aria-label={isOpen ? "Collapse owner sidebar" : "Expand owner sidebar"}
         className="absolute -right-3.5 top-1/2 z-50 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-[#55554F] bg-[#2A2A2A] text-white opacity-100 shadow-md backdrop-blur-none transition-all hover:bg-[#00FFFF] hover:text-[#1A1A1A]"
       >
         {isOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
@@ -91,6 +92,7 @@ export default function OwnerSidebar({
             <Link
               key={href}
               href={href}
+              title={!isOpen ? label : undefined}
               className={`relative flex items-center justify-between rounded-2xl px-3.5 py-3 transition-all group text-xs font-semibold
                 ${isActive
                   ? "bg-[#00FFFF] text-[#1A1A1A] font-black"

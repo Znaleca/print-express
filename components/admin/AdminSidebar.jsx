@@ -25,8 +25,8 @@ export default function AdminSidebar({ isOpen, onToggle, adminName, adminEmail, 
 
   return (
     <aside
-      className={`relative z-50 h-screen shrink-0 bg-[#1A1A1A] text-white border-r border-[#2D2D2D] transition-all duration-300 ease-in-out flex flex-col overflow-visible
-        ${isOpen ? "w-72" : "w-20"}`}
+      className={`fixed inset-y-0 left-0 z-50 h-screen shrink-0 bg-[#1A1A1A] text-white border-r border-[#2D2D2D] transition-all duration-300 ease-in-out flex flex-col overflow-visible md:relative md:inset-auto md:translate-x-0
+        ${isOpen ? "w-72 translate-x-0" : "w-20 -translate-x-full md:translate-x-0"} max-md:w-72`}
     >
       <div className="cmyk-bar" />
 
