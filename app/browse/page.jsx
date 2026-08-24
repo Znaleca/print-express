@@ -97,6 +97,12 @@ export default function BrowsePage() {
           return;
         }
 
+        const businessIds = (bizData || []).map((business) => business.id);
+        const { data: openStateRows } = businessIds.length > 0
+          ? await supabase.rpc("get_business_open_states", { p_business_ids: businessIds })
+          : { data: [] };
+        const openStateByBusiness = Object.fromEntries((openStateRows || []).map((row) => [row.business_id, row.is_open]));
+
         // Keep reviews optional. Embedding the business_reviews view can fail when
         // PostgREST has not inferred a relationship for the view yet.
         const { data: reviewData, error: reviewError } = await withTimeout(
@@ -136,7 +142,7 @@ export default function BrowsePage() {
             lat: b.lat == null ? null : parseFloat(b.lat),
             lng: b.lng == null ? null : parseFloat(b.lng),
             logo_url: b.logo_url,
-            is_open: b.is_open ?? true,
+            is_open: openStateByBusiness[b.id] ?? b.is_open ?? true,
             rating: ratingStats.average,
             reviewCount: ratingStats.count,
             serviceCount: availableServices.length,
@@ -276,6 +282,7 @@ export default function BrowsePage() {
                 className="browse-search h-14 w-full rounded-full border border-white/25 bg-white/10 pl-12 pr-12 text-sm font-semibold text-white placeholder:text-white/45 focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/20 sm:text-base"
                 placeholder="Search shop, service, or area..."
                 aria-label="Search print shops"
+                data-tour="browse-search"
                 role="combobox"
                 aria-expanded={showSuggestions && Boolean(search.trim())}
                 aria-controls="shop-suggestions"
@@ -389,7 +396,7 @@ export default function BrowsePage() {
       </section>
 
       {/* Map row */}
-      <section ref={mapSectionRef} className="relative h-[520px] flex-none shrink-0 overflow-hidden bg-[#D9D9D2] sm:h-[600px]">
+      <section ref={mapSectionRef} data-tour="browse-map" className="relative h-[520px] flex-none shrink-0 overflow-hidden bg-[#D9D9D2] sm:h-[600px]">
         {loadError && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#D9D9D2]/90 p-6 text-center">
             <div className="max-w-sm rounded-2xl border border-rose-200 bg-white p-6 shadow-lg">

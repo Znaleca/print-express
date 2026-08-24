@@ -7,7 +7,8 @@ import {
   Fingerprint, Mail, Shield, Loader2, X,
   CheckCircle, XCircle, Clock, ChevronDown, ChevronUp,
   FileText, Hash, Eye, MessageSquare, RefreshCcw,
-  ShieldCheck, AlertCircle, Users, Building2, CheckCircle2, Tag
+  ShieldCheck, AlertCircle, Users, Building2, CheckCircle2, Tag,
+  Lock, Unlock, Archive
 } from "lucide-react";
 
 const REQUIRED_DOC_TYPES = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID"];
@@ -33,6 +34,7 @@ export default function AdminAccounts() {
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [categoryRequests, setCategoryRequests] = useState([]);
   const [profileRequestComments, setProfileRequestComments] = useState({});
+  const [lifecycleLoading, setLifecycleLoading] = useState({});
 
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
@@ -67,6 +69,7 @@ export default function AdminAccounts() {
       const { data: bizList, error: businessError } = await supabase
         .from("businesses")
         .select(`id, name, description, products_summary, status, created_at, owner_id,
+          lifecycle_state, last_activity_at, locked_at, lock_reason, archived_at,
           business_documents (*)`)
         .order("created_at", { ascending: false })
         .range(0, 99);
@@ -160,6 +163,60 @@ export default function AdminAccounts() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.details || payload.error || "Could not update business status.");
     return payload;
+  };
+
+  const handleLifecycleAction = async (business, action) => {
+    const labels = {
+      LOCK: "lock this shop",
+      UNLOCK: "unlock this shop",
+      ARCHIVE: "archive this shop",
+    };
+    const warning = action === "ARCHIVE"
+      ? "Archiving hides the shop permanently from customers. Historical records and the owner account will be preserved."
+      : action === "LOCK"
+        ? "Locking hides the shop and stops new customer orders."
+        : "Unlocking makes the approved shop customer-visible again.";
+
+    if (!window.confirm(`Are you sure you want to ${labels[action]}?\n\n${warning}`)) return;
+
+    const key = `lifecycle-${business.id}`;
+    setLifecycleLoading((current) => ({ ...current, [key]: true }));
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error("Your admin session has expired. Please sign in again.");
+
+      const response = await fetch("/api/admin/shops/lifecycle", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          businessId: business.id,
+          action,
+          reason: action === "LOCK" ? "Manually locked by an administrator" : undefined,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.details || payload.error || "Could not update shop lifecycle.");
+
+      const nextState = payload.result?.lifecycle_state || (action === "LOCK" ? "LOCKED" : action === "ARCHIVE" ? "ARCHIVED" : "ACTIVE");
+      setBusinesses((current) => current.map((item) => (
+        item.id === business.id
+          ? {
+              ...item,
+              lifecycle_state: nextState,
+              last_activity_at: nextState === "ACTIVE" ? new Date().toISOString() : item.last_activity_at,
+              lock_reason: action === "LOCK" ? "Manually locked by an administrator" : item.lock_reason,
+            }
+          : item
+      )));
+      showToast(`Shop ${action.toLowerCase()} action completed.`);
+    } catch (error) {
+      showToast(error.message || "Could not update shop lifecycle.", "error");
+    } finally {
+      setLifecycleLoading((current) => ({ ...current, [key]: false }));
+    }
   };
 
   const autoApproveBusiness = async (businessId, updatedDocs) => {
@@ -400,6 +457,8 @@ export default function AdminAccounts() {
                 const profileRequests = b.profile_change_requests || [];
                 const approvedDocs = docs.filter(d => d.status === "APPROVED").length;
                 const isExpanded = expandedId === b.id;
+                const lifecycle = b.lifecycle_state || "ACTIVE";
+                const lifecycleActionKey = `lifecycle-${b.id}`;
 
                 return (
                   <div key={b.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
@@ -412,8 +471,43 @@ export default function AdminAccounts() {
                           }`}>
                             {b.status === "APPROVED" ? "Verified Partner" : "Verification Pending"}
                           </span>
+                          {b.status === "APPROVED" && (
+                            <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                              lifecycle === "ACTIVE" ? "bg-[#00FFFF]/20 text-[#007C7D]" :
+                              lifecycle === "LOCKED" ? "bg-[#FFF200]/35 text-[#756D00]" :
+                              "bg-slate-200 text-slate-600"
+                            }`}>
+                              {lifecycle === "LOCKED" ? <Lock size={11} /> : lifecycle === "ARCHIVED" ? <Archive size={11} /> : <CheckCircle2 size={11} />}
+                              {lifecycle}
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-slate-500 mt-0.5">Owner: {b.owner?.full_name || "Unknown"} ({b.owner?.email}) • {approvedDocs} of 4 docs approved</p>
+                        {b.status === "APPROVED" && (
+                          <div className="mt-3 flex flex-wrap items-center gap-2" onClick={(event) => event.stopPropagation()}>
+                            {lifecycle === "ACTIVE" && (
+                              <button type="button" onClick={() => handleLifecycleAction(b, "LOCK")} disabled={lifecycleLoading[lifecycleActionKey]} className="inline-flex items-center gap-1.5 rounded-lg border border-[#D1C500] bg-[#FFF200]/20 px-2.5 py-1.5 text-[10px] font-black uppercase tracking-[0.08em] text-[#756D00] hover:bg-[#FFF200] disabled:opacity-50">
+                                <Lock size={12} /> Lock shop
+                              </button>
+                            )}
+                            {lifecycle === "LOCKED" && (
+                              <button type="button" onClick={() => handleLifecycleAction(b, "UNLOCK")} disabled={lifecycleLoading[lifecycleActionKey]} className="inline-flex items-center gap-1.5 rounded-lg border border-[#00AFC0] bg-[#00FFFF]/15 px-2.5 py-1.5 text-[10px] font-black uppercase tracking-[0.08em] text-[#007C7D] hover:bg-[#00FFFF] disabled:opacity-50">
+                                <Unlock size={12} /> Unlock shop
+                              </button>
+                            )}
+                            {lifecycle !== "ARCHIVED" && (
+                              <button type="button" onClick={() => handleLifecycleAction(b, "ARCHIVE")} disabled={lifecycleLoading[lifecycleActionKey]} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-1.5 text-[10px] font-black uppercase tracking-[0.08em] text-slate-600 hover:bg-slate-200 disabled:opacity-50">
+                                <Archive size={12} /> Archive
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {b.status === "APPROVED" && lifecycle !== "ACTIVE" && (
+                          <p className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-500">
+                            <Clock size={12} /> Last activity: {b.last_activity_at ? new Date(b.last_activity_at).toLocaleString() : "Not recorded"}
+                            {b.lock_reason ? ` • ${b.lock_reason}` : ""}
+                          </p>
+                        )}
                         <div className="mt-3 grid max-w-4xl grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
                           <div className="border-l-2 border-[#00C7C7] pl-2">
                             <p className="font-black uppercase tracking-[0.12em] text-[#008F91]">Business background</p>

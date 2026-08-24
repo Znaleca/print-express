@@ -1,6 +1,7 @@
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import LiveChatWidget from "@/components/LiveChatWidget";
+import CustomerOnboarding from "@/components/onboarding/CustomerOnboarding";
 import "@/assets/styles/globals.css";
 
 export const metadata = {
@@ -13,7 +14,9 @@ export default function RootLayout({ children }) {
     <html lang="en" data-scroll-behavior="smooth">
       <body className="min-h-screen flex flex-col app-body">
         <Navbar />
-        <div className="flex-1 app-route-shell">{children}</div>
+        <div className="flex-1 app-route-shell">
+          <CustomerOnboarding>{children}</CustomerOnboarding>
+        </div>
         <Footer />
         <LiveChatWidget />
       </body>

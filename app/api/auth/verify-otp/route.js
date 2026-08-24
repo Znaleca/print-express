@@ -10,10 +10,9 @@ const INVALID_CODE_MESSAGE = "Invalid or expired code.";
 async function removeCreatedAccount(supabase, userId) {
   // Compensating cleanup keeps an auth user from being left without the
   // profile/business rows that the signup workflow promises to create.
-  const { error: businessCleanupError } = await supabase
-    .from("businesses")
-    .delete()
-    .eq("owner_id", userId);
+  const { error: businessCleanupError } = await supabase.rpc("cleanup_failed_business_signup", {
+    p_user_id: userId,
+  });
   if (businessCleanupError) console.error("Signup business cleanup error:", businessCleanupError);
 
   const { error: profileCleanupError } = await supabase

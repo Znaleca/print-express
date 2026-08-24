@@ -118,7 +118,7 @@ export default function OwnerReviews() {
   }
 
   return (
-    <main className="owner-reviews-page min-h-screen bg-[#F6F6F2] font-sans text-slate-900 pb-20">
+    <main data-tour="owner-reviews" className="owner-reviews-page min-h-screen bg-[#F6F6F2] font-sans text-slate-900 pb-20">
       
       {/* Header Banner */}
       <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-10 pt-8 text-white sm:px-8 sm:pb-11 sm:pt-10 lg:px-10">

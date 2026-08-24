@@ -630,7 +630,7 @@ export default function CheckoutPage({ params }) {
               )}
 
               {/* STEP 0: ORDER REVIEW */}
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div data-tour="checkout-summary" className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-3">
                   <span className="w-6 h-6 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">0</span>
                   <div>

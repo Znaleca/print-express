@@ -7,15 +7,16 @@ import { LogOut, User, ChevronDown, LayoutDashboard, ShoppingBag } from "lucide-
 import { supabase } from "@/lib/supabaseClient";
 import BrandMark from "@/components/BrandMark";
 import PillNav from "@/components/PillNav";
+import ProfileAvatar from "@/components/ProfileAvatar";
 
-async function loadProfileRole(userId) {
+async function loadProfileIdentity(userId) {
   if (!userId) return null;
   const { data } = await supabase
     .from("profiles")
-    .select("role")
+    .select("role, avatar_url")
     .eq("id", userId)
     .maybeSingle();
-  return data?.role || null;
+  return data || null;
 }
 
 export default function Navbar() {
@@ -23,6 +24,7 @@ export default function Navbar() {
   const pathname = usePathname();
   const [user, setUser] = useState(null);
   const [profileRole, setProfileRole] = useState(null);
+  const [profileAvatar, setProfileAvatar] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -92,9 +94,10 @@ export default function Navbar() {
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       if (!mounted) return;
       setUser(currentUser || null);
-      const nextRole = currentUser ? await loadProfileRole(currentUser.id) : null;
+      const profile = currentUser ? await loadProfileIdentity(currentUser.id) : null;
       if (!mounted) return;
-      setProfileRole(nextRole);
+      setProfileRole(profile?.role || null);
+      setProfileAvatar(profile?.avatar_url || null);
       setLoading(false);
     };
     loadUser();
@@ -103,12 +106,15 @@ export default function Navbar() {
       const nextUser = session?.user || null;
       setUser(nextUser);
       setProfileRole(null);
+      setProfileAvatar(null);
       setLoading(false);
       // Supabase recommends deferring additional database work from inside
       // the auth callback to avoid blocking auth state delivery.
       window.setTimeout(async () => {
         if (!mounted || !nextUser) return;
-        setProfileRole(await loadProfileRole(nextUser.id));
+        const profile = await loadProfileIdentity(nextUser.id);
+        setProfileRole(profile?.role || null);
+        setProfileAvatar(profile?.avatar_url || null);
       }, 0);
     });
 
@@ -118,11 +124,25 @@ export default function Navbar() {
       }
     };
 
+    const handleProfileUpdated = (event) => {
+      const nextAvatar = event.detail?.avatar_url || null;
+      const nextName = event.detail?.full_name;
+      setProfileAvatar(nextAvatar);
+      if (nextName) {
+        setUser((current) => current ? {
+          ...current,
+          user_metadata: { ...(current.user_metadata || {}), full_name: nextName, avatar_url: nextAvatar },
+        } : current);
+      }
+    };
+
     document.addEventListener("mousedown", handleClickOutside);
+    window.addEventListener("profile-updated", handleProfileUpdated);
     return () => {
       mounted = false;
       subscription.unsubscribe();
       document.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("profile-updated", handleProfileUpdated);
     };
   }, []);
 
@@ -254,9 +274,13 @@ export default function Navbar() {
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                   className="group flex items-center gap-2.5 rounded-xl border border-stone-300 bg-stone-100 px-3 py-1.5 transition-all hover:border-stone-400 hover:bg-stone-200/70"
                 >
-                  <div className="w-7 h-7 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">
-                    {displayName.charAt(0).toUpperCase()}
-                  </div>
+                  <ProfileAvatar
+                    src={profileAvatar || headerUser.user_metadata?.avatar_url}
+                    name={displayName}
+                    className="h-7 w-7"
+                    fallbackClassName="bg-slate-900 text-white"
+                    sizes="28px"
+                  />
                   <span className="max-w-[120px] truncate text-sm font-bold text-slate-800">{displayName}</span>
                   <ChevronDown size={15} className={`text-slate-400 transition-transform duration-200 ${isDropdownOpen ? "rotate-180" : ""}`} />
                 </button>

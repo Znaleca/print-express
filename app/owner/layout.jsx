@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import OwnerSidebar from "@/components/owner/OwnerSidebar";
+import OwnerOnboarding from "@/components/onboarding/OwnerOnboarding";
 import { getUploadExtension, PRIVATE_ASSETS_BUCKET, optimizeImageForUpload, toStorageRef } from "@/lib/imageUpload";
 import {
   ShieldAlert, ShieldCheck, Loader2, Construction, Activity,
@@ -28,6 +29,9 @@ export default function OwnerLayout({ children }) {
   const [state, setState]           = useState("checking");
   const [businessName, setBusinessName] = useState("");
   const [businessId, setBusinessId]   = useState(null);
+  const [lifecycleState, setLifecycleState] = useState("ACTIVE");
+  const [lastActivityAt, setLastActivityAt] = useState(null);
+  const [lockReason, setLockReason] = useState("");
   const [userId, setUserId]           = useState(null);
   const [docStatuses, setDocStatuses] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -36,6 +40,8 @@ export default function OwnerLayout({ children }) {
   const [ownerDisplayName, setOwnerDisplayName] = useState("");
   const [ownerEmail, setOwnerEmail] = useState("");
   const [signingOut, setSigningOut] = useState(false);
+  const [reactivationLoading, setReactivationLoading] = useState(false);
+  const [reactivationError, setReactivationError] = useState("");
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 767px)");
@@ -77,7 +83,7 @@ export default function OwnerLayout({ children }) {
 
       const { data: business } = await supabase
         .from("businesses")
-        .select("id, name, status")
+        .select("id, name, status, lifecycle_state, last_activity_at, lock_reason")
         .eq("owner_id", user.id)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -93,12 +99,24 @@ export default function OwnerLayout({ children }) {
           .select("id, name").single();
         setBusinessName(created?.name || "");
         setBusinessId(created?.id);
+        setLifecycleState("ACTIVE");
         setState("unverified");
         return;
       }
 
       setBusinessName(business.name || "");
       setBusinessId(business.id);
+      const { data: inactivityExpired } = await supabase.rpc("is_business_inactivity_expired", {
+        p_business_id: business.id,
+      });
+      const shouldBeLocked = business.status === "APPROVED"
+        && business.lifecycle_state === "ACTIVE"
+        && inactivityExpired === true;
+      setLifecycleState(shouldBeLocked ? "LOCKED" : (business.lifecycle_state || "ACTIVE"));
+      setLastActivityAt(business.last_activity_at || null);
+      setLockReason(shouldBeLocked
+        ? "Automatically locked after inactivity. Sign in or contact an administrator to request reactivation."
+        : (business.lock_reason || ""));
 
       // If already fully approved at business level, skip doc check
       if (business.status === "APPROVED") {
@@ -181,6 +199,10 @@ export default function OwnerLayout({ children }) {
   // has not yet received all required documents.
   const ALLOWED_UNVERIFIED = ["/owner/documents"];
   const isLockedPage = state === "unverified" && !ALLOWED_UNVERIFIED.includes(pathname);
+  const isLifecycleBlocked = lifecycleState === "LOCKED" || lifecycleState === "ARCHIVED";
+  const inactiveDays = lastActivityAt
+    ? Math.max(0, Math.floor((Date.now() - new Date(lastActivityAt).getTime()) / 86400000))
+    : null;
 
   useEffect(() => {
     return () => {
@@ -685,6 +707,28 @@ export default function OwnerLayout({ children }) {
     router.refresh();
   };
 
+  const handleOwnerReactivate = async () => {
+    if (!businessId || lifecycleState !== "LOCKED" || reactivationLoading) return;
+    setReactivationLoading(true);
+    setReactivationError("");
+
+    const { data, error } = await supabase.rpc("owner_reactivate_shop", {
+      p_business_id: businessId,
+    });
+
+    if (error) {
+      setReactivationError(error.message || "Unable to reactivate your shop.");
+      setReactivationLoading(false);
+      return;
+    }
+
+    setLifecycleState(data?.lifecycle_state || "ACTIVE");
+    setLastActivityAt(new Date().toISOString());
+    setLockReason("");
+    setReactivationLoading(false);
+    router.refresh();
+  };
+
   /* ── PORTAL (all verified and unverified owners) ── */
   return (
     <div className="relative flex h-screen overflow-hidden bg-[#1A1A1A]">
@@ -718,7 +762,80 @@ export default function OwnerLayout({ children }) {
           <Menu size={20} />
         </button>
         <div className="min-h-full w-full relative">
-          {isLockedPage ? (
+          {isLifecycleBlocked ? (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#1A1A1A]/90 p-6 backdrop-blur-sm">
+              <div className="relative w-full max-w-2xl overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-7 shadow-[0_18px_42px_rgba(26,26,26,0.16)] sm:p-10">
+                <div className="cmyk-bar absolute left-0 right-0 top-0" />
+                <div className="mt-2 flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="font-mono text-[10px] font-black uppercase tracking-[0.28em] text-[#EC008C]">Shop access</p>
+                    <h2 className="mt-2 text-3xl font-black tracking-tight sm:text-5xl">
+                      {lifecycleState === "LOCKED" ? "Your shop is locked." : "Your shop is archived."}
+                    </h2>
+                  </div>
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-[#1A1A1A] text-[#FFF200]">
+                    <Lock size={26} />
+                  </div>
+                </div>
+
+                <p className="mt-6 border-l-4 border-[#EC008C] bg-[#F6F6F2] px-4 py-4 text-sm font-semibold leading-relaxed text-slate-700">
+                  {lifecycleState === "LOCKED"
+                    ? "Your shop was locked because it was inactive. Customers cannot place new orders while it is locked."
+                    : "Your shop was archived by an administrator. Your account and historical records are still preserved."}
+                </p>
+
+                <div className="mt-6 grid gap-3 text-sm sm:grid-cols-3">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Last activity</p>
+                    <p className="mt-2 font-bold text-slate-900">{lastActivityAt ? new Date(lastActivityAt).toLocaleString() : "Not recorded"}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Days inactive</p>
+                    <p className="mt-2 font-bold text-slate-900">{inactiveDays === null ? "—" : inactiveDays}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Lock reason</p>
+                    <p className="mt-2 font-bold text-slate-900">{lockReason || (lifecycleState === "ARCHIVED" ? "Archived by admin" : "Inactive shop")}</p>
+                  </div>
+                </div>
+
+                <div className="mt-7 border-t border-slate-200 pt-6">
+                  {lifecycleState === "LOCKED" ? (
+                    <>
+                      <p className="text-sm leading-relaxed text-slate-600">
+                        Review your shop information, then reactivate it when you are ready. Reactivation makes the approved shop visible to customers again and starts a new activity period.
+                      </p>
+                      {reactivationError && (
+                        <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+                          {reactivationError}
+                        </p>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleOwnerReactivate}
+                        disabled={reactivationLoading}
+                        className="mt-5 inline-flex w-full items-center justify-center rounded-xl bg-[#00FFFF] px-5 py-3.5 text-sm font-black text-[#1A1A1A] transition-colors hover:bg-[#EC008C] hover:text-white disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {reactivationLoading ? "Reactivating shop…" : "Reactivate my shop"}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm leading-relaxed text-slate-600">
+                        Archived shops cannot be reactivated by owners. Contact an administrator from your registered owner email if you need to request a review.
+                      </p>
+                      <a
+                        href="mailto:admin@pressandpresent.app?subject=Shop reactivation request"
+                        className="mt-5 inline-flex w-full items-center justify-center rounded-xl bg-[#1A1A1A] px-5 py-3.5 text-sm font-black text-white transition-colors hover:bg-[#00FFFF] hover:text-[#1A1A1A]"
+                      >
+                        Contact admin about reactivation
+                      </a>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : isLockedPage ? (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#1A1A1A]/90 p-6 backdrop-blur-sm">
                <div className="relative max-w-2xl overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-8 text-center shadow-[0_18px_42px_rgba(26,26,26,0.16)] sm:p-12">
                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#EC008C] opacity-10 rotate-45 transform translate-x-16 -translate-y-16" />
@@ -739,7 +856,9 @@ export default function OwnerLayout({ children }) {
                </div>
             </div>
           ) : (
-            children
+            <OwnerOnboarding mode={isVerified ? "approved" : "verification"}>
+              {children}
+            </OwnerOnboarding>
           )}
         </div>
       </main>

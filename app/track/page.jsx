@@ -398,7 +398,7 @@ export default function TrackOrderPage() {
         </section>
 
         {/* Orders List */}
-        <section className="mx-auto max-w-6xl px-4 pt-8 sm:px-8 lg:px-12">
+        <section data-tour="track-orders" className="mx-auto max-w-6xl px-4 pt-8 sm:px-8 lg:px-12">
           <div className="mb-5 flex flex-wrap items-end justify-end gap-4 border-b border-[#D8D6CE] pb-4">
             <div className="flex items-center gap-2 text-xs font-bold text-[#676762]">
               <ShoppingBag size={14} className="text-[#EC008C]" />

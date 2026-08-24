@@ -16,6 +16,8 @@ import {
 } from "@/lib/imageUpload";
 import { getShopQuestions } from "@/lib/chatQuestions";
 import ProfileAvatar from "@/components/ProfileAvatar";
+import VideoCallModal from "@/components/VideoCallModal";
+import { getVideoCallWindow, videoCallAction } from "@/lib/videoCalls";
 
 const DESIGN_FILE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,image/svg+xml,.ai,.psd,.eps,.tif,.tiff";
 const DESIGN_MAX_BYTES = 10 * 1024 * 1024;
@@ -58,7 +60,8 @@ function MessagesInner() {
   const [editingText, setEditingText] = useState("");
   const [unreadByConv, setUnreadByConv] = useState({});
   const [menuMessageId, setMenuMessageId] = useState(null);
-  const [jitsiRoom, setJitsiRoom] = useState(null);
+  const [videoCallSession, setVideoCallSession] = useState(null);
+  const [videoCalls, setVideoCalls] = useState([]);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
   const [showDesignUpload, setShowDesignUpload] = useState(false);
   const [designVersion, setDesignVersion] = useState("1");
@@ -68,72 +71,11 @@ function MessagesInner() {
   const msgLimitRef = useRef(20);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
-  const jitsiApiRef = useRef(null);
-  const jitsiScriptRef = useRef(null);
 
   const shopQuestions = useMemo(
     () => getShopQuestions(activeConv?.businesses),
     [activeConv]
   );
-
-  /* Jitsi API setup */
-  useEffect(() => {
-    if (!jitsiRoom) {
-      if (jitsiApiRef.current) {
-        try { jitsiApiRef.current.dispose(); } catch (_) {}
-        jitsiApiRef.current = null;
-      }
-      if (jitsiScriptRef.current && document.head.contains(jitsiScriptRef.current)) {
-        document.head.removeChild(jitsiScriptRef.current);
-        jitsiScriptRef.current = null;
-      }
-      return;
-    }
-
-    const initApi = () => {
-      const container = document.getElementById("jitsi-container-customer");
-      if (!container || !window.JitsiMeetExternalAPI) return;
-      if (jitsiApiRef.current) {
-        try { jitsiApiRef.current.dispose(); } catch (_) {}
-      }
-      jitsiApiRef.current = new window.JitsiMeetExternalAPI("meet.jit.si", {
-        roomName: jitsiRoom,
-        parentNode: container,
-        width: "100%",
-        height: "100%",
-        interfaceConfigOverwrite: {
-          SHOW_JITSI_WATERMARK: false,
-          SHOW_WATERMARK_FOR_GUESTS: false,
-          SHOW_BRAND_WATERMARK: false,
-          SHOW_POWERED_BY: false,
-          DISPLAY_WELCOME_PAGE_CONTENT: false,
-          TOOLBAR_BUTTONS: [
-            "microphone", "camera", "desktop", "fullscreen",
-            "fodeviceselection", "hangup", "chat", "settings",
-            "raisehand", "videoquality", "filmstrip", "tileview", "whiteboard",
-          ],
-        },
-        configOverwrite: {
-          startWithAudioMuted: false,
-          startWithVideoMuted: false,
-          disableDeepLinking: true,
-          hideConferenceSubject: true,
-        },
-      });
-      jitsiApiRef.current.addEventListener("readyToClose", () => setJitsiRoom(null));
-    };
-
-    if (window.JitsiMeetExternalAPI) {
-      initApi();
-    } else {
-      const script = document.createElement("script");
-      script.src = "https://meet.jit.si/external_api.js";
-      script.async = true;
-      script.onload = initApi;
-      jitsiScriptRef.current = script;
-      document.head.appendChild(script);
-    }
-  }, [jitsiRoom]);
 
   useEffect(() => {
     async function init() {
@@ -273,6 +215,38 @@ function MessagesInner() {
 
     return () => {
       if (channelRef.current) supabase.removeChannel(channelRef.current);
+    };
+  }, [activeConv]);
+
+  useEffect(() => {
+    if (!activeConv) {
+      setVideoCalls([]);
+      return undefined;
+    }
+
+    let active = true;
+    const loadCalls = async () => {
+      const { data, error } = await supabase
+        .from("video_calls")
+        .select("*")
+        .eq("conversation_id", activeConv.id)
+        .order("created_at", { ascending: false });
+      if (active && !error) setVideoCalls(data || []);
+    };
+
+    loadCalls();
+    const channel = supabase
+      .channel(`video-calls-customer:${activeConv.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "video_calls", filter: `conversation_id=eq.${activeConv.id}` },
+        loadCalls
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
     };
   }, [activeConv]);
 
@@ -506,19 +480,33 @@ function MessagesInner() {
   const requestVideoCall = async () => {
     if (!activeConv || !user || sending) return;
     setSending(true);
-    const { error } = await supabase.from("chat_messages").insert({
-      conversation_id: activeConv.id,
-      sender_id: user.id,
-      sender_role: "CUSTOMER",
-      content: "[VIDEO_CALL_REQUEST]",
-      message_type: "video_call",
-      metadata: {
-        capabilities: ["camera", "microphone", "screen share", "chat", "raise hand", "tile view", "video quality controls", "whiteboard"],
-      },
-      is_read: false,
-    });
-    if (error) window.alert(error.message || "Could not request a video call.");
+    try {
+      const result = await videoCallAction("request", { conversationId: activeConv.id });
+      if (result.call) setVideoCalls((current) => [result.call, ...current.filter((call) => call.id !== result.call.id)]);
+    } catch (error) {
+      window.alert(error.message || "Could not request a video call.");
+    }
     setSending(false);
+  };
+
+  const joinVideoCall = async (callId) => {
+    try {
+      const result = await videoCallAction("join", { callId });
+      if (!result.call?.room_name) throw new Error("The secure call room is unavailable.");
+      setVideoCallSession({ callId: result.call.id, roomName: result.call.room_name });
+    } catch (error) {
+      window.alert(error.message || "This call cannot be joined yet.");
+    }
+  };
+
+  const cancelVideoCall = async (callId) => {
+    if (!window.confirm("Cancel this video call? The shop will be notified in chat.")) return;
+    try {
+      const result = await videoCallAction("cancel", { callId, reason: "Cancelled by customer" });
+      if (result.call) setVideoCalls((current) => current.map((call) => call.id === result.call.id ? result.call : call));
+    } catch (error) {
+      window.alert(error.message || "Could not cancel the video call.");
+    }
   };
 
   const updateProofStatus = async (msg, status) => {
@@ -579,7 +567,7 @@ function MessagesInner() {
   };
 
   return (
-    <main className="messages-page h-[calc(100dvh-70px)] min-h-0 overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 flex flex-col sm:h-[calc(100dvh-86px)]">
+    <main data-tour="shop-messages" className="messages-page h-[calc(100dvh-70px)] min-h-0 overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 flex flex-col sm:h-[calc(100dvh-86px)]">
       
       {/* Compact header keeps the conversation visible above the fold. */}
       <section className="relative shrink-0 overflow-hidden border-b border-white/10 bg-[#1A1A1A] px-4 pb-4 pt-5 text-white sm:px-8 sm:pb-5 sm:pt-6 lg:px-10">
@@ -770,32 +758,45 @@ function MessagesInner() {
                             </div>
                           )}
 
-                          {m.content === "[VIDEO_CALL_REQUEST]" ? (
+                          {m.message_type === "video_call" ? (
+                            (() => {
+                              const call = videoCalls.find((item) => item.id === meta.video_call_id);
+                              const callWindow = getVideoCallWindow(call);
+                              const isScheduled = meta.event === "scheduled";
+                              return (
+                                <div className="text-center">
+                                  <Video size={26} className={`mx-auto mb-2 ${isScheduled ? "text-[#00aeb5]" : "text-[#EC008C]"}`} />
+                                  <p className="font-bold">{isScheduled ? "Video call scheduled" : meta.event === "cancelled" ? "Video call cancelled" : "Video call requested"}</p>
+                                  {isScheduled && call?.scheduled_at && <p className="mt-1 text-[11px] opacity-80">{new Date(call.scheduled_at).toLocaleString()}</p>}
+                                  {isScheduled && <p className="mt-1 text-[11px] opacity-60">Join from 15 minutes before the scheduled time. The secure room closes 30 minutes after.</p>}
+                                  {isScheduled && call && (
+                                    <div className="mt-3 flex w-full flex-col gap-2">
+                                      <button type="button" onClick={() => joinVideoCall(call.id)} disabled={!callWindow.joinable} className="rounded-lg bg-slate-900 px-4 py-2 text-[11px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-40">
+                                        {callWindow.expired ? "Call ended" : callWindow.joinable ? "Join secure call" : "Available 15 minutes before"}
+                                      </button>
+                                      {call.status === "SCHEDULED" && !callWindow.expired && <button type="button" onClick={() => cancelVideoCall(call.id)} className="rounded-lg border border-rose-200 px-4 py-2 text-[11px] font-bold text-rose-700 hover:bg-rose-50">Cancel call</button>}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()
+                          ) : m.content === "[VIDEO_CALL_REQUEST]" ? (
                             <div className="text-center">
                               <Video size={26} className="mx-auto mb-2 text-[#EC008C]" />
-                              <p className="font-bold">Video call requested</p>
-                              <p className="mt-1 text-[11px] opacity-70">Camera, microphone, screen share, chat, raise hand, tile view, quality controls.</p>
+                              <p className="font-bold">Older video call request</p>
+                              <p className="mt-1 text-[11px] opacity-70">Ask the shop to schedule a new secure call.</p>
                             </div>
                           ) : m.content?.startsWith("[VIDEO_CALL_INVITE:") ? (
                             (() => {
                               const timeStr = m.content.replace("[VIDEO_CALL_INVITE:", "").replace("]", "");
                               const schedTime = new Date(timeStr);
-                              const isExpired = Date.now() - schedTime.getTime() > (30 * 60 * 1000);
-                              const joinable = !isExpired && (schedTime.getTime() - Date.now()) <= (15 * 60 * 1000);
                               return (
                                 <div className="text-center">
                                   <Calendar size={26} className="mx-auto mb-2 text-[#00FFFF]" />
                                   <p className="font-bold">Video call scheduled</p>
                                   <p className="mt-1 text-[11px] opacity-80">{schedTime.toLocaleString()}</p>
                                   <p className="mt-1 text-[11px] opacity-60">Includes camera, microphone, screen share, chat, raise hand, tile view, quality controls, and whiteboard.</p>
-                                  <button
-                                    type="button"
-                                    onClick={() => setJitsiRoom(`print-app-call-${activeConv.id}`)}
-                                    disabled={!joinable}
-                                    className="mt-3 rounded-lg bg-slate-900 px-4 py-2 text-[11px] font-bold text-white disabled:opacity-40"
-                                  >
-                                    {isExpired ? "Link expired" : joinable ? "Join call" : "Available 15 minutes before"}
-                                  </button>
+                                  <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-800">This older invite uses the previous room system. Ask the shop to reschedule it securely.</p>
                                 </div>
                               );
                             })()
@@ -1023,22 +1024,12 @@ function MessagesInner() {
         </section>
 
       </div>
-      {jitsiRoom && (
-        <div className="fixed inset-0 z-[999] flex flex-col bg-slate-950">
-          <div className="flex items-center justify-between border-b border-cyan-400 bg-slate-950 px-5 py-3 text-white">
-            <div className="flex items-center gap-3">
-              <Video size={18} className="text-cyan-300" />
-              <div>
-                <p className="text-sm font-extrabold uppercase">Live video proofing call</p>
-                <p className="text-[11px] text-slate-400">Camera, microphone, screen share, chat, raise hand, tile view, quality controls, and whiteboard.</p>
-              </div>
-            </div>
-            <button type="button" onClick={() => setJitsiRoom(null)} className="rounded-lg bg-[#EC008C] px-4 py-2 text-xs font-bold text-white">
-              End & Close
-            </button>
-          </div>
-          <div id="jitsi-container-customer" className="flex-1 w-full" />
-        </div>
+      {videoCallSession && (
+        <VideoCallModal
+          callSession={videoCallSession}
+          participantLabel={activeConv?.businesses?.name || "Print shop"}
+          onClose={() => setVideoCallSession(null)}
+        />
       )}
     </main>
   );

@@ -7,13 +7,15 @@ import { supabase } from "@/lib/supabaseClient";
 import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
 import {
   Store, Save, Loader2, UploadCloud, QrCode, Power, MapPin, MapPinned,
-  CheckCircle2, ShieldCheck, Phone, Mail, Globe2, ExternalLink, Info
+  CheckCircle2, ShieldCheck, Phone, Mail, Globe2, ExternalLink, Info, Clock, RotateCcw
 } from "lucide-react";
 
 const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker"), { ssr: false });
 
 const BUCKET = "shop-logos";
 const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const DEFAULT_DAY = (day_of_week) => ({ day_of_week, configured: false, is_closed: false, opens_at: "09:00", closes_at: "17:00" });
 
 export default function ShopProfilePage() {
   const [form, setForm] = useState({
@@ -26,6 +28,13 @@ export default function ShopProfilePage() {
   const [businessId, setBusinessId] = useState(null);
   const [isOpen, setIsOpen] = useState(true);
   const [togglingOpen, setTogglingOpen] = useState(false);
+  const [hours, setHours] = useState(DAY_NAMES.map((_, day) => DEFAULT_DAY(day)));
+  const [initialHours, setInitialHours] = useState(DAY_NAMES.map((_, day) => DEFAULT_DAY(day)));
+  const [timezone, setTimezone] = useState("Asia/Manila");
+  const [initialTimezone, setInitialTimezone] = useState("Asia/Manila");
+  const [manualOverride, setManualOverride] = useState(null);
+  const [initialManualOverride, setInitialManualOverride] = useState(null);
+  const [hoursSaving, setHoursSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
@@ -51,7 +60,7 @@ export default function ShopProfilePage() {
 
       const { data: biz } = await supabase
         .from("businesses")
-        .select("id, name, description, products_summary, address, phone, email, website, logo_url, qr_url, lat, lng, min_downpayment_percent, is_open")
+        .select("id, name, description, products_summary, address, phone, email, website, logo_url, qr_url, lat, lng, min_downpayment_percent, is_open, timezone, manual_open_override")
         .eq("owner_id", user.id)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -78,6 +87,24 @@ export default function ShopProfilePage() {
         if (biz.logo_url) setLogoPreview(biz.logo_url);
         if (biz.qr_url) setQrPreview(biz.qr_url);
         setIsOpen(biz.is_open ?? true);
+        setTimezone(biz.timezone || "Asia/Manila");
+        setInitialTimezone(biz.timezone || "Asia/Manila");
+        setManualOverride(biz.manual_open_override ?? null);
+        setInitialManualOverride(biz.manual_open_override ?? null);
+
+        const { data: savedHours } = await supabase
+          .from("business_hours")
+          .select("id, business_id, day_of_week, opens_at, closes_at, is_closed")
+          .eq("business_id", biz.id)
+          .order("day_of_week");
+        const nextHours = DAY_NAMES.map((_, day) => {
+          const saved = (savedHours || []).find((row) => row.day_of_week === day);
+          return saved
+            ? { ...DEFAULT_DAY(day), ...saved, configured: true, opens_at: saved.opens_at?.slice(0, 5) || "09:00", closes_at: saved.closes_at?.slice(0, 5) || "17:00" }
+            : DEFAULT_DAY(day);
+        });
+        setHours(nextHours);
+        setInitialHours(nextHours);
       }
       setLoading(false);
     };
@@ -91,7 +118,7 @@ export default function ShopProfilePage() {
 
     const { error: err } = await supabase
       .from("businesses")
-      .update({ is_open: next })
+      .update({ is_open: next, manual_open_override: next, manual_override_until: null })
       .eq("id", businessId);
 
     setTogglingOpen(false);
@@ -99,6 +126,81 @@ export default function ShopProfilePage() {
       alert("Failed to update status: " + err.message);
     } else {
       setIsOpen(next);
+      setManualOverride(next);
+      setInitialManualOverride(next);
+    }
+  };
+
+  const handleResumeSchedule = async () => {
+    if (!businessId || togglingOpen) return;
+    setTogglingOpen(true);
+    const { error: err } = await supabase
+      .from("businesses")
+      .update({ is_open: true, manual_open_override: null, manual_override_until: null })
+      .eq("id", businessId);
+
+    if (!err) {
+      const { data: effectiveOpen } = await supabase.rpc("is_business_open_now", { p_business_id: businessId });
+      setIsOpen(Boolean(effectiveOpen));
+      setManualOverride(null);
+      setInitialManualOverride(null);
+    }
+    setTogglingOpen(false);
+    if (err) alert("Failed to resume schedule: " + err.message);
+  };
+
+  const updateDay = (day, patch) => {
+    setHours((current) => current.map((row) => row.day_of_week === day ? { ...row, ...patch } : row));
+  };
+
+  const saveOperatingHours = async () => {
+    if (!businessId) return;
+    setHoursSaving(true);
+    try {
+      const { error: timezoneError } = await supabase
+        .from("businesses")
+        .update({ timezone: timezone || "Asia/Manila" })
+        .eq("id", businessId);
+      if (timezoneError) throw timezoneError;
+
+      const rowsToSave = hours
+        .filter((row) => row.configured)
+        .map((row) => ({
+          business_id: businessId,
+          day_of_week: row.day_of_week,
+          opens_at: row.is_closed ? null : row.opens_at,
+          closes_at: row.is_closed ? null : row.closes_at,
+          is_closed: row.is_closed,
+          updated_at: new Date().toISOString(),
+        }));
+
+      if (rowsToSave.length > 0) {
+        const { error: upsertError } = await supabase
+          .from("business_hours")
+          .upsert(rowsToSave, { onConflict: "business_id,day_of_week" });
+        if (upsertError) throw upsertError;
+      }
+
+      const removedDays = initialHours
+        .filter((row) => row.configured && !hours.find((next) => next.day_of_week === row.day_of_week)?.configured)
+        .map((row) => row.day_of_week);
+      if (removedDays.length > 0) {
+        const { error: deleteError } = await supabase
+          .from("business_hours")
+          .delete()
+          .eq("business_id", businessId)
+          .in("day_of_week", removedDays);
+        if (deleteError) throw deleteError;
+      }
+
+      setInitialHours(hours);
+      setInitialTimezone(timezone);
+      showToast("Operating hours saved.");
+    } catch (error) {
+      showToast(error.message || "Could not save operating hours.", "error");
+      throw error;
+    } finally {
+      setHoursSaving(false);
     }
   };
 
@@ -110,7 +212,12 @@ export default function ShopProfilePage() {
   const handleChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
 
   const hasUnsavedChanges = Boolean(initialForm) && (
-    JSON.stringify(form) !== JSON.stringify(initialForm) || Boolean(logoFile) || Boolean(qrFile)
+    JSON.stringify(form) !== JSON.stringify(initialForm)
+    || Boolean(logoFile)
+    || Boolean(qrFile)
+    || JSON.stringify(hours) !== JSON.stringify(initialHours)
+    || timezone !== initialTimezone
+    || manualOverride !== initialManualOverride
   );
 
   const handleLogoSelected = async (file) => {
@@ -210,6 +317,7 @@ export default function ShopProfilePage() {
 
       setForm((p) => ({ ...p, logo_url: finalLogoUrl, qr_url: finalQrUrl, min_downpayment_percent: minDp }));
       setInitialForm(payload);
+      await saveOperatingHours();
       setLogoFile(null);
       setQrFile(null);
       showToast("Shop profile updated successfully.");
@@ -235,7 +343,7 @@ export default function ShopProfilePage() {
   }
 
   return (
-    <main className="owner-shop-page min-h-screen bg-[#F6F6F2] pb-20 font-sans text-slate-900">
+    <main data-tour="owner-shop-profile" className="owner-shop-page min-h-screen bg-[#F6F6F2] pb-20 font-sans text-slate-900">
       <section className="relative overflow-hidden border-b border-slate-200 bg-white px-4 pb-7 pt-8 sm:px-8 sm:pb-8 sm:pt-10 lg:px-10">
         <div className="cmyk-bar absolute left-0 right-0 top-0" />
         <div className="pointer-events-none absolute -right-24 -top-32 h-80 w-80 rounded-full border border-[#00AFC0]/15" />
@@ -259,6 +367,7 @@ export default function ShopProfilePage() {
               </div>
             </div>
             <button
+              data-tour="owner-shop-status"
               type="button"
               onClick={handleToggleOpen}
               disabled={togglingOpen}
@@ -284,6 +393,93 @@ export default function ShopProfilePage() {
         <form onSubmit={handleSubmit}>
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="min-w-0 space-y-6">
+              <section className="rounded-3xl border border-[#D8D6CE] bg-white p-5 shadow-sm sm:p-7">
+                <div className="flex flex-col justify-between gap-4 border-b border-slate-100 pb-4 sm:flex-row sm:items-start">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">Store hours</p>
+                    <h2 className="mt-1 text-xl font-black text-slate-900">When customers can order</h2>
+                    <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">Set a weekly schedule or leave a day unconfigured to follow your manual shop status.</p>
+                  </div>
+                  <Clock size={20} className="text-[#00AFC0]" />
+                </div>
+
+                <div className="mt-5 grid gap-2">
+                  {hours.map((row) => (
+                    <div key={row.day_of_week} className="grid gap-3 rounded-2xl border border-slate-200 bg-[#F9F9F7] p-3 sm:grid-cols-[150px_minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center">
+                      <label className="flex items-center gap-2 text-xs font-black text-slate-800">
+                        <input
+                          type="checkbox"
+                          checked={row.configured}
+                          onChange={(event) => updateDay(row.day_of_week, { configured: event.target.checked })}
+                          className="h-4 w-4 accent-[#EC008C]"
+                        />
+                        {DAY_NAMES[row.day_of_week]}
+                      </label>
+                      {row.configured ? (
+                        <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-500">
+                          Opens
+                          <input
+                            type="time"
+                            value={row.opens_at}
+                            disabled={row.is_closed}
+                            onChange={(event) => updateDay(row.day_of_week, { opens_at: event.target.value })}
+                            className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs font-bold text-slate-800 outline-none focus:border-[#00AFC0] disabled:cursor-not-allowed disabled:opacity-40"
+                          />
+                        </label>
+                      ) : <span className="text-[11px] text-slate-400 sm:col-span-2">No schedule configured</span>}
+                      {row.configured && (
+                        <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-500">
+                          Closes
+                          <input
+                            type="time"
+                            value={row.closes_at}
+                            disabled={row.is_closed}
+                            onChange={(event) => updateDay(row.day_of_week, { closes_at: event.target.value })}
+                            className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs font-bold text-slate-800 outline-none focus:border-[#00AFC0] disabled:cursor-not-allowed disabled:opacity-40"
+                          />
+                        </label>
+                      )}
+                      {row.configured && (
+                        <label className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500">
+                          <input
+                            type="checkbox"
+                            checked={row.is_closed}
+                            onChange={(event) => updateDay(row.day_of_week, { is_closed: event.target.checked })}
+                            className="h-4 w-4 accent-[#EC008C]"
+                          />
+                          Closed
+                        </label>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-[#00AFC0]/25 bg-[#00FFFF]/[0.06] p-4 sm:flex-row sm:items-end sm:justify-between">
+                  <label className="block max-w-xs">
+                    <span className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Shop timezone</span>
+                    <select
+                      value={timezone}
+                      onChange={(event) => setTimezone(event.target.value)}
+                      className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-800 outline-none focus:border-[#00AFC0]"
+                    >
+                      <option value="Asia/Manila">Asia/Manila (Philippine Time)</option>
+                      <option value="Asia/Singapore">Asia/Singapore</option>
+                      <option value="UTC">UTC</option>
+                    </select>
+                  </label>
+                  <div className="text-left sm:text-right">
+                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Manual status</p>
+                    <p className="mt-1 text-xs font-bold text-slate-800">{manualOverride === null ? "Following schedule" : manualOverride ? "Forced open" : "Forced closed"}</p>
+                    {manualOverride !== null && (
+                      <button type="button" onClick={handleResumeSchedule} disabled={togglingOpen} className="mt-2 inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-[#C40075] hover:underline disabled:opacity-50">
+                        <RotateCcw size={12} /> Resume schedule
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {hoursSaving && <p className="mt-3 text-[10px] font-black uppercase tracking-[0.12em] text-[#C40075]">Saving hours...</p>}
+              </section>
+
               <section className="overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white shadow-sm">
                 <div className="cmyk-bar-sm" />
                 <div className="border-b border-slate-100 px-5 py-5 sm:px-7">

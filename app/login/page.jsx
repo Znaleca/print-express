@@ -104,6 +104,16 @@ export default function LoginPage() {
         BUSINESS_OWNER: "/owner"
       };
 
+      if (role === "BUSINESS_OWNER" && data.session?.access_token) {
+        await fetch("/api/auth/owner-activity", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${data.session.access_token}` },
+          cache: "no-store",
+        }).catch((activityError) => {
+          console.warn("Owner activity could not be recorded:", activityError);
+        });
+      }
+
       // Login is a transition into the app, so don't leave the login screen in
       // browser history when sending portal users to their workspace.
       router.replace(routes[role] || "/");

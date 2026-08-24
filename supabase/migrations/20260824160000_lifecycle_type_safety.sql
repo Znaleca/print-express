@@ -1,11 +1,109 @@
--- Atomic checkout transaction for Supabase/Vercel free-tier deployments.
--- Run after orders, services, chat quotes, and inventory migrations.
+-- Fix database-lint type errors in existing server-side functions.
+-- This migration is intentionally additive so already-applied migrations stay immutable.
 
-alter table if exists public.inventory_movements
-  add column if not exists created_by uuid;
+begin;
 
-alter table if exists public.inventory_movements
-  add column if not exists note text;
+create or replace function public.admin_set_business_status(
+  p_business_id uuid,
+  p_action text,
+  p_requester_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_owner uuid;
+  new_status public.business_status;
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = p_requester_id and role = 'ADMIN'
+  ) then
+    raise exception 'Admin access required';
+  end if;
+
+  if p_action not in ('APPROVE', 'REJECT') then
+    raise exception 'Invalid business approval action';
+  end if;
+
+  select owner_id into target_owner
+  from public.businesses
+  where id = p_business_id
+  for update;
+
+  if not found then
+    raise exception 'Business not found';
+  end if;
+
+  new_status := case
+    when p_action = 'APPROVE' then 'APPROVED'::public.business_status
+    else 'REJECTED'::public.business_status
+  end;
+
+  update public.businesses
+  set status = new_status
+  where id = p_business_id;
+
+  if p_action = 'APPROVE' then
+    update public.profiles
+    set role = 'BUSINESS_OWNER', updated_at = now()
+    where id = target_owner;
+  end if;
+
+  return jsonb_build_object(
+    'business_id', p_business_id,
+    'owner_id', target_owner,
+    'status', new_status::text
+  );
+end;
+$$;
+
+revoke all on function public.admin_set_business_status(uuid, text, uuid)
+  from public, anon, authenticated;
+grant execute on function public.admin_set_business_status(uuid, text, uuid)
+  to service_role;
+
+create or replace function public.touch_business_activity(
+  p_business_id uuid,
+  p_activity_type text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  actor_id uuid := auth.uid();
+begin
+  if actor_id is null or p_business_id is null then
+    return;
+  end if;
+
+  if nullif(trim(coalesce(p_activity_type, '')), '') is null then
+    return;
+  end if;
+
+  if exists (
+    select 1
+    from public.businesses b
+    where b.id = p_business_id
+      and b.owner_id = actor_id
+      and b.lifecycle_state = 'ACTIVE'
+  ) then
+    perform set_config('app.business_system_write', 'true', true);
+    perform set_config('app.business_activity_type', p_activity_type, true);
+
+    update public.businesses
+    set last_activity_at = now()
+    where id = p_business_id;
+  end if;
+end;
+$$;
+
+revoke all on function public.touch_business_activity(uuid, text)
+  from public, anon, authenticated, service_role;
 
 create or replace function public.place_order_atomic(
   p_business_id uuid,
@@ -133,8 +231,6 @@ begin
       end loop;
     end if;
 
-    -- Quoted custom work is valid only when the amount comes from a quote
-    -- message sent by this shop in this customer's conversation.
     if coalesce((item->>'is_quoted_checkout')::boolean, false) then
       if item->>'source_message_id' is null then
         raise exception 'Quoted item is missing its quote reference';
@@ -260,5 +356,9 @@ begin
 end;
 $$;
 
-revoke all on function public.place_order_atomic(uuid, jsonb, jsonb) from public, anon;
-grant execute on function public.place_order_atomic(uuid, jsonb, jsonb) to authenticated, service_role;
+revoke all on function public.place_order_atomic(uuid, jsonb, jsonb)
+  from public, anon;
+grant execute on function public.place_order_atomic(uuid, jsonb, jsonb)
+  to authenticated, service_role;
+
+commit;

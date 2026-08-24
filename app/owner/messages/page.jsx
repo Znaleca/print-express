@@ -25,6 +25,8 @@ import {
 } from "@/lib/chatQuestions";
 import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
 import ProfileAvatar from "@/components/ProfileAvatar";
+import VideoCallModal from "@/components/VideoCallModal";
+import { getVideoCallWindow, videoCallAction } from "@/lib/videoCalls";
 
 const DESIGN_FILE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,image/svg+xml,.ai,.psd,.eps,.tif,.tiff";
 const DESIGN_MAX_BYTES = 10 * 1024 * 1024;
@@ -65,6 +67,7 @@ export default function OwnerMessagesPage() {
   const [unreadByConv, setUnreadByConv] = useState({});
   const [menuMessageId, setMenuMessageId] = useState(null);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [scheduleCallId, setScheduleCallId] = useState(null);
   const [scheduleTime, setScheduleTime] = useState("");
   const [showQuote, setShowQuote] = useState(false);
   const [quoteAmount, setQuoteAmount] = useState("");
@@ -73,7 +76,8 @@ export default function OwnerMessagesPage() {
   const [quoteTerms, setQuoteTerms] = useState("Includes prepress review, proofing, print production, and standard finishing unless stated otherwise.");
   const [showDesign, setShowDesign] = useState(false);
   const [designVersion, setDesignVersion] = useState("1");
-  const [jitsiRoom, setJitsiRoom] = useState(null);
+  const [videoCallSession, setVideoCallSession] = useState(null);
+  const [videoCalls, setVideoCalls] = useState([]);
   const [videoCallRequestAlert, setVideoCallRequestAlert] = useState(false);
   const [viewImagePopup, setViewImagePopup] = useState(null); // { url, label }
   const [showQuestionEditor, setShowQuestionEditor] = useState(false);
@@ -84,80 +88,12 @@ export default function OwnerMessagesPage() {
   const scrollContainerRef = useRef(null);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
-  const jitsiApiRef = useRef(null);
-  const jitsiScriptRef = useRef(null);
 
   const openProtectedImage = async (value, label) => {
     const url = await resolveStorageUrl(value);
     if (url) setViewImagePopup({ url, label });
     else window.alert("This attachment is unavailable or access was denied.");
   };
-
-  /* ── 0. Jitsi External API (no-logo) ── */
-  useEffect(() => {
-    if (!jitsiRoom) {
-      if (jitsiApiRef.current) {
-        try { jitsiApiRef.current.dispose(); } catch (_) {}
-        jitsiApiRef.current = null;
-      }
-      if (jitsiScriptRef.current && document.head.contains(jitsiScriptRef.current)) {
-        document.head.removeChild(jitsiScriptRef.current);
-        jitsiScriptRef.current = null;
-      }
-      return;
-    }
-
-    const initApi = () => {
-      const container = document.getElementById("jitsi-container-owner");
-      if (!container || !window.JitsiMeetExternalAPI) return;
-      if (jitsiApiRef.current) {
-        try { jitsiApiRef.current.dispose(); } catch (_) {}
-      }
-      jitsiApiRef.current = new window.JitsiMeetExternalAPI("meet.jit.si", {
-        roomName: jitsiRoom,
-        parentNode: container,
-        width: "100%",
-        height: "100%",
-        interfaceConfigOverwrite: {
-          SHOW_JITSI_WATERMARK: false,
-          SHOW_WATERMARK_FOR_GUESTS: false,
-          SHOW_BRAND_WATERMARK: false,
-          SHOW_POWERED_BY: false,
-          DISPLAY_WELCOME_PAGE_CONTENT: false,
-          TOOLBAR_BUTTONS: [
-            "microphone", "camera", "desktop", "fullscreen",
-            "fodeviceselection", "hangup", "chat", "settings",
-            "raisehand", "videoquality", "filmstrip", "tileview", "whiteboard",
-          ],
-        },
-        configOverwrite: {
-          startWithAudioMuted: false,
-          startWithVideoMuted: false,
-          disableDeepLinking: true,
-          hideConferenceSubject: true,
-        },
-      });
-      jitsiApiRef.current.addEventListener("readyToClose", () => setJitsiRoom(null));
-    };
-
-    if (window.JitsiMeetExternalAPI) {
-      initApi();
-    } else {
-      const script = document.createElement("script");
-      script.src = "https://meet.jit.si/external_api.js";
-      script.async = true;
-      script.onload = initApi;
-      jitsiScriptRef.current = script;
-      document.head.appendChild(script);
-    }
-
-    return () => {
-      if (jitsiApiRef.current) {
-        try { jitsiApiRef.current.dispose(); } catch (_) {}
-        jitsiApiRef.current = null;
-      }
-    };
-  }, [jitsiRoom]);
 
   /* ── 1. Auth ── */
   useEffect(() => {
@@ -317,14 +253,41 @@ export default function OwnerMessagesPage() {
     };
   }, [activeConv]);
 
-  // Detect unanswered video call requests
   useEffect(() => {
-    if (!messages.length || !user) return;
-    const hasRequest = messages.some(m => m.content === "[VIDEO_CALL_REQUEST]" && m.sender_id !== user.id);
-    const hasInvite = messages.some(m => m.content?.startsWith("[VIDEO_CALL_INVITE:") && m.sender_id === user.id);
-    // Show alert if there's a request and no invite has been sent yet
-    setVideoCallRequestAlert(hasRequest && !hasInvite);
-  }, [messages, user]);
+    if (!activeConv) {
+      setVideoCalls([]);
+      return undefined;
+    }
+
+    let active = true;
+    const loadCalls = async () => {
+      const { data, error } = await supabase
+        .from("video_calls")
+        .select("*")
+        .eq("conversation_id", activeConv.id)
+        .order("created_at", { ascending: false });
+      if (active && !error) setVideoCalls(data || []);
+    };
+
+    loadCalls();
+    const channel = supabase
+      .channel(`video-calls-owner:${activeConv.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "video_calls", filter: `conversation_id=eq.${activeConv.id}` },
+        loadCalls
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [activeConv]);
+
+  useEffect(() => {
+    setVideoCallRequestAlert(videoCalls.some((call) => call.status === "REQUESTED" && call.customer_id !== user?.id));
+  }, [videoCalls, user]);
 
   const fetchMessages = async (convId, isBg = false, limit = 20, prepend = false) => {
     const previousHeight = scrollContainerRef.current?.scrollHeight || 0;
@@ -486,23 +449,48 @@ export default function OwnerMessagesPage() {
   };
 
   const sendVideoCallInvite = async () => {
-    if (!scheduleTime || !activeConv || !user) return;
+    if (!scheduleTime || !scheduleCallId || !activeConv || !user) return;
     setSending(true);
-    const { error: inviteError } = await supabase.from("chat_messages").insert({
-      conversation_id: activeConv.id,
-      sender_id: user.id,
-      sender_role: "BUSINESS_OWNER",
-      content: `[VIDEO_CALL_INVITE:${new Date(scheduleTime).toISOString()}]`,
-      is_read: false,
-    });
-    if (inviteError) {
-      window.alert(inviteError.message || "Could not send the video call invite.");
+    try {
+      const result = await videoCallAction("schedule", {
+        callId: scheduleCallId,
+        scheduledAt: new Date(scheduleTime).toISOString(),
+      });
+      if (result.call) setVideoCalls((current) => [result.call, ...current.filter((call) => call.id !== result.call.id)]);
+    } catch (error) {
+      window.alert(error.message || "Could not send the video call invite.");
       setSending(false);
       return;
     }
     setSending(false);
     setShowSchedule(false);
     setScheduleTime("");
+    setScheduleCallId(null);
+  };
+
+  const openScheduleForCall = (callId) => {
+    setScheduleCallId(callId);
+    setShowSchedule(true);
+  };
+
+  const joinVideoCall = async (callId) => {
+    try {
+      const result = await videoCallAction("join", { callId });
+      if (!result.call?.room_name) throw new Error("The secure call room is unavailable.");
+      setVideoCallSession({ callId: result.call.id, roomName: result.call.room_name });
+    } catch (error) {
+      window.alert(error.message || "This call cannot be joined yet.");
+    }
+  };
+
+  const cancelVideoCall = async (callId) => {
+    if (!window.confirm("Cancel this video call? The customer will see the update in chat.")) return;
+    try {
+      const result = await videoCallAction("cancel", { callId, reason: "Cancelled by shop" });
+      if (result.call) setVideoCalls((current) => current.map((call) => call.id === result.call.id ? result.call : call));
+    } catch (error) {
+      window.alert(error.message || "Could not cancel the video call.");
+    }
   };
 
   const sendQuoteMessage = async () => {
@@ -867,7 +855,7 @@ export default function OwnerMessagesPage() {
   }
 
   return (
-    <div className="owner-messages-page flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 md:h-[100dvh]">
+    <div data-tour="owner-messages" className="owner-messages-page flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 md:h-[100dvh]">
       <div className="relative shrink-0 border-b border-slate-200 bg-white px-4 pb-6 pt-8 sm:px-8 sm:pb-7">
         <div className="cmyk-bar absolute left-0 right-0 top-0" />
         <div className="mx-auto w-full max-w-[1920px]">
@@ -1019,7 +1007,16 @@ export default function OwnerMessagesPage() {
                     <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
-                        onClick={() => { setShowSchedule(true); setShowQuote(false); setShowDesign(false); }}
+                        onClick={() => {
+                          const pendingCall = videoCalls.find((call) => call.status === "REQUESTED");
+                          if (!pendingCall) {
+                            window.alert("The customer request is no longer active. Ask them to request another call.");
+                            return;
+                          }
+                          openScheduleForCall(pendingCall.id);
+                          setShowQuote(false);
+                          setShowDesign(false);
+                        }}
                         className="rounded-lg bg-[#EC008C] px-3 py-2 text-[10px] font-bold text-white transition-colors hover:bg-[#c90078]"
                       >
                         Schedule Now
@@ -1147,51 +1144,46 @@ export default function OwnerMessagesPage() {
                                 <button type="button" onClick={() => { setEditingId(null); setEditingText(""); }} className="p-1 border-2 border-[#1A1A1A] bg-white text-[#1A1A1A]"><X size={12} /></button>
                               </div>
                             </div>
+                          ) : msg.message_type === "video_call" ? (
+                            (() => {
+                              const call = videoCalls.find((item) => item.id === meta.video_call_id);
+                              const callWindow = getVideoCallWindow(call);
+                              const isScheduled = meta.event === "scheduled";
+                              return (
+                                <div className="flex w-56 flex-col items-center border-t-4 border-[#00FFFF] bg-white/5 p-3 text-center">
+                                  <Video size={28} className={`mb-2 ${isScheduled ? "text-[#00FFFF]" : "text-[#EC008C]"}`} />
+                                  <p className="font-black uppercase text-xs">{isScheduled ? "Video Call Scheduled" : meta.event === "cancelled" ? "Video Call Cancelled" : "Video Call Requested"}</p>
+                                  {isScheduled && call?.scheduled_at && <p className="mt-1 font-mono text-[10px] font-bold uppercase opacity-90">{new Date(call.scheduled_at).toLocaleString()}</p>}
+                                  {!isScheduled && meta.event !== "cancelled" && !isMine && (
+                                    <button type="button" onClick={() => call && openScheduleForCall(call.id)} disabled={!call} className="mt-3 w-full bg-[#EC008C] px-4 py-2 font-black uppercase text-[10px] text-white transition-all hover:bg-[#00FFFF] hover:text-[#1A1A1A] disabled:opacity-40">Schedule Call</button>
+                                  )}
+                                  {isScheduled && call && (
+                                    <div className="mt-3 flex w-full flex-col gap-2">
+                                      <button type="button" onClick={() => joinVideoCall(call.id)} disabled={!callWindow.joinable} className="w-full bg-[#EC008C] px-4 py-2 font-black uppercase text-[10px] text-white transition-all hover:bg-[#FFF200] hover:text-[#1A1A1A] disabled:cursor-not-allowed disabled:opacity-40">
+                                        {callWindow.expired ? "Call ended" : callWindow.joinable ? "Join secure call" : "Not yet available"}
+                                      </button>
+                                      {!callWindow.expired && <div className="flex gap-2">{isMine && <button type="button" onClick={() => openScheduleForCall(call.id)} className="flex-1 border border-cyan-300/40 px-2 py-1.5 font-mono text-[9px] font-bold uppercase text-cyan-200 hover:bg-cyan-300/10">Reschedule</button>}<button type="button" onClick={() => cancelVideoCall(call.id)} className="flex-1 border border-rose-200/30 px-2 py-1.5 font-mono text-[9px] font-bold uppercase text-rose-200 hover:bg-rose-200/10">Cancel</button></div>}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()
                           ) : msg.content === "[VIDEO_CALL_REQUEST]" ? (
                             <div className="flex flex-col items-center p-3 text-center w-48">
-                              <Video size={28} className={`mb-2 ${isMine ? "text-[#00FFFF]" : "text-[#EC008C]"}`} />
-                              <p className="font-black uppercase text-xs whitespace-normal">Video Call Requested</p>
-                              <p className="font-mono text-[9px] uppercase mt-1 opacity-70">
-                                {isMine ? "You requested a call" : "Customer is waiting..."}
-                              </p>
-                              {!isMine && (
-                                <button
-                                  type="button"
-                                  onClick={() => setShowSchedule(true)}
-                                  className="mt-3 px-4 py-2 w-full bg-[#EC008C] text-white font-black uppercase text-[10px] hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all"
-                                >
-                                  Schedule Call
-                                </button>
-                              )}
+                              <Video size={28} className="mb-2 text-[#EC008C]" />
+                              <p className="font-black uppercase text-xs whitespace-normal">Older call request</p>
+                              <p className="font-mono text-[9px] uppercase mt-1 opacity-70">Schedule a new secure call.</p>
                             </div>
-                          ) : msg.content.startsWith("[VIDEO_CALL_INVITE:") ? (
+                          ) : msg.content?.startsWith("[VIDEO_CALL_INVITE:") ? (
                             (() => {
                               const timeStr = msg.content.replace("[VIDEO_CALL_INVITE:", "").replace("]", "");
                               const schedTime = new Date(timeStr);
-                              const isExpired = Date.now() - schedTime.getTime() > (30 * 60 * 1000);
-                              const joinable = !isExpired && (schedTime.getTime() - Date.now()) <= (15 * 60 * 1000);
                               return (
                                 <div className="flex flex-col items-center p-3 text-center border-t-4 border-[#00FFFF] bg-white/5 w-56">
                                   <Calendar size={28} className={`mb-2 ${isMine ? "text-[#00FFFF]" : "text-[#EC008C]"}`} />
                                   <p className="font-black uppercase text-xs text-[#00FFFF]">Video Call Scheduled</p>
                                   <p className="font-mono text-[10px] uppercase font-bold mt-1 opacity-90">{schedTime.toLocaleString()}</p>
-                                  {isExpired ? (
-                                    <button disabled className="mt-3 px-4 py-2 w-full bg-[#1A1A1A]/50 text-white/50 font-black uppercase text-xs border border-[#1A1A1A]/50 cursor-not-allowed">
-                                      Link Expired
-                                    </button>
-                                  ) : joinable ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => setJitsiRoom(`print-app-call-${activeConv.id}`)}
-                                      className="mt-3 px-4 py-2 w-full bg-[#EC008C] hover:bg-[#FFF200] hover:text-[#1A1A1A] text-white font-black uppercase text-xs border border-transparent hover:border-[#1A1A1A] transition-all"
-                                    >
-                                      Join Call
-                                    </button>
-                                  ) : (
-                                    <button disabled className="mt-3 px-4 py-2 w-full bg-[#1A1A1A]/50 text-white/50 font-black uppercase text-xs border border-[#1A1A1A]/50 cursor-not-allowed">
-                                      Not yet available
-                                    </button>
-                                  )}
+                                  <p className="mt-3 w-full border border-amber-200/30 bg-amber-200/10 px-3 py-2 font-mono text-[9px] uppercase text-amber-100">Older invite. Reschedule to create a secure room.</p>
                                 </div>
                               );
                             })()
@@ -1593,7 +1585,19 @@ export default function OwnerMessagesPage() {
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowSchedule(!showSchedule)}
+                    onClick={() => {
+                      const pendingCall = videoCalls.find((call) => call.status === "REQUESTED");
+                      if (!pendingCall) {
+                        window.alert("A customer must request a video call before you schedule one.");
+                        return;
+                      }
+                      if (showSchedule) {
+                        setShowSchedule(false);
+                        setScheduleCallId(null);
+                      } else {
+                        openScheduleForCall(pendingCall.id);
+                      }
+                    }}
                     disabled={sending}
                     className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#00FFFF] transition-all disabled:opacity-40"
                     title="Schedule Video Call"
@@ -1729,36 +1733,13 @@ export default function OwnerMessagesPage() {
         </div>
       )}
 
-      {/* ── Jitsi In-App Modal ── */}
-      {jitsiRoom && (
-        <div className="fixed inset-0 z-[999] flex flex-col bg-[#1A1A1A]">
-          <div className="flex items-center justify-between px-6 py-3 border-b-4 border-[#00FFFF] bg-[#1A1A1A] shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <span className="font-black text-lg uppercase italic tracking-tighter leading-none text-white">
-                  Press <span className="text-[#00FFFF]">&amp;</span> Present
-                </span>
-                <div className="flex gap-1 ml-1">
-                  <div className="w-2 h-2 bg-[#00FFFF]" />
-                  <div className="w-2 h-2 bg-[#EC008C]" />
-                  <div className="w-2 h-2 bg-[#FFF200]" />
-                </div>
-              </div>
-              <div className="w-px h-5 bg-white/20" />
-              <Video size={16} className="text-[#00FFFF]" />
-              <p className="font-mono text-[10px] uppercase tracking-widest text-[#00FFFF] font-black">Live_Call</p>
-              <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-            </div>
-            <button
-              type="button"
-              onClick={() => setJitsiRoom(null)}
-              className="flex items-center gap-2 px-4 py-2 bg-[#EC008C] text-white font-black uppercase text-[10px] border-2 border-[#EC008C] hover:bg-[#FFF200] hover:text-[#1A1A1A] hover:border-[#1A1A1A] transition-all"
-            >
-              <X size={14} /> End &amp; Close
-            </button>
-          </div>
-          <div id="jitsi-container-owner" className="flex-1 w-full" />
-        </div>
+      {videoCallSession && (
+        <VideoCallModal
+          callSession={videoCallSession}
+          participantLabel={activeConv?._biz_name || "Your print shop"}
+          isOwner
+          onClose={() => setVideoCallSession(null)}
+        />
       )}
     </div>
   );

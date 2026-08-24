@@ -1,12 +1,222 @@
--- Atomic checkout transaction for Supabase/Vercel free-tier deployments.
--- Run after orders, services, chat quotes, and inventory migrations.
+-- Press & Present lifecycle enforcement.
+--
+-- Customer-visible data must come from approved, active shops. Owners and
+-- admins retain access to their own operational records. Checkout locks the
+-- shop row so an automatic/admin lock cannot race a new order.
 
-alter table if exists public.inventory_movements
-  add column if not exists created_by uuid;
+begin;
 
-alter table if exists public.inventory_movements
-  add column if not exists note text;
+-- -------------------------------------------------------------------------
+-- Effective open state: manual override, legacy manual close, then weekly
+-- schedule. Missing weekly hours preserve the existing is_open behavior.
+-- -------------------------------------------------------------------------
+create or replace function public.is_business_open_now(p_business_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  business_row public.businesses%rowtype;
+  hours_row public.business_hours%rowtype;
+  local_now timestamp;
+  current_day smallint;
+begin
+  select * into business_row
+  from public.businesses
+  where id = p_business_id;
 
+  if not found then
+    return false;
+  end if;
+
+  if business_row.manual_open_override is not null
+     and (business_row.manual_override_until is null or business_row.manual_override_until > now()) then
+    return business_row.manual_open_override;
+  end if;
+
+  if business_row.is_open is false then
+    return false;
+  end if;
+
+  begin
+    local_now := now() at time zone coalesce(nullif(business_row.timezone, ''), 'Asia/Manila');
+  exception when invalid_parameter_value then
+    local_now := now() at time zone 'Asia/Manila';
+  end;
+
+  current_day := extract(dow from local_now)::smallint;
+
+  select * into hours_row
+  from public.business_hours
+  where business_id = p_business_id
+    and day_of_week = current_day;
+
+  if not found then
+    return true;
+  end if;
+
+  if hours_row.is_closed or hours_row.opens_at is null or hours_row.closes_at is null then
+    return false;
+  end if;
+
+  if hours_row.opens_at < hours_row.closes_at then
+    return local_now::time >= hours_row.opens_at
+       and local_now::time < hours_row.closes_at;
+  end if;
+
+  -- A closing time earlier than the opening time represents an overnight
+  -- schedule, for example 22:00 through 02:00.
+  return local_now::time >= hours_row.opens_at
+      or local_now::time < hours_row.closes_at;
+end;
+$$;
+
+revoke all on function public.is_business_open_now(uuid) from public, anon;
+grant execute on function public.is_business_open_now(uuid) to authenticated, service_role;
+
+-- Remove customer-facing policies from earlier schema scripts. Policies for
+-- owners/admins use authenticated only and remain in place.
+do $$
+declare
+  policy_row record;
+begin
+  for policy_row in
+    select policyname, tablename
+    from pg_policies
+    where schemaname = 'public'
+      and tablename in ('businesses', 'services', 'service_pricing_rules')
+      and cmd in ('SELECT', '*')
+      and (
+        'anon' = any(roles)
+        or 'public' = any(roles)
+      )
+  loop
+    execute format(
+      'drop policy if exists %I on public.%I',
+      policy_row.policyname,
+      policy_row.tablename
+    );
+  end loop;
+end;
+$$;
+
+grant select on public.businesses, public.services, public.service_pricing_rules
+  to anon, authenticated;
+
+create policy "Public can view active approved businesses"
+on public.businesses
+for select
+to anon, authenticated
+using (
+  status = 'APPROVED'
+  and lifecycle_state = 'ACTIVE'
+);
+
+create policy "Public can view active approved services"
+on public.services
+for select
+to anon, authenticated
+using (
+  business_id in (
+    select b.id
+    from public.businesses b
+    where b.status = 'APPROVED'
+      and b.lifecycle_state = 'ACTIVE'
+  )
+);
+
+create policy "Public can view active pricing rules"
+on public.service_pricing_rules
+for select
+to anon, authenticated
+using (
+  active = true
+  and business_id in (
+    select b.id
+    from public.businesses b
+    where b.status = 'APPROVED'
+      and b.lifecycle_state = 'ACTIVE'
+  )
+);
+
+-- Public review data is a view, so enforce lifecycle visibility in the view
+-- itself rather than relying on the underlying orders policies.
+create or replace view public.business_reviews as
+select
+  o.id as order_id,
+  o.business_id,
+  o.rating,
+  o.feedback,
+  o.feedback_hidden,
+  o.feedback_hidden_at,
+  o.feedback_hidden_by,
+  o.created_at,
+  p.full_name as customer_name
+from public.orders o
+join public.businesses b on b.id = o.business_id
+left join public.profiles p on o.customer_id = p.id
+where o.status in ('COMPLETED', 'DELIVERY_COMPLETED')
+  and o.rating is not null
+  and coalesce(o.feedback_hidden, false) = false
+  and b.status = 'APPROVED'
+  and b.lifecycle_state = 'ACTIVE';
+
+grant select on public.business_reviews to anon, authenticated;
+
+-- -------------------------------------------------------------------------
+-- Customer orders can only be created through place_order_atomic. Remove any
+-- INSERT/ALL policy that could allow a client to bypass its validation and
+-- revoke the table privilege as a second database-level guard.
+-- -------------------------------------------------------------------------
+do $$
+declare
+  policy_row record;
+begin
+  for policy_row in
+    select policyname
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'orders'
+      and cmd in ('INSERT', '*')
+      and (
+        'anon' = any(roles)
+        or 'authenticated' = any(roles)
+        or 'public' = any(roles)
+      )
+  loop
+    execute format(
+      'drop policy if exists %I on public.orders',
+      policy_row.policyname
+    );
+  end loop;
+end;
+$$;
+
+revoke insert on public.orders from anon, authenticated;
+
+drop policy if exists "Owners can update their bound orders" on public.orders;
+create policy "Owners can update their bound orders"
+on public.orders for update
+to authenticated
+using (
+  public.is_admin()
+  or business_id in (
+    select id from public.businesses where owner_id = auth.uid()
+  )
+)
+with check (
+  public.is_admin()
+  or business_id in (
+    select id from public.businesses where owner_id = auth.uid()
+  )
+);
+
+-- -------------------------------------------------------------------------
+-- Atomic checkout. The business row is locked FOR UPDATE before checking
+-- lifecycle/open state, matching the scheduler/admin transition lock.
+-- -------------------------------------------------------------------------
 create or replace function public.place_order_atomic(
   p_business_id uuid,
   p_items jsonb,
@@ -33,7 +243,7 @@ declare
   quote_proof_status text;
   quote_proof_locked boolean;
   quote_ordered boolean;
-  quoted_message_ids uuid[] := ARRAY[]::uuid[];
+  quoted_message_ids uuid[] := '{}';
   unit_price numeric;
   modifier numeric;
   option_key text;
@@ -133,8 +343,6 @@ begin
       end loop;
     end if;
 
-    -- Quoted custom work is valid only when the amount comes from a quote
-    -- message sent by this shop in this customer's conversation.
     if coalesce((item->>'is_quoted_checkout')::boolean, false) then
       if item->>'source_message_id' is null then
         raise exception 'Quoted item is missing its quote reference';
@@ -240,7 +448,7 @@ begin
     customer, p_business_id, calculated_total, 'PENDING', p_order->>'payment_method',
     nullif(p_order->>'receipt_url', ''), normalized_items,
     p_order->>'delivery_type', nullif(p_order->>'delivery_address', ''), p_order->'delivery_coordinates',
-    p_order->>'fulfillment_mode', nullif(p_order->>'expected_fulfillment_at', '')::timestamptz,
+    p_order->>'fulfillment_mode', nullif(p_order->>'expected_fulfillment_at', ''),
     nullif(p_order->>'customer_phone', ''),
     now() + interval '14 days',
     'Production starts after customization approval, final proof approval, and required payment confirmation.',
@@ -262,3 +470,5 @@ $$;
 
 revoke all on function public.place_order_atomic(uuid, jsonb, jsonb) from public, anon;
 grant execute on function public.place_order_atomic(uuid, jsonb, jsonb) to authenticated, service_role;
+
+commit;

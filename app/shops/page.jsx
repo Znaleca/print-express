@@ -44,6 +44,12 @@ export default function ShopsPage() {
           return;
         }
 
+        const businessIds = (bizData || []).map((business) => business.id);
+        const { data: openStateRows } = businessIds.length > 0
+          ? await supabase.rpc("get_business_open_states", { p_business_ids: businessIds })
+          : { data: [] };
+        const openStateByBusiness = Object.fromEntries((openStateRows || []).map((row) => [row.business_id, row.is_open]));
+
         const { data: reviewData, error: reviewError } = await withTimeout(
           (signal) => supabase
             .from("business_reviews")
@@ -81,7 +87,7 @@ export default function ShopsPage() {
             lat: b.lat == null ? null : parseFloat(b.lat),
             lng: b.lng == null ? null : parseFloat(b.lng),
             logo_url: b.logo_url,
-            is_open: b.is_open ?? true,
+            is_open: openStateByBusiness[b.id] ?? b.is_open ?? true,
             rating: ratingStats.average,
             reviewCount: ratingStats.count,
             services: availableServices.slice(0, 5)
@@ -140,7 +146,7 @@ export default function ShopsPage() {
         </div>
       </section>
 
-      <section className="mx-auto w-full max-w-[1800px] px-4 pt-8 sm:px-6 lg:px-8">
+      <section data-tour="shop-directory" className="mx-auto w-full max-w-[1800px] px-4 pt-8 sm:px-6 lg:px-8">
         <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-[#EC008C]">Directory / verified partners</p>

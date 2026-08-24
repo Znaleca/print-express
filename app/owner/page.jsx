@@ -257,7 +257,7 @@ export default function OwnerOverviewPage() {
   if (loading) return <OwnerPageSkeleton rows={4} />;
 
   return (
-    <main className="owner-overview-page min-h-screen bg-[#F6F6F2] pb-20 font-sans text-slate-900">
+    <main data-tour="owner-dashboard" className="owner-overview-page min-h-screen bg-[#F6F6F2] pb-20 font-sans text-slate-900">
       <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-9 pt-8 text-white sm:px-8 sm:pb-11 sm:pt-10 lg:px-10">
         <div className="cmyk-bar absolute left-0 right-0 top-0" />
         <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10" />

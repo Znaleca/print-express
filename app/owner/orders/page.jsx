@@ -502,7 +502,7 @@ export default function OwnerOrdersPage() {
         </div>
       )}
 
-      <main className="owner-orders-page min-h-screen bg-[#F6F6F2] font-sans text-slate-900 pb-20">
+      <main data-tour="owner-orders" className="owner-orders-page min-h-screen bg-[#F6F6F2] font-sans text-slate-900 pb-20">
         
         {/* Header */}
         <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-8 pt-8 text-white sm:px-8 sm:pb-9 sm:pt-10 lg:px-10">

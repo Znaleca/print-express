@@ -366,7 +366,7 @@ export default function OwnerDocuments() {
               <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">Documents</h1>
               <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">Submit clear legal and tax documents so your shop can be reviewed and verified.</p>
             </div>
-            <div className="flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-3 text-xs font-black text-white ring-1 ring-white/15">
+            <div data-tour="owner-documents-status" className="flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-3 text-xs font-black text-white ring-1 ring-white/15">
               <ShieldCheck size={18} className="text-[#00E5FF]" />
               <span>{approvedCount} of 4 Documents Verified</span>
             </div>
@@ -385,7 +385,7 @@ export default function OwnerDocuments() {
           </div>
         </section>
         {/* Read-only business profile */}
-        <section className="mx-auto max-w-5xl px-4 pt-6 sm:px-6 lg:px-8">
+        <section data-tour="owner-documents-profile" className="mx-auto max-w-5xl px-4 pt-6 sm:px-6 lg:px-8">
           <div className="rounded-3xl border border-[#D8D6CE] bg-white p-5 shadow-sm sm:p-6">
             <div className="flex flex-col justify-between gap-4 border-b border-slate-100 pb-4 sm:flex-row sm:items-start">
               <div>
@@ -437,7 +437,7 @@ export default function OwnerDocuments() {
           </div>
         )}
         {/* Documents Grid */}
-        <section className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+        <section data-tour="owner-documents-list" className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
           {REQUIRED_DOCS.map((docType) => {
             const docInfo = DOC_META[docType] || { label: docType, desc: "Legal document" };
             const doc = docStatuses.find(d => getDocType(d) === docType);

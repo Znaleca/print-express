@@ -3,6 +3,7 @@
 @import "leaflet/dist/leaflet.css";
 @import "../../components/ProfileCard.css";
 @import "../../components/PillNav.css";
+@import "../../components/onboarding/Onboarding.css";
 
 :root {
   --brand-ink: #1A1A1A;
@@ -334,6 +335,16 @@ body {
   .account-settings-page
 ) > section:first-child [class*="ring-white"] {
   --tw-ring-color: var(--brand-line) !important;
+}
+
+/* Keep account action labels readable even when shared route skin rules are
+ * applied to a settings page. */
+.account-settings-page .account-settings-primary-action {
+  color: #ffffff !important;
+}
+
+.account-settings-page .account-settings-primary-action:hover {
+  color: var(--brand-ink) !important;
 }
 
 /* Normalize legacy communication screens to the same friendly print-brand

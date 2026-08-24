@@ -288,7 +288,7 @@ export default function OwnerServicesPage() {
   });
 
   return (
-    <main className="owner-services-page min-h-screen bg-[#1A1A1A] font-sans text-slate-900 pb-20">
+    <main data-tour="owner-catalog" className="owner-services-page min-h-screen bg-[#1A1A1A] font-sans text-slate-900 pb-20">
       {/* Header Banner */}
       <section className="relative overflow-hidden bg-[#1A1A1A] px-4 pb-10 pt-8 text-white sm:px-8 sm:pb-11 sm:pt-10 lg:px-10">
         <div className="cmyk-bar absolute top-0 left-0 right-0" />

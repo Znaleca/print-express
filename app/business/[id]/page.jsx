@@ -229,6 +229,9 @@ export default function BusinessDetailsPage({ params }) {
           .single();
 
         if (!error && data) {
+          const { data: openStateRows } = await supabase.rpc("get_business_open_states", { p_business_ids: [id] });
+          if (openStateRows?.[0]) data.is_open = openStateRows[0].is_open;
+
           const serviceIds = (data.services || []).map((service) => service.id);
           const { data: pricingRules } = serviceIds.length > 0
             ? await supabase
@@ -806,14 +809,14 @@ export default function BusinessDetailsPage({ params }) {
           );
         })()}
 
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
+      <div data-tour="catalog-items" className="grid grid-cols-1 gap-8 lg:grid-cols-3">
 
           {/* LEFT COLUMN: SERVICES & PRODUCTS */}
           <div className="lg:col-span-2 space-y-10">
 
             {/* SERVICES */}
             {business.services.filter(s => s.item_type !== "product").length > 0 && (
-              <section>
+              <section data-tour="custom-service">
                 <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                   <div>
                     <h2 className="flex items-center gap-2 text-xl font-black text-slate-900">
@@ -1003,7 +1006,7 @@ export default function BusinessDetailsPage({ params }) {
           <aside className="space-y-6 lg:sticky lg:top-6 lg:h-fit">
 
             {/* Cart Summary Card */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-md relative overflow-hidden">
+            <div data-tour="cart-summary" className="bg-white rounded-2xl border border-slate-200 p-6 shadow-md relative overflow-hidden">
               <div className="cmyk-bar absolute top-0 left-0 right-0" />
               
               <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
@@ -1134,7 +1137,7 @@ export default function BusinessDetailsPage({ params }) {
 
       {/* PRINT SPECIFICATIONS & CUSTOMIZER MODAL */}
       {specModalItem && (
-        <div className="dialog-overlay" role="dialog" aria-modal="true" onClick={() => setSpecModalItem(null)}>
+        <div data-tour="service-customizer" className="dialog-overlay" role="dialog" aria-modal="true" onClick={() => setSpecModalItem(null)}>
           <div className="dialog-surface relative max-h-[90vh] w-full max-w-xl overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="cmyk-bar" />
             <button
