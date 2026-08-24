@@ -138,7 +138,12 @@ export default function CustomerOnboarding({ children }) {
   if (!shouldMount) return children;
 
   return (
-    <OnboardingProvider role={role} steps={CUSTOMER_ONBOARDING_STEPS} tutorialVersion="v1">
+    <OnboardingProvider
+      role={role}
+      steps={CUSTOMER_ONBOARDING_STEPS}
+      tutorialVersion="v2"
+      autoStart={pathname === "/"}
+    >
       {children}
     </OnboardingProvider>
   );

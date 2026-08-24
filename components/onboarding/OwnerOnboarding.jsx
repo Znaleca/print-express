@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import OnboardingProvider from "@/components/onboarding/OnboardingProvider";
 
 const VERIFICATION_STEPS = [
@@ -100,17 +101,19 @@ const OWNER_STEPS = [
 ];
 
 export default function OwnerOnboarding({ mode = "approved", children }) {
+  const pathname = usePathname();
   const isVerification = mode === "verification";
   const steps = isVerification ? VERIFICATION_STEPS : OWNER_STEPS;
+  const autoStart = isVerification ? pathname === "/owner/documents" : pathname === "/owner";
 
   return (
     <OnboardingProvider
       role="BUSINESS_OWNER"
       steps={steps}
-      tutorialVersion={isVerification ? "owner-verification-v1" : "owner-v1"}
+      tutorialVersion={isVerification ? "owner-verification-v2" : "owner-v2"}
+      autoStart={autoStart}
     >
       {children}
     </OnboardingProvider>
   );
 }
-

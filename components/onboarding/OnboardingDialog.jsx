@@ -68,7 +68,7 @@ export default function OnboardingDialog({
 
         <div className="onboarding-dialog__actions">
           <button type="button" className="onboarding-button onboarding-button--quiet" onClick={onSkip} disabled={isBusy}>
-            Skip tutorial
+            Don’t show again
           </button>
           <div className="onboarding-dialog__navigation">
             <button
@@ -95,4 +95,3 @@ export default function OnboardingDialog({
     </section>
   );
 }
-
