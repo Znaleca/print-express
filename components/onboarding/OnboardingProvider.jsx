@@ -23,7 +23,7 @@ export function useOptionalOnboarding() {
 export default function OnboardingProvider({
   role,
   steps = [],
-  tutorialVersion = "v1",
+  tutorialVersion = "v2",
   enabled = true,
   autoStart = true,
   children,

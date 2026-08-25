@@ -226,6 +226,7 @@ export default function BusinessDetailsPage({ params }) {
           `)
           .eq("id", id)
           .eq("status", "APPROVED")
+          .eq("lifecycle_state", "ACTIVE")
           .single();
 
         if (!error && data) {

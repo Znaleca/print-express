@@ -26,6 +26,7 @@ export default function ShopsPage() {
               services ( name, category, available )
             `)
             .eq("status", "APPROVED")
+            .eq("lifecycle_state", "ACTIVE")
             .order("created_at", { ascending: false })
             .range(0, 99)
             .abortSignal(signal),

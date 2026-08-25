@@ -16,6 +16,7 @@ import {
 } from "@/lib/imageUpload";
 import { getShopQuestions } from "@/lib/chatQuestions";
 import ProfileAvatar from "@/components/ProfileAvatar";
+import ConversationList from "@/components/messages/ConversationList";
 import VideoCallModal from "@/components/VideoCallModal";
 import { getVideoCallWindow, videoCallAction } from "@/lib/videoCalls";
 
@@ -590,65 +591,13 @@ function MessagesInner() {
       {/* Main Chat Container */}
       <div className="mx-auto flex min-h-0 w-full max-w-[1800px] flex-1 flex-col gap-3 overflow-hidden p-2.5 sm:flex-row sm:p-3">
         
-        {/* Sidebar Conversations List */}
-        <aside className="flex h-44 min-h-0 w-full shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:h-auto sm:w-80">
-          <div className="border-b border-slate-100 bg-[#F6F6F2] p-3.5">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#EC008C]">Inbox</p>
-                <h2 className="mt-1 text-sm font-extrabold text-slate-900">Conversations</h2>
-              </div>
-              <span className="text-[10px] font-bold text-slate-400">{conversations.length} shops</span>
-            </div>
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain divide-y divide-slate-100">
-            {loadingConvs ? (
-              <div className="p-8 text-center text-xs text-slate-400 font-medium">
-                <Loader2 className="animate-spin mx-auto mb-2 text-[#EC008C]" size={24} />
-                Loading conversations...
-              </div>
-            ) : conversations.length === 0 ? (
-              <div className="p-8 text-center text-xs text-slate-400">
-                No active conversations. Start chatting from a shop's profile page.
-              </div>
-            ) : (
-              conversations.map((c) => {
-                const isActive = activeConv?.id === c.id;
-                const biz = c.businesses || {};
-                const unread = unreadByConv[c.id] || 0;
-
-                return (
-                  <button
-                    key={c.id}
-                    onClick={() => openConversation(c)}
-                    className={`w-full p-4 text-left flex items-start gap-3 transition-colors border-l-4 ${
-                      isActive ? "bg-[#EFFFFF] border-[#00FFFF] font-semibold" : "border-transparent hover:bg-slate-50"
-                    }`}
-                  >
-                    <ProfileAvatar
-                      src={biz.owner_profile?.avatar_url || biz.logo_url}
-                      name={biz.owner_profile?.full_name || biz.name || "Print Shop"}
-                      className="h-10 w-10"
-                      fallbackClassName="bg-slate-100 text-slate-500"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-bold text-slate-900 truncate">{biz.name || "Print Shop"}</p>
-                        {unread > 0 && (
-                          <span className="w-5 h-5 rounded-full bg-[#EC008C] text-white text-[10px] font-bold flex items-center justify-center">
-                            {unread}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-slate-400 mt-0.5">Click to view chat history</p>
-                    </div>
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </aside>
+        <ConversationList
+          conversations={conversations}
+          loading={loadingConvs}
+          activeConversation={activeConv}
+          unreadByConversation={unreadByConv}
+          onSelect={openConversation}
+        />
 
         {/* Chat Thread */}
         <section className="flex-1 min-h-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden relative">

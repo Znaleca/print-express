@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { normalizePhilippinePhone } from "@/lib/phone";
+import { getDesignFiles } from "@/lib/checkout";
+import OrderSummary from "@/components/checkout/OrderSummary";
 import {
   getUploadExtension,
   PRIVATE_ASSETS_BUCKET,
@@ -40,19 +42,6 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 8000) {
   } finally {
     window.clearTimeout(timeoutId);
   }
-}
-
-function getDesignFiles(item) {
-  if (Array.isArray(item?.designFiles) && item.designFiles.length > 0) return item.designFiles;
-  if (item?.designUrl) return [{ url: item.designUrl, name: item.designFileName || "Design file" }];
-  return [];
-}
-
-function getCartGroups(items) {
-  return [
-    { key: "quotes", label: "Accepted service quotes", items: items.filter((item) => item.item_type !== "product" && item.isQuotedCheckout) },
-    { key: "products", label: "Products", items: items.filter((item) => item.item_type === "product") },
-  ].filter((group) => group.items.length > 0);
 }
 
 function getManilaDateObj() {
@@ -145,7 +134,6 @@ export default function CheckoutPage({ params }) {
   }, [businessId]);
 
   const fetchInitialData = async () => {
-    let receiptStoragePath = null;
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
@@ -174,6 +162,8 @@ export default function CheckoutPage({ params }) {
           )
         `)
         .eq("id", businessId)
+        .eq("status", "APPROVED")
+        .eq("lifecycle_state", "ACTIVE")
         .single();
 
       if (bizError) throw bizError;
@@ -351,11 +341,27 @@ export default function CheckoutPage({ params }) {
     setIsProcessing(true);
     setCheckoutMessage(null);
 
+    let receiptStoragePath = null;
+
     try {
+      // Always use the current Supabase session as the source of truth for
+      // customer-owned storage paths. React state can be stale during a
+      // checkout (especially after a refresh or session restore).
+      const {
+        data: { user: currentUser },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !currentUser) {
+        throw new Error("Your session expired. Please sign in again before placing the order.");
+      }
+
+      const customerId = currentUser.id;
+
       const { data: existingConv } = await supabase
         .from("chat_conversations")
         .select("id")
-        .eq("customer_id", userId)
+        .eq("customer_id", customerId)
         .eq("business_id", businessId)
         .maybeSingle();
 
@@ -364,7 +370,7 @@ export default function CheckoutPage({ params }) {
         const { data: newConv, error: convError } = await supabase
           .from("chat_conversations")
           .upsert(
-            { customer_id: userId, business_id: businessId },
+            { customer_id: customerId, business_id: businessId },
             { onConflict: "business_id,customer_id" }
           )
           .select()
@@ -377,7 +383,7 @@ export default function CheckoutPage({ params }) {
       if (receiptFile) {
         const optimizedReceipt = await optimizeImageForUpload(receiptFile);
         const fileExt = getUploadExtension(optimizedReceipt);
-        const filePath = `receipts/${userId}/${Date.now()}.${fileExt}`;
+        const filePath = `receipts/${customerId}/${Date.now()}.${fileExt}`;
         receiptStoragePath = filePath;
         const { error: uploadError } = await supabase.storage
           .from(PRIVATE_ASSETS_BUCKET)
@@ -904,123 +910,19 @@ export default function CheckoutPage({ params }) {
 
             </div>
 
-            {/* RIGHT: ORDER SUMMARY (STICKY) */}
-            <aside className="lg:sticky lg:top-20 space-y-6">
-
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-md p-6 relative overflow-hidden">
-                <div className="cmyk-bar absolute top-0 left-0 right-0" />
-
-                <h2 className="font-bold text-base text-slate-900 mb-4 pb-3 border-b border-slate-100">
-                  Order Summary
-                </h2>
-
-                <div className="mb-6 space-y-5">
-                  {getCartGroups(selectedServices).map((group) => (
-                    <section key={group.key}>
-                      <h3 className="mb-2 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
-                        {group.label}
-                      </h3>
-                      <div className="space-y-3">
-                        {group.items.map((s, idx) => (
-                    <div key={s.cart_item_id || `${s.id}-${idx}`} className="flex justify-between items-start text-xs pb-3 border-b border-slate-100 last:border-0">
-                      <div className={`flex min-w-0 items-start ${s.item_type === "product" ? "gap-3" : ""}`}>
-                        {s.item_type === "product" && (
-                          <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-                            {s.image_url ? (
-                              <Image src={s.image_url} alt={s.name || "Print item"} fill sizes="56px" className="object-cover" />
-                            ) : (
-                              <Package className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-slate-400" size={20} />
-                            )}
-                          </div>
-                        )}
-                        <div className="min-w-0 space-y-0.5">
-                          <p className="font-bold text-slate-900">{s.name || s.item_name || s.service_name || "Print item"}</p>
-                          <p className="text-slate-500 text-[11px]">Quantity: {s.quantity || 1}</p>
-                        
-                        {s.selected_specs && (s.selected_specs.size || s.selected_specs.material || s.selected_specs.quality || s.selected_specs.notes) && (
-                          <div className="text-[10px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-200 mt-1 space-y-0.5">
-                            {s.selected_specs.size && <div>• Size: <span className="font-semibold text-slate-800">{s.selected_specs.size}</span></div>}
-                            {s.selected_specs.material && <div>• Material: <span className="font-semibold text-slate-800">{s.selected_specs.material}</span></div>}
-                            {s.selected_specs.quality && <div>• Quality: <span className="font-semibold text-slate-800">{s.selected_specs.quality}</span></div>}
-                            {s.selected_specs.requested_quantity && <div>• Requested quantity: <span className="font-semibold text-slate-800">{s.selected_specs.requested_quantity}</span></div>}
-                            {s.selected_specs.notes && <div className="text-amber-800 italic">"Notes: {s.selected_specs.notes}"</div>}
-                          </div>
-                        )}
-                        {getDesignFiles(s).length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => openDesignFiles(getDesignFiles(s))}
-                            className="mt-1 inline-flex items-center gap-1.5 text-[10px] font-semibold text-[#009FA0] hover:text-[#EC008C]"
-                          >
-                            <FileText size={13} /> View files ({getDesignFiles(s).length})
-                          </button>
-                        )}
-                        </div>
-                      </div>
-                      <span className="font-bold text-slate-900 shrink-0">₱{(Number(s.price) * (s.quantity || 1)).toFixed(2)}</span>
-                    </div>
-                        ))}
-                      </div>
-                    </section>
-                  ))}
-                </div>
-
-                <div className="pt-4 border-t border-slate-200 space-y-3">
-                  <div className="flex justify-between text-xs text-slate-600 font-medium">
-                    <span>Subtotal</span>
-                    <span>₱{total.toFixed(2)}</span>
-                  </div>
-
-                  {/* Downpayment Slider */}
-                  <div className="pt-3 border-t border-slate-100">
-                    <div className="flex justify-between items-center mb-1.5 text-xs">
-                      <span className="font-semibold text-slate-700">Downpayment Percent</span>
-                      <span className="font-bold text-[#EC008C]">{effectiveDownpaymentPercent}%</span>
-                    </div>
-                    <input 
-                      type="range" 
-                      min={minimumDownpaymentPercent} 
-                      max="100" 
-                      step="5"
-                      value={effectiveDownpaymentPercent}
-                      onChange={(e) => setUserSelectedDownpaymentPercent(Number(e.target.value))}
-                      className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#EC008C]"
-                    />
-                  </div>
-
-                  <div className="flex justify-between items-center pt-2">
-                    <span className="text-xs font-semibold text-slate-700">Downpayment Due Now</span>
-                    <span className="text-xl font-extrabold text-[#EC008C]">₱{downpaymentAmount.toFixed(2)}</span>
-                  </div>
-
-                  {balanceAmount > 0 && (
-                    <div className="flex justify-between items-center text-xs text-slate-500">
-                      <span>Remaining Balance</span>
-                      <span>₱{balanceAmount.toFixed(2)}</span>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={handleExecuteOrder}
-                    disabled={isProcessing || !isReadyToExecute}
-                    className="w-full bg-slate-900 text-white py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-[#EC008C] transition-all shadow-md disabled:opacity-50 mt-4"
-                  >
-                    {isProcessing ? (
-                      <><Loader2 size={16} className="animate-spin" /> Processing Order...</>
-                    ) : (
-                      <>Place Order <ArrowRight size={16} /></>
-                    )}
-                  </button>
-
-                  {!isReadyToExecute && (
-                    <p className="text-[11px] text-slate-400 text-center mt-2">
-                      Please complete all required fields{effectiveDownpaymentPercent > 0 ? " and upload payment proof" : ""} to submit order.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-            </aside>
+            <OrderSummary
+              selectedServices={selectedServices}
+              total={total}
+              effectiveDownpaymentPercent={effectiveDownpaymentPercent}
+              minimumDownpaymentPercent={minimumDownpaymentPercent}
+              setUserSelectedDownpaymentPercent={setUserSelectedDownpaymentPercent}
+              downpaymentAmount={downpaymentAmount}
+              balanceAmount={balanceAmount}
+              isProcessing={isProcessing}
+              isReadyToExecute={isReadyToExecute}
+              handleExecuteOrder={handleExecuteOrder}
+              openDesignFiles={openDesignFiles}
+            />
           </div>
         </section>
 

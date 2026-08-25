@@ -7,6 +7,7 @@
     "dev:webpack": "next dev --webpack",
     "dev:turbo": "next dev --turbopack",
     "clean": "node -e \"require('fs').rmSync('.next', {recursive:true,force:true}); console.log('Cleaned .next')\"",
+    "test": "node --test tests/*.test.mjs",
     "build": "next build --webpack",
     "build:turbo": "next build --turbopack",
     "start": "next start"
