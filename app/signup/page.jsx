@@ -37,6 +37,7 @@ export default function SignUpPage() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [phoneTouched, setPhoneTouched] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
@@ -54,7 +55,14 @@ export default function SignUpPage() {
   const isPasswordValid   = Object.values(passwordRequirements).every(Boolean);
   const passwordsMatch    = formData.password === formData.confirmPassword && formData.confirmPassword !== "";
 
-  const handleChange = (e) => setFormData((p) => ({ ...p, [e.target.name]: e.target.value }));
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData((p) => ({
+      ...p,
+      [name]: name === "phone" ? value.replace(/\D/g, "").slice(0, 10) : value,
+    }));
+    if (name === "phone") setPhoneTouched(true);
+  };
 
   const chooseRole = (nextRole) => {
     setRole(nextRole);
@@ -83,7 +91,8 @@ export default function SignUpPage() {
 
     const normalizedPhone = normalizePhilippinePhone(formData.phone);
     if (!normalizedPhone) {
-      setError("Enter a valid Philippine mobile number. Example: 09171234567 or +639171234567.");
+      setPhoneTouched(true);
+      setError("Enter the 10 digits after +63. Example: 9459759016.");
       setLoading(false);
       return;
     }
@@ -413,16 +422,43 @@ export default function SignUpPage() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Mobile number</label>
-                <input
-                  name="phone"
-                  type="tel"
-                  required
-                  value={formData.phone}
-                  onChange={handleChange}
-                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all"
-                  placeholder="0917 123 4567"
-                />
-                <p className="mt-1 text-[11px] text-slate-500">Saved as +63 format for order SMS updates.</p>
+                <div className={`flex overflow-hidden rounded-xl border bg-slate-50 transition-colors focus-within:ring-2 ${
+                  phoneTouched && !normalizePhilippinePhone(formData.phone)
+                    ? "border-rose-500 focus-within:border-rose-500 focus-within:ring-rose-200"
+                    : "border-slate-200 focus-within:border-slate-400 focus-within:ring-[#00FFFF]/30"
+                }`}>
+                  <span className="flex items-center border-r border-slate-200 bg-slate-100 px-4 text-sm font-bold text-slate-700" aria-hidden="true">
+                    +63
+                  </span>
+                  <input
+                    name="phone"
+                    type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel-national"
+                    maxLength={10}
+                    pattern="[0-9]*"
+                    required
+                    value={formData.phone}
+                    onBlur={() => setPhoneTouched(true)}
+                    onChange={handleChange}
+                    placeholder="9459759016"
+                    aria-label="Mobile number without country code"
+                    aria-invalid={phoneTouched && !normalizePhilippinePhone(formData.phone)}
+                    aria-describedby="signup-phone-help signup-phone-error"
+                    className="min-w-0 flex-1 bg-transparent px-4 py-2.5 text-sm outline-none"
+                  />
+                </div>
+                <p id="signup-phone-help" className="mt-1 text-[11px] text-slate-500">Enter 10 digits after +63. We save the complete number for SMS order updates.</p>
+                {phoneTouched && !normalizePhilippinePhone(formData.phone) && (
+                  <p id="signup-phone-error" role="alert" className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-rose-700">
+                    <AlertCircle size={14} aria-hidden="true" />
+                    {formData.phone.length === 0
+                      ? "Enter your 10-digit mobile number."
+                      : formData.phone.startsWith("9")
+                        ? "Enter all 10 digits of your mobile number."
+                        : "Your number must start with 9. Example: 9459759016."}
+                  </p>
+                )}
               </div>
 
               <div>

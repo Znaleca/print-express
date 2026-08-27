@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
+import { normalizePhilippinePhone, toPhilippinePhoneInput } from "@/lib/phone";
 import {
   Store, Save, Loader2, UploadCloud, QrCode, Power, MapPin, MapPinned,
   CheckCircle2, ShieldCheck, Phone, Mail, Globe2, ExternalLink, Info, Clock, RotateCcw
@@ -38,6 +39,7 @@ export default function ShopProfilePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
+  const [phoneTouched, setPhoneTouched] = useState(false);
 
   // Logo upload state
   const [logoPreview, setLogoPreview] = useState(null);
@@ -73,7 +75,7 @@ export default function ShopProfilePage() {
           description: biz.description || "",
           products_summary: biz.products_summary || "",
           address: biz.address || "",
-          phone: biz.phone || "",
+          phone: toPhilippinePhoneInput(biz.phone || ""),
           email: biz.email || "",
           website: biz.website || "",
           logo_url: biz.logo_url || "",
@@ -209,7 +211,14 @@ export default function ShopProfilePage() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const handleChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setForm((p) => ({
+      ...p,
+      [name]: name === "phone" ? value.replace(/\D/g, "").slice(0, 10) : value,
+    }));
+    if (name === "phone") setPhoneTouched(true);
+  };
 
   const hasUnsavedChanges = Boolean(initialForm) && (
     JSON.stringify(form) !== JSON.stringify(initialForm)
@@ -275,6 +284,14 @@ export default function ShopProfilePage() {
     setSaving(true);
 
     try {
+      const normalizedPhone = form.phone ? normalizePhilippinePhone(form.phone) : "";
+      if (form.phone && !normalizedPhone) {
+        setPhoneTouched(true);
+        showToast("Enter the 10 digits after +63. Example: 9459759016.", "error");
+        setSaving(false);
+        return;
+      }
+
       let finalLogoUrl = form.logo_url;
       let finalQrUrl = form.qr_url;
 
@@ -298,7 +315,7 @@ export default function ShopProfilePage() {
         description: form.description,
         products_summary: form.products_summary,
         address: form.address,
-        phone: form.phone,
+        phone: normalizedPhone,
         email: form.email,
         website: form.website,
         logo_url: finalLogoUrl,
@@ -315,8 +332,15 @@ export default function ShopProfilePage() {
 
       if (err) throw err;
 
-      setForm((p) => ({ ...p, logo_url: finalLogoUrl, qr_url: finalQrUrl, min_downpayment_percent: minDp }));
-      setInitialForm(payload);
+      const savedForm = {
+        ...form,
+        phone: normalizedPhone,
+        logo_url: finalLogoUrl,
+        qr_url: finalQrUrl,
+        min_downpayment_percent: minDp,
+      };
+      setForm(savedForm);
+      setInitialForm(savedForm);
       await saveOperatingHours();
       setLogoFile(null);
       setQrFile(null);
@@ -330,6 +354,12 @@ export default function ShopProfilePage() {
       setQrUploading(false);
     }
   };
+
+  const phoneError = phoneTouched && form.phone && !normalizePhilippinePhone(form.phone)
+    ? form.phone.startsWith("9")
+      ? "Enter all 10 digits of the shop mobile number."
+      : "Your number must start with 9. Example: 9459759016."
+    : "";
 
   if (loading) {
     return (
@@ -573,10 +603,39 @@ export default function ShopProfilePage() {
                 <div className="mt-5 grid gap-4 md:grid-cols-2">
                   <label className="block">
                     <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Phone number</span>
-                    <span className="relative mt-2 block">
-                      <Phone size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#EC008C]" />
-                      <input type="text" name="phone" value={form.phone} onChange={handleChange} placeholder="+63 912 345 6789" className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] py-3.5 pl-10 pr-4 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
+                    <span className={`mt-2 flex overflow-hidden rounded-2xl border bg-[#F6F6F2] transition-colors focus-within:ring-2 ${
+                      phoneError
+                        ? "border-rose-500 focus-within:border-rose-500 focus-within:ring-rose-200"
+                        : "border-slate-200 focus-within:border-[#00AFC0] focus-within:bg-white focus-within:ring-[#00FFFF]/40"
+                    }`}>
+                      <span className="flex items-center gap-2 border-r border-slate-200 bg-slate-100 px-3.5 text-sm font-bold text-slate-700" aria-hidden="true">
+                        <Phone size={15} className="text-[#EC008C]" />
+                        +63
+                      </span>
+                      <input
+                        type="tel"
+                        name="phone"
+                        inputMode="numeric"
+                        autoComplete="tel-national"
+                        maxLength={10}
+                        pattern="[0-9]*"
+                        value={form.phone}
+                        onBlur={() => setPhoneTouched(true)}
+                        onChange={handleChange}
+                        placeholder="9459759016"
+                        aria-label="Shop mobile number without country code"
+                        aria-invalid={Boolean(phoneError)}
+                        aria-describedby="shop-phone-help shop-phone-error"
+                        className="min-w-0 flex-1 bg-transparent px-4 py-3.5 text-sm outline-none"
+                      />
                     </span>
+                    <span id="shop-phone-help" className="mt-1 block text-[11px] text-slate-500">Optional · enter 10 digits after +63. We save the complete number for customers.</span>
+                    {phoneError && (
+                      <span id="shop-phone-error" role="alert" className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-rose-700">
+                        <Info size={14} aria-hidden="true" />
+                        {phoneError}
+                      </span>
+                    )}
                   </label>
                   <label className="block">
                     <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Business email</span>
@@ -650,7 +709,7 @@ export default function ShopProfilePage() {
                   </div>
                   <div className="mt-4 space-y-2 border-t border-slate-200 pt-4 text-[11px] text-slate-600">
                     <p className="flex items-start gap-2"><MapPin size={13} className="mt-0.5 shrink-0 text-[#EC008C]" /> <span>{form.address || "Add your shop address"}</span></p>
-                    <p className="flex items-center gap-2"><Phone size={13} className="shrink-0 text-[#EC008C]" /> <span>{form.phone || "Add a contact number"}</span></p>
+                    <p className="flex items-center gap-2"><Phone size={13} className="shrink-0 text-[#EC008C]" /> <span>{normalizePhilippinePhone(form.phone) || "Add a contact number"}</span></p>
                   </div>
                 </div>
                 <Link href="/browse" className="mt-4 inline-flex items-center gap-2 text-xs font-black text-[#C40075] hover:underline">

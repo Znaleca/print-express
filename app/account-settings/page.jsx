@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Loader2, ShieldCheck, AlertTriangle, RotateCcw, CircleHelp } from "lucide-react";
-import { normalizePhilippinePhone } from "@/lib/phone";
+import { normalizePhilippinePhone, toPhilippinePhoneInput } from "@/lib/phone";
 import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
 import ProfileAvatar from "@/components/ProfileAvatar";
 import { useOptionalOnboarding } from "@/components/onboarding/OnboardingProvider";
@@ -29,6 +29,7 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState(""); // Read-only
   const [phone, setPhone] = useState("");
+  const [phoneTouched, setPhoneTouched] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState("");
   const [avatarPreview, setAvatarPreview] = useState("");
   const [avatarFile, setAvatarFile] = useState(null);
@@ -66,7 +67,7 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
       }
 
       setFullName(profile?.full_name || user.user_metadata?.full_name || "");
-      setPhone(profile?.phone || user.user_metadata?.phone || "");
+      setPhone(toPhilippinePhoneInput(profile?.phone || user.user_metadata?.phone || ""));
       const savedAvatar = profile?.avatar_url || user.user_metadata?.avatar_url || "";
       setAvatarUrl(savedAvatar);
       setAvatarPreview(savedAvatar);
@@ -115,8 +116,9 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
 
     const normalizedPhone = normalizePhilippinePhone(phone);
     if (!normalizedPhone) {
+      setPhoneTouched(true);
       setIsSavingProfile(false);
-      setProfileMessage({ text: "Enter a valid Philippine mobile number. Example: 09171234567 or +639171234567.", type: "error" });
+      setProfileMessage({ text: "Enter the 10 digits after +63. Example: 9459759016.", type: "error" });
       return;
     }
 
@@ -164,7 +166,7 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
 
       const savedAvatar = data.profile?.avatar_url || "";
       setFullName(data.profile?.full_name || fullName.trim());
-      setPhone(data.profile?.phone || normalizedPhone);
+      setPhone(toPhilippinePhoneInput(data.profile?.phone || normalizedPhone));
       setAvatarUrl(savedAvatar);
       setAvatarPreview(savedAvatar);
       setAvatarFile(null);
@@ -220,6 +222,15 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
       setOnboardingMessage({ text: error.message || "Unable to restart the guided tour.", type: "error" });
     }
   };
+
+  const isPhoneValid = Boolean(normalizePhilippinePhone(phone));
+  const phoneError = phoneTouched && !isPhoneValid
+    ? phone.length === 0
+      ? "Enter your 10-digit mobile number."
+      : phone.startsWith("9")
+        ? "Enter all 10 digits of your mobile number."
+        : "Your number must start with 9. Example: 9459759016."
+    : "";
 
   if (loading) {
     return <OwnerPageSkeleton rows={2} />;
@@ -343,14 +354,42 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
                 <label className="text-xs font-semibold text-slate-600">
                   Mobile number
                 </label>
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="0917 123 4567"
-                  className="w-full rounded-xl border border-[#D8D6CE] bg-white px-4 py-3 text-sm text-[#1A1A1A] outline-none transition-all focus:ring-2 focus:ring-[#00FFFF]/40"
-                />
-                <p className="text-[11px] text-slate-500">Saved in +63 format for SMS order updates.</p>
+                <div
+                  className={`flex overflow-hidden rounded-xl border bg-white transition-colors focus-within:ring-2 ${
+                    phoneError
+                      ? "border-rose-500 focus-within:border-rose-500 focus-within:ring-rose-200"
+                      : "border-[#D8D6CE] focus-within:border-[#00C7C7] focus-within:ring-[#00FFFF]/30"
+                  }`}
+                >
+                  <span className="flex items-center border-r border-[#D8D6CE] bg-[#F6F6F2] px-4 text-sm font-bold text-slate-700" aria-hidden="true">
+                    +63
+                  </span>
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel-national"
+                    maxLength={10}
+                    pattern="[0-9]*"
+                    value={phone}
+                    onBlur={() => setPhoneTouched(true)}
+                    onChange={(e) => {
+                      setPhoneTouched(true);
+                      setPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
+                    }}
+                    placeholder="9459759016"
+                    aria-label="Mobile number without country code"
+                    aria-invalid={Boolean(phoneError)}
+                    aria-describedby="account-phone-help account-phone-error"
+                    className="min-w-0 flex-1 bg-transparent px-4 py-3 text-sm text-[#1A1A1A] outline-none"
+                  />
+                </div>
+                <p id="account-phone-help" className="text-[11px] text-slate-500">Enter 10 digits after +63. We save the complete number for SMS order updates.</p>
+                {phoneError && (
+                  <p id="account-phone-error" role="alert" className="flex items-center gap-1.5 text-[11px] font-semibold text-rose-700">
+                    <AlertTriangle size={14} aria-hidden="true" />
+                    {phoneError}
+                  </p>
+                )}
               </div>
 
               <button 

@@ -21,3 +21,14 @@ test("checkout payment proofs use the authenticated customer storage namespace",
   assert.match(atomicCheckout, /\^private-assets:receipts\/.*customer::text.*\//, "the database must validate receipt ownership");
 });
 
+test("checkout phone input accepts only the local ten-digit format", async () => {
+  const page = await source("app/checkout/[id]/page.jsx");
+  const phone = await source("lib/phone.js");
+
+  assert.match(page, /inputMode="numeric"/);
+  assert.match(page, /maxLength=\{10\}/);
+  assert.match(page, /e\.target\.value\.replace\(\/\\D\/g, ""\)\.slice\(0, 10\)/);
+  assert.match(page, /placeholder="9459759016"/);
+  assert.match(phone, /export function toPhilippinePhoneInput/);
+  assert.match(page, /\(effectiveDownpaymentPercent === 0 \|\| !!receiptFile\)/, "receipt upload must not bypass phone validation");
+});

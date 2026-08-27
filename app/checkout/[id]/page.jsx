@@ -5,11 +5,11 @@ import Image from "next/image";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { 
-  ArrowRight, CreditCard, Loader2, Power, AlertTriangle, CheckCircle2,
+  ArrowRight, CreditCard, Loader2, Power, AlertTriangle, AlertCircle, CheckCircle2,
   Package, MapPin, Truck, Clock, Banknote, X, QrCode, ShieldCheck, FileText, ChevronRight
 } from "lucide-react";
 import dynamic from "next/dynamic";
-import { normalizePhilippinePhone } from "@/lib/phone";
+import { normalizePhilippinePhone, toPhilippinePhoneInput } from "@/lib/phone";
 import { getDesignFiles } from "@/lib/checkout";
 import OrderSummary from "@/components/checkout/OrderSummary";
 import {
@@ -118,6 +118,7 @@ export default function CheckoutPage({ params }) {
   const [fulfillmentMode, setFulfillmentMode] = useState("NEED_NOW");
   const [expectedFulfillmentAt, setExpectedFulfillmentAt] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
+  const [phoneTouched, setPhoneTouched] = useState(false);
 
   // Payment State
   const [paymentMethod, setPaymentMethod] = useState("COD");
@@ -144,7 +145,7 @@ export default function CheckoutPage({ params }) {
           .eq("id", user.id)
           .maybeSingle();
         setIsCustomer(String(profile?.role || "").toUpperCase() === "CUSTOMER");
-        setCustomerPhone(profile?.phone || user.user_metadata?.phone || "");
+        setCustomerPhone(toPhilippinePhoneInput(profile?.phone || user.user_metadata?.phone || ""));
       }
 
       const { data: bizData, error: bizError } = await supabase
@@ -333,6 +334,12 @@ export default function CheckoutPage({ params }) {
     if (deliveryType === "DELIVERY" && !deliveryAddress) return rejectOrder("Add a delivery address before placing your order.");
     if (fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt) return rejectOrder("Choose the date and time for your scheduled order.");
     if (selectedServices.length === 0) return rejectOrder("Your cart is empty. Add a product or service first.");
+    const normalizedPhone = normalizePhilippinePhone(customerPhone);
+    if (!normalizedPhone) {
+      setPhoneTouched(true);
+      setCheckoutMessage(null);
+      return false;
+    }
     const effectiveDownpaymentPercent = userSelectedDownpaymentPercent !== null ? userSelectedDownpaymentPercent : minimumDownpaymentPercent;
     if (effectiveDownpaymentPercent > 0 && !receiptFile) {
       return rejectOrder("Upload payment proof for the required downpayment before placing your order.");
@@ -393,11 +400,6 @@ export default function CheckoutPage({ params }) {
           });
         if (uploadError) throw new Error("Failed to upload payment proof: " + uploadError.message);
         receiptUrl = toStorageRef(PRIVATE_ASSETS_BUCKET, filePath);
-      }
-
-      const normalizedPhone = normalizePhilippinePhone(customerPhone);
-      if (!normalizedPhone) {
-        throw new Error("Enter a valid Philippine mobile number for SMS updates. Example: 09171234567 or +639171234567.");
       }
 
       const itemsPayload = selectedServices.map(item => ({
@@ -500,14 +502,22 @@ export default function CheckoutPage({ params }) {
   const effectiveDownpaymentPercent = userSelectedDownpaymentPercent !== null ? userSelectedDownpaymentPercent : minimumDownpaymentPercent;
   const downpaymentAmount = total * (effectiveDownpaymentPercent / 100);
   const balanceAmount = total - downpaymentAmount;
+  const isPhoneValid = Boolean(normalizePhilippinePhone(customerPhone));
+  const phoneError = phoneTouched && !isPhoneValid
+    ? customerPhone.length === 0
+      ? "Enter your 10-digit mobile number."
+      : customerPhone.startsWith("9")
+        ? "Enter all 10 digits of your mobile number."
+        : "Your number must start with 9. Example: 9459759016."
+    : "";
   const isReadyToExecute =
     selectedServices.length > 0 &&
     isCustomer &&
     !isClosed &&
-    Boolean(normalizePhilippinePhone(customerPhone)) &&
+    isPhoneValid &&
     !(deliveryType === "DELIVERY" && !deliveryAddress) &&
     !(fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt) &&
-    effectiveDownpaymentPercent === 0 || !!receiptFile;
+    (effectiveDownpaymentPercent === 0 || !!receiptFile);
 
   const minAdvanceDateTime = manilaStartOfTomorrow();
 
@@ -693,14 +703,42 @@ export default function CheckoutPage({ params }) {
                 <div className="p-6 space-y-4">
                   <div>
                     <label className="text-xs font-semibold text-slate-700 mb-1.5 block">Customer Mobile Number for SMS Updates</label>
-                    <input
-                      type="tel"
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      placeholder="e.g. 09XXXXXXXXX or +639XXXXXXXXX"
-                      className="w-full border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-medium rounded-xl outline-none focus:ring-2 focus:ring-[#00FFFF]"
-                    />
-                        <p className="mt-1 text-[11px] text-slate-500">If SMS is configured, updates are sent when the shop places, prepares, readies, delivers, completes, or cancels your order.</p>
+                    <div
+                      className={`flex overflow-hidden rounded-xl border bg-white transition-colors focus-within:ring-2 ${
+                        phoneError
+                          ? "border-rose-500 focus-within:border-rose-500 focus-within:ring-rose-200"
+                          : "border-slate-200 focus-within:border-[#00C7C7] focus-within:ring-[#00FFFF]/30"
+                      }`}
+                    >
+                      <span className="flex items-center border-r border-slate-200 bg-slate-50 px-3.5 text-xs font-bold text-slate-700" aria-hidden="true">
+                        +63
+                      </span>
+                      <input
+                        type="tel"
+                        inputMode="numeric"
+                        autoComplete="tel-national"
+                        maxLength={10}
+                        pattern="[0-9]*"
+                        value={customerPhone}
+                        onBlur={() => setPhoneTouched(true)}
+                        onChange={(e) => {
+                          setPhoneTouched(true);
+                          setCustomerPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
+                        }}
+                        placeholder="9459759016"
+                        aria-label="Mobile number without country code"
+                        aria-invalid={Boolean(phoneError)}
+                        aria-describedby="customer-phone-help customer-phone-error"
+                        className="min-w-0 flex-1 bg-transparent px-3.5 py-2.5 text-xs font-medium outline-none"
+                      />
+                    </div>
+                    <p id="customer-phone-help" className="mt-1 text-[11px] text-slate-500">Enter 10 digits starting with 9. We add +63 automatically for SMS updates.</p>
+                    {phoneError && (
+                      <p id="customer-phone-error" role="alert" className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-rose-700">
+                        <AlertCircle size={14} aria-hidden="true" />
+                        {phoneError}
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
