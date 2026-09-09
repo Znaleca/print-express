@@ -341,6 +341,7 @@ export default function ShopProfilePage() {
       };
       setForm(savedForm);
       setInitialForm(savedForm);
+      setPhoneTouched(false);
       await saveOperatingHours();
       setLogoFile(null);
       setQrFile(null);

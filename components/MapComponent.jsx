@@ -8,6 +8,9 @@ import { Star, ChevronRight, MapPin } from "lucide-react";
 import { ratingLabel } from "@/lib/rating";
 import "leaflet/dist/leaflet.css";
 
+const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
 const createCmykIcon = (color = "#00FFFF", isClosed = false) => {
   const displayColor = isClosed ? "#94A3B8" : color;
   return new L.DivIcon({
@@ -185,8 +188,8 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
         />
 
         <TileLayer
-          attribution='&copy; CARTO'
-          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+          attribution={TILE_ATTRIBUTION}
+          url={TILE_URL}
         />
 
         {userLocation && (
