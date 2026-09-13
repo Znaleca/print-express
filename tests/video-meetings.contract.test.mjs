@@ -72,23 +72,22 @@ test("owners can reopen a missed meeting for the customer to choose a replacemen
   assert.match(ownerMessages, /requestVideoCallReschedule/);
 });
 
-test("server reminder worker is protected, scheduled, and sends an idempotent reminder to both participants", () => {
-  const route = source("app/api/cron/video-call-reminders/route.js");
+test("scheduled meeting notifications use a protected direct join link without a Vercel reminder schedule", () => {
   const email = source("lib/meetingEmail.js");
-  const migration = source("supabase/migrations/20260913230000_video_call_reminders_and_cutoff.sql");
   const vercel = source("vercel.json");
-  assert.match(route, /CRON_SECRET/);
-  assert.match(route, /scheduled_at/);
-  assert.match(route, /15 \* 60 \* 1000/);
-  assert.match(route, /sendMeetingReminder/);
-  assert.match(email, /REMINDER_15/);
-  assert.match(email, /CUSTOMER.*OWNER/s);
-  assert.match(email, /starts in 15 minutes/);
-  assert.match(email, /messages[\s\S]*conversation/);
-  assert.match(email, /owner\/calendar/);
-  assert.match(migration, /REMINDER_15/);
-  assert.match(migration, /between 30 and 10080/);
-  assert.match(vercel, /video-call-reminders/);
+  const directMeeting = source("app/meeting/[id]/page.jsx");
+  assert.match(email, /eventType === "BOOKED"/);
+  assert.match(email, /eventType === "RESCHEDULED"/);
+  assert.match(email, /customer[\s\S]*owner/);
+  assert.match(email, /canJoinDirectly/);
+  assert.match(email, /new URL\(`\/meeting\/\$\{encodeURIComponent\(selectedCall\.id\)\}`, appUrl\)/);
+  assert.match(email, /Join secure meeting/);
+  assert.doesNotMatch(email, /REMINDER_15/);
+  assert.doesNotMatch(vercel, /"crons"/);
+  assert.doesNotMatch(vercel, /video-call-reminders/);
+  assert.match(directMeeting, /videoCallAction\("join"/);
+  assert.match(directMeeting, /VideoCallModal/);
+  assert.match(directMeeting, /\/login\?next/);
 });
 
 test("meeting notifications are deduplicated and use branded, escaped Resend email", () => {

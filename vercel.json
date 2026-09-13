@@ -12,11 +12,5 @@
       "permanent": true,
       "has": [{ "type": "host", "value": "pressandpresent.vercel.app" }]
     }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/video-call-reminders",
-      "schedule": "* * * * *"
-    }
   ]
 }

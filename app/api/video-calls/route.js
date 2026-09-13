@@ -105,19 +105,6 @@ async function loadOwnerCalendar(auth) {
     .in("business_id", businessIds)
     .order("requested_slot_at", { ascending: true, nullsFirst: false });
   if (callError) return { error: NextResponse.json({ error: "Calendar data is unavailable." }, { status: 503 }) };
-  const callIds = (calls || []).map((call) => call.id);
-  const { data: reminderRows } = callIds.length
-    ? await auth.admin
-      .from("video_call_email_events")
-      .select("video_call_id, status, sent_at, claimed_at, created_at")
-      .eq("event_type", "REMINDER_15")
-      .in("video_call_id", callIds)
-      .order("created_at", { ascending: false })
-    : { data: [] };
-  const reminderByCall = new Map();
-  for (const reminder of reminderRows || []) {
-    reminderByCall.set(reminder.video_call_id, [...(reminderByCall.get(reminder.video_call_id) || []), reminder]);
-  }
   const customerIds = [...new Set((calls || []).map((call) => call.customer_id).filter(Boolean))];
   const [{ data: profiles }, { data: hours }] = await Promise.all([
     customerIds.length ? auth.admin.from("profiles").select("id, full_name, email, avatar_url").in("id", customerIds) : Promise.resolve({ data: [] }),
@@ -135,19 +122,6 @@ async function loadOwnerCalendar(auth) {
         business_name: businessById.get(call.business_id)?.name || "Print shop",
         timezone: call.booking_timezone || businessById.get(call.business_id)?.timezone || "Asia/Manila",
         customer: profileById.get(call.customer_id) || { full_name: "Customer" },
-        reminder: reminderByCall.has(call.id)
-          ? (() => {
-            const events = reminderByCall.get(call.id);
-            const failed = events.find((event) => event.status === "FAILED");
-            const sent = events.filter((event) => event.status === "SENT");
-            const latest = events[0];
-            return {
-              status: failed ? "FAILED" : sent.length >= 2 ? "SENT" : latest?.status || "PROCESSING",
-              sent_at: sent.length >= 2 ? sent.sort((left, right) => String(left.sent_at || "").localeCompare(String(right.sent_at || ""))).at(-1)?.sent_at || null : null,
-              claimed_at: latest?.claimed_at || null,
-            };
-          })()
-          : null,
       })),
     },
   };

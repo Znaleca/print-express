@@ -8,6 +8,12 @@ import { Loader2, ArrowRight, Eye, EyeOff, CheckCircle2, AlertCircle } from "luc
 import { getRoleHome, isValidEmail, normalizeEmail, validatePassword } from "@/lib/auth";
 import BrandMark from "@/components/BrandMark";
 
+function getSafePostLoginPath() {
+  if (typeof window === "undefined") return null;
+  const nextPath = new URL(window.location.href).searchParams.get("next");
+  return nextPath && nextPath.startsWith("/") && !nextPath.startsWith("//") ? nextPath : null;
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [formData, setFormData] = useState({ email: "", password: "" });
@@ -221,7 +227,7 @@ export default function LoginPage() {
 
       // Login is a transition into the app, so don't leave the login screen in
       // browser history when sending portal users to their workspace.
-      router.replace(route);
+      router.replace(getSafePostLoginPath() || route);
     } catch (err) {
       if (String(err?.message || "").toLowerCase().includes("email not confirmed")) {
         setVerificationEmail(email);

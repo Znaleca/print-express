@@ -105,7 +105,7 @@ test("role-based login destinations and database row creation are protected", as
   assert.match(auth, /ADMIN: "\/admin"/);
   assert.match(auth, /BUSINESS_OWNER: "\/owner\/documents"/);
   assert.match(auth, /CUSTOMER: "\/browse"/);
-  assert.match(login, /router\.replace\(route\)/);
+  assert.match(login, /router\.replace\(getSafePostLoginPath\(\) \|\| route\)/);
   assert.match(ownerLayout, /Never repair this by inserting from the browser/);
   assert.doesNotMatch(ownerLayout, /const \{ data: created \} = await supabase[\s\S]*?\.from\("businesses"\)[\s\S]*?\.insert\(/);
   assert.match(migration, /create unique index if not exists businesses_owner_id_unique_idx/);
