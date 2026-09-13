@@ -25,6 +25,12 @@ const getDateKey = (monthKey, day) => {
 };
 
 const getAvailableSlotCount = (date) => date?.slots?.filter((slot) => slot.available !== false).length || 0;
+const getMeetingTime = (call) => call?.scheduled_at || call?.requested_slot_at || "";
+const isSameTime = (left, right) => {
+  const leftTime = new Date(left || "").getTime();
+  const rightTime = new Date(right || "").getTime();
+  return Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime === rightTime;
+};
 
 const buildCalendarDays = (monthKey, dates) => {
   const match = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
@@ -77,9 +83,13 @@ export default function MeetingBookingModal({
       });
       setAvailability(result);
       const firstDate = result.dates?.[0];
-      setSelectedMonth(getMonthKey(firstDate?.dateKey));
-      setSelectedDate(firstDate?.dateKey || "");
-      setSelectedSlot(null);
+      const currentMeetingTime = getMeetingTime(existingCall);
+      const currentDate = result.dates?.find((date) => date.slots?.some((slot) => isSameTime(slot.startAt, currentMeetingTime)));
+      const currentSlot = currentDate?.slots?.find((slot) => slot.available !== false && isSameTime(slot.startAt, currentMeetingTime)) || null;
+      const initialDate = currentDate || firstDate;
+      setSelectedMonth(getMonthKey(initialDate?.dateKey));
+      setSelectedDate(initialDate?.dateKey || "");
+      setSelectedSlot(currentSlot);
     } catch (loadError) {
       setError(loadError.message || "Meeting availability is unavailable.");
     } finally {
@@ -110,9 +120,22 @@ export default function MeetingBookingModal({
   const activeDate = dates.find((date) => date.dateKey === selectedDate);
   const visibleMonthIndex = availableMonths.indexOf(visibleMonth);
   const title = isOwner
-    ? existingCall?.status === "REQUESTED" ? "Confirm online meeting" : "Reschedule online meeting"
+    ? existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by === "CUSTOMER" ? "Change proposed meeting time" : existingCall?.status === "REQUESTED" ? "Confirm online meeting" : "Reschedule online meeting"
     : existingCall ? "Reschedule online meeting" : "Schedule an online meeting";
-  const actionLabel = isOwner && existingCall?.status === "REQUESTED" ? "Confirm meeting" : existingCall ? "Save new time" : "Book meeting";
+  const actionLabel = isOwner && existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by === "CUSTOMER"
+    ? "Send updated proposal"
+    : isOwner && existingCall?.status === "REQUESTED"
+    ? "Confirm meeting"
+    : existingCall ? isOwner ? "Save new time" : "Request new time" : "Book meeting";
+  const currentMeetingTime = getMeetingTime(existingCall);
+  const isCurrentSelection = Boolean(selectedSlot && isSameTime(selectedSlot.startAt, currentMeetingTime));
+  const needsDifferentTime = isCurrentSelection && (
+    existingCall?.status === "SCHEDULED"
+    || existingCall?.confirmation_required_by === "CUSTOMER"
+  );
+  const currentMeetingLabel = currentMeetingTime && availability?.business?.timezone
+    ? formatMeetingDateTime(currentMeetingTime, availability.business.timezone)
+    : "";
   const selectedLabel = useMemo(
     () => selectedSlot && availability?.business?.timezone ? formatMeetingDateTime(selectedSlot.startAt, availability.business.timezone) : "Choose a time",
     [selectedSlot, availability],
@@ -138,7 +161,9 @@ export default function MeetingBookingModal({
     setError("");
     setWarning("");
     try {
-      const action = isOwner ? "schedule" : existingCall ? "reschedule" : "book";
+      const action = isOwner
+        ? existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by !== "CUSTOMER" ? "schedule" : "reschedule"
+        : existingCall ? "reschedule" : "book";
       const result = await videoCallAction(action, {
         ...(existingCall ? { callId: existingCall.id } : { conversationId }),
         scheduledAt: selectedSlot.startAt,
@@ -219,6 +244,7 @@ export default function MeetingBookingModal({
 
                 <section className="rounded-xl border border-slate-200 bg-white p-4" aria-labelledby="meeting-time-heading">
                   <p id="meeting-time-heading" className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">3. Choose a time</p>
+                  {currentMeetingLabel && <div className="mt-3 rounded-lg border-l-4 border-[#00aeb5] bg-[#e8fbfb] px-3 py-2 text-xs text-slate-700"><span className="font-black text-slate-900">Current appointment:</span> {currentMeetingLabel}</div>}
                   {activeDate ? (
                     <>
                       <p className="mt-1 text-sm font-extrabold text-slate-900">{activeDate.label}</p>
@@ -226,6 +252,7 @@ export default function MeetingBookingModal({
                         {activeDate.slots.map((slot) => {
                           const isSlotAvailable = slot.available !== false;
                           const isSelected = isSlotAvailable && selectedSlot?.startAt === slot.startAt;
+                          const isCurrentSlot = isSameTime(slot.startAt, currentMeetingTime);
                           return (
                             <button
                               type="button"
@@ -235,9 +262,10 @@ export default function MeetingBookingModal({
                               aria-label={isSlotAvailable ? `Choose ${slot.label}` : `${slot.label} unavailable`}
                               aria-pressed={isSelected}
                               title={isSlotAvailable ? undefined : slot.unavailableReason || "Unavailable"}
-                              className={`rounded-lg border px-3 py-2.5 text-center text-xs font-bold transition-colors ${isSelected ? "border-[#EC008C] bg-[#ffe4f2] text-slate-900" : isSlotAvailable ? "border-slate-200 bg-white text-slate-600 hover:border-[#EC008C]" : "cursor-not-allowed border-slate-400 bg-slate-300 text-slate-500 opacity-80"}`}
+                              className={`rounded-lg border px-3 py-2.5 text-center text-xs font-bold transition-colors ${isSelected ? "border-[#EC008C] bg-[#ffe4f2] text-slate-900 ring-2 ring-[#EC008C]/20" : isSlotAvailable ? "border-slate-200 bg-white text-slate-600 hover:border-[#EC008C]" : "cursor-not-allowed border-slate-400 bg-slate-300 text-slate-500 opacity-80"}`}
                             >
                               <span className="block">{slot.label}</span>
+                              {isSelected && <span className="mt-0.5 block text-[9px] font-black uppercase tracking-wide text-[#b00069]">{isCurrentSlot ? "Current time" : "Selected"}</span>}
                               {!isSlotAvailable && <span className="mt-0.5 block text-[9px] font-semibold uppercase tracking-wide">Unavailable</span>}
                             </button>
                           );
@@ -248,9 +276,9 @@ export default function MeetingBookingModal({
                 </section>
               </div>
               <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4">
-                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Selected meeting</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">{existingCall ? isCurrentSelection ? "Current meeting" : "New meeting time" : "Selected meeting"}</p>
                 <p className="mt-1 text-sm font-extrabold text-slate-900">{selectedLabel}</p>
-                <p className="mt-1 text-[11px] text-slate-500">The shop will see this time in {availability.business.timezone}.</p>
+                <p className="mt-1 text-[11px] text-slate-500">{needsDifferentTime ? "Choose a different available time to reschedule this meeting." : existingCall && selectedSlot ? isOwner && existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by !== "CUSTOMER" ? `This will confirm the requested appointment. Both participants will be emailed in ${availability.business.timezone}.` : isOwner ? `The customer must accept this proposed time. The reschedule email will be sent after confirmation in ${availability.business.timezone}.` : `The owner must confirm this new time. The reschedule email will be sent after confirmation in ${availability.business.timezone}.` : `The shop will see this time in ${availability.business.timezone}.`}</p>
                 <label className="mt-4 block text-xs font-bold text-slate-700">Note (optional)<textarea value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} rows={3} placeholder="Tell the shop what you want to discuss" className="mt-1 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-[#00aeb5] focus:ring-2 focus:ring-[#00aeb5]/20" /></label>
               </div>
             </>
@@ -258,7 +286,7 @@ export default function MeetingBookingModal({
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-white px-5 py-4 sm:px-6">
           <button type="button" onClick={onClose} disabled={saving} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Cancel</button>
-          <button type="submit" disabled={loading || saving || !selectedSlot || !dates.length} title={!selectedSlot ? "Choose an available day and time first." : undefined} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-[#EC008C] disabled:cursor-not-allowed disabled:opacity-40">{saving && <Loader2 size={14} className="animate-spin" />}{saving ? "Saving…" : !selectedSlot ? "Choose a time" : actionLabel}<CheckCircle2 size={14} /></button>
+          <button type="submit" disabled={loading || saving || !selectedSlot || !dates.length || needsDifferentTime} title={!selectedSlot ? "Choose an available day and time first." : needsDifferentTime ? "Choose a different time to reschedule." : undefined} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-[#EC008C] disabled:cursor-not-allowed disabled:opacity-40">{saving && <Loader2 size={14} className="animate-spin" />}{saving ? "Saving…" : !selectedSlot || needsDifferentTime ? "Choose a new time" : actionLabel}<CheckCircle2 size={14} /></button>
         </div>
       </form>
     </div>

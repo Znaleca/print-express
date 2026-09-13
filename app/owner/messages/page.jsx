@@ -330,7 +330,7 @@ export default function OwnerMessagesPage() {
   }, [activeConv]);
 
   useEffect(() => {
-    setVideoCallRequestAlert(videoCalls.some((call) => call.status === "REQUESTED" && call.customer_id !== user?.id && !(Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at)));
+    setVideoCallRequestAlert(videoCalls.some((call) => call.status === "REQUESTED" && call.confirmation_required_by !== "CUSTOMER" && call.customer_id !== user?.id && !(Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at)));
   }, [videoCalls, user]);
 
   const fetchMessages = async (convId, isBg = false, limit = 20, prepend = false) => {
@@ -1024,7 +1024,7 @@ export default function OwnerMessagesPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          const pendingCall = videoCalls.find((call) => call.status === "REQUESTED" && !(Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at));
+                          const pendingCall = videoCalls.find((call) => call.status === "REQUESTED" && call.confirmation_required_by !== "CUSTOMER" && !(Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at));
                           if (!pendingCall) {
                             window.alert("The customer request is no longer active. Ask them to request another call.");
                             return;
@@ -1040,7 +1040,7 @@ export default function OwnerMessagesPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          const pendingCall = videoCalls.find((call) => call.status === "REQUESTED" && !(Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at));
+                          const pendingCall = videoCalls.find((call) => call.status === "REQUESTED" && call.confirmation_required_by !== "CUSTOMER" && !(Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at));
                           if (pendingCall) void cancelVideoCall(pendingCall.id);
                         }}
                         className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-[10px] font-bold text-rose-700 transition-colors hover:bg-rose-100"
@@ -1168,26 +1168,30 @@ export default function OwnerMessagesPage() {
                               const callWindow = getVideoCallWindow(call);
                               const isScheduled = call ? ["SCHEDULED", "LIVE"].includes(call.status) : ["scheduled", "rescheduled"].includes(meta.event);
                               const isRescheduleRequested = Boolean(call && call.status === "REQUESTED" && Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at);
+                              const isPendingOwnerConfirmation = Boolean(call && call.status === "REQUESTED" && call.requested_slot_at && (call.confirmation_required_by === "BUSINESS_OWNER" || (!call.confirmation_required_by && Number(call.reschedule_count || 0) > 0)));
+                              const isPendingCustomerConfirmation = Boolean(call && call.status === "REQUESTED" && call.requested_slot_at && call.confirmation_required_by === "CUSTOMER");
                               const isMissed = Boolean(call && (call.status === "EXPIRED" || (call.status === "SCHEDULED" && callWindow.expired)));
                               return (
-                                <div className="flex w-56 flex-col items-center border-t-4 border-[#00FFFF] bg-white/5 p-3 text-center">
-                                  <Video size={28} className={`mb-2 ${isScheduled ? "text-[#00FFFF]" : "text-[#EC008C]"}`} />
-                                    <p className="font-black uppercase text-xs">{isScheduled ? "Video Call Scheduled" : isRescheduleRequested || meta.event === "reschedule_requested" ? "Waiting for customer to choose a new time" : meta.event === "cancelled" ? "Video Call Cancelled" : "Online Meeting Requested"}</p>
-                                  {isRescheduleRequested && <p className="mt-1 font-mono text-[9px] uppercase opacity-75">The customer will choose the replacement time.</p>}
-                                  {isScheduled && call?.scheduled_at && <p className="mt-1 font-mono text-[10px] font-bold uppercase opacity-90">{formatMeetingDateTime(call.scheduled_at, call.booking_timezone || "Asia/Manila")}</p>}
-                                  {!isScheduled && meta.event !== "cancelled" && !isMine && (
+                                <div className="flex w-64 flex-col items-center rounded-xl border border-slate-200 border-t-4 border-t-[#00aeb5] bg-white p-4 text-center text-slate-900 shadow-sm">
+                                  <Video size={28} className={`mb-2 ${isScheduled ? "text-[#00aeb5]" : "text-[#EC008C]"}`} />
+                                    <p className="text-xs font-black uppercase">{isScheduled ? "Video Call Scheduled" : isPendingCustomerConfirmation ? "Awaiting customer confirmation" : isPendingOwnerConfirmation ? "Confirm the customer's new time" : isRescheduleRequested || meta.event === "reschedule_requested" ? "Waiting for customer to choose a new time" : meta.event === "cancelled" ? "Video Call Cancelled" : "Online Meeting Requested"}</p>
+                                  {isRescheduleRequested && <p className="mt-1 font-mono text-[9px] uppercase text-slate-500">The customer will choose the replacement time.</p>}
+                                  {isPendingCustomerConfirmation && call?.requested_slot_at && <p className="mt-1 text-[10px] font-semibold text-slate-600">Proposed for {formatMeetingDateTime(call.requested_slot_at, call.booking_timezone || "Asia/Manila")}</p>}
+                                  {isPendingOwnerConfirmation && call?.requested_slot_at && <p className="mt-1 text-[10px] font-semibold text-slate-600">Customer requested {formatMeetingDateTime(call.requested_slot_at, call.booking_timezone || "Asia/Manila")}</p>}
+                                  {isScheduled && call?.scheduled_at && <p className="mt-1 text-[10px] font-bold text-slate-600">{formatMeetingDateTime(call.scheduled_at, call.booking_timezone || "Asia/Manila")}</p>}
+                                  {!isScheduled && !isPendingCustomerConfirmation && meta.event !== "cancelled" && !isMine && (
                                     <div className="mt-3 flex w-full gap-2">
                                       <button type="button" onClick={() => call && openScheduleForCall(call.id)} disabled={!call} className="flex-1 bg-[#EC008C] px-3 py-2 font-black uppercase text-[10px] text-white transition-all hover:bg-[#00FFFF] hover:text-[#1A1A1A] disabled:opacity-40">Schedule / accept</button>
-                                      <button type="button" onClick={() => call && cancelVideoCall(call.id)} disabled={!call} className="border border-rose-300/50 px-3 py-2 font-black uppercase text-[10px] text-rose-200 transition-all hover:bg-rose-200/10 disabled:opacity-40">Decline</button>
+                                      <button type="button" onClick={() => call && cancelVideoCall(call.id)} disabled={!call} className="rounded border border-rose-300 bg-white px-3 py-2 text-[10px] font-black uppercase text-rose-700 transition-all hover:bg-rose-50 disabled:opacity-40">Decline</button>
                                     </div>
                                   )}
                                   {isScheduled && call && (
                                     <div className="mt-3 flex w-full flex-col gap-2">
-                                      <button type="button" onClick={() => joinVideoCall(call.id)} disabled={!callWindow.joinable} className="w-full bg-[#EC008C] px-4 py-2 font-black uppercase text-[10px] text-white transition-all hover:bg-[#FFF200] hover:text-[#1A1A1A] disabled:cursor-not-allowed disabled:opacity-40">
+                                      <button type="button" onClick={() => joinVideoCall(call.id)} disabled={!callWindow.joinable} className="w-full rounded-lg bg-[#EC008C] px-4 py-2.5 text-[10px] font-black uppercase text-white transition-all hover:bg-[#FFF200] hover:text-[#1A1A1A] disabled:cursor-not-allowed disabled:border disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-500 disabled:opacity-100">
                                         {callWindow.expired ? "Call ended" : callWindow.joinable ? "Join secure call" : "Not yet available"}
                                       </button>
-                                      {!callWindow.expired && <div className="flex gap-2">{isMine && <button type="button" onClick={() => setShowMeetingBooking(true)} className="flex-1 border border-cyan-300/40 px-2 py-1.5 font-mono text-[9px] font-bold uppercase text-cyan-200 hover:bg-cyan-300/10">Reschedule</button>}<button type="button" onClick={() => cancelVideoCall(call.id)} className="flex-1 border border-rose-200/30 px-2 py-1.5 font-mono text-[9px] font-bold uppercase text-rose-200 hover:bg-rose-200/10">Cancel</button></div>}
-                                      {isMissed && <button type="button" onClick={() => requestVideoCallReschedule(call.id)} className="w-full border border-cyan-300/40 px-2 py-1.5 font-mono text-[9px] font-bold uppercase text-cyan-200 hover:bg-cyan-300/10">Ask customer to choose a new time</button>}
+                                      {!callWindow.expired && <div className="flex gap-2">{isMine && <button type="button" onClick={() => setShowMeetingBooking(true)} className="flex-1 rounded border border-cyan-500 px-2 py-1.5 text-[9px] font-bold uppercase text-cyan-700 hover:bg-cyan-50">Reschedule</button>}<button type="button" onClick={() => cancelVideoCall(call.id)} className="flex-1 rounded border border-rose-300 px-2 py-1.5 text-[9px] font-bold uppercase text-rose-700 hover:bg-rose-50">Cancel</button></div>}
+                                      {isMissed && <button type="button" onClick={() => requestVideoCallReschedule(call.id)} className="w-full rounded border border-cyan-500 px-2 py-1.5 text-[9px] font-bold uppercase text-cyan-700 hover:bg-cyan-50">Ask customer to choose a new time</button>}
                                     </div>
                                   )}
                                 </div>
@@ -1611,7 +1615,7 @@ export default function OwnerMessagesPage() {
                   <button
                     type="button"
                     onClick={() => {
-                          const pendingCall = videoCalls.find((call) => call.status === "REQUESTED" && !(Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at));
+                          const pendingCall = videoCalls.find((call) => call.status === "REQUESTED" && call.confirmation_required_by !== "CUSTOMER" && !(Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at));
                       if (!pendingCall) {
                         window.alert("A customer must request a video call before you schedule one.");
                         return;

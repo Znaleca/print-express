@@ -90,6 +90,41 @@ test("customer booking migration converts an empty request into a reserved meeti
   assert.match(migration, /already have an active meeting\. Reschedule it instead/i);
 });
 
+test("customer reschedules require owner confirmation before sending the reschedule email", () => {
+  const migration = source("supabase/migrations/20260914120000_require_owner_confirmation_for_customer_reschedules.sql");
+  const route = source("app/api/video-calls/route.js");
+  const customer = source("app/messages/page.jsx");
+  assert.match(migration, /when p_confirm or call_row\.owner_id = auth\.uid\(\) then 'SCHEDULED'/i);
+  assert.match(migration, /else 'REQUESTED'/i);
+  assert.match(migration, /call_row\.status = 'REQUESTED' and call_row\.rescheduled_from_at is not null/i);
+  assert.match(migration, /New meeting time awaiting shop confirmation/i);
+  assert.match(route, /action === "reschedule" && call\.status === "REQUESTED"/);
+  assert.match(route, /notificationType = null/);
+  assert.match(route, /\["schedule", "confirm"\]\.includes\(action\)[\s\S]*notificationType = "RESCHEDULED"/);
+  assert.match(route, /awaitingOwnerConfirmation/);
+  assert.match(customer, /Reschedule awaiting owner confirmation/);
+  assert.match(customer, /The reschedule email will be sent after the owner confirms it/);
+});
+
+test("owner reschedules require customer confirmation before sending the final email", () => {
+  const migration = source("supabase/migrations/20260914130000_require_recipient_confirmation_for_reschedules.sql");
+  const route = source("app/api/video-calls/route.js");
+  const customer = source("app/messages/page.jsx");
+  assert.match(migration, /add column if not exists confirmation_required_by text/i);
+  assert.match(migration, /'CUSTOMER', 'BUSINESS_OWNER'/i);
+  assert.match(migration, /when role_name = 'BUSINESS_OWNER' then 'CUSTOMER' else 'BUSINESS_OWNER'/i);
+  assert.match(migration, /Only the customer can confirm this proposed time/i);
+  assert.match(migration, /Only the shop owner can confirm this proposed time/i);
+  assert.match(migration, /New meeting time awaiting customer confirmation/i);
+  assert.match(migration, /create or replace function public\.video_call_confirm/i);
+  assert.match(route, /\["schedule", "confirm"\]\.includes\(action\)/);
+  assert.match(route, /awaitingCustomerConfirmation/);
+  assert.match(customer, /Owner proposed a new meeting time/);
+  assert.match(customer, /Accept proposed time/);
+  assert.match(customer, /Choose another time/);
+  assert.match(customer, /videoCallAction\("confirm"/);
+});
+
 test("video-call API exposes availability and never returns secure room names from list queries", () => {
   const route = source("app/api/video-calls/route.js");
   assert.match(route, /export async function GET/);
@@ -131,6 +166,8 @@ test("scheduled meeting notifications use a protected direct join link without a
   const directMeeting = source("app/meeting/[id]/page.jsx");
   assert.match(email, /eventType === "BOOKED"/);
   assert.match(email, /eventType === "RESCHEDULED"/);
+  assert.match(email, /Previous:/);
+  assert.match(email, /New time:/);
   assert.match(email, /customer[\s\S]*owner/);
   assert.match(email, /canJoinDirectly/);
   assert.match(email, /new URL\(`\/meeting\/\$\{encodeURIComponent\(selectedCall\.id\)\}`, appUrl\)/);
@@ -168,7 +205,26 @@ test("customer messages provide booking and rescheduling without replacing the s
   assert.match(modal, /videoCallQuery/);
   assert.match(modal, /videoCallAction\(action/);
   assert.match(modal, /reschedule/);
+  assert.match(modal, /existingCall\?\.status === "REQUESTED" && existingCall\?\.confirmation_required_by !== "CUSTOMER" \? "schedule" : "reschedule"/);
+  assert.match(modal, /Current appointment:/);
+  assert.match(modal, /Current time/);
+  assert.match(modal, /New meeting time/);
+  assert.match(modal, /needsDifferentTime/);
+  assert.match(modal, /Request new time/);
+  assert.match(modal, /The owner must confirm this new time/);
   assert.match(customer, /VideoCallModal/);
+});
+
+test("meeting message cards stay readable in both incoming and outgoing chat bubbles", () => {
+  const customer = source("app/messages/page.jsx");
+  const owner = source("app/owner/messages/page.jsx");
+
+  assert.match(customer, /min-w-60 rounded-xl border border-slate-200 bg-white p-4 text-center text-slate-900 shadow-sm/);
+  assert.match(owner, /w-64 flex-col items-center rounded-xl border border-slate-200 border-t-4 border-t-\[#00aeb5\] bg-white p-4 text-center text-slate-900 shadow-sm/);
+  assert.match(customer, /disabled:bg-slate-100 disabled:text-slate-500 disabled:opacity-100/);
+  assert.match(owner, /disabled:bg-slate-100 disabled:text-slate-500 disabled:opacity-100/);
+  assert.match(owner, /Awaiting customer confirmation/);
+  assert.match(owner, /confirmation_required_by !== "CUSTOMER"/);
 });
 
 test("meeting booking uses a compact month, day, and time picker", () => {
@@ -184,7 +240,8 @@ test("meeting booking uses a compact month, day, and time picker", () => {
   assert.match(modal, /disabled=\{!isSlotAvailable\}/);
   assert.match(modal, /unavailableReason/);
   assert.match(modal, /Unavailable/);
-  assert.match(modal, /setSelectedDate\(firstDate\?\.dateKey \|\| ""\)/);
+  assert.match(modal, /setSelectedDate\(initialDate\?\.dateKey \|\| ""\)/);
+  assert.match(modal, /setSelectedSlot\(currentSlot\)/);
   assert.match(modal, /dates\.find\(\(date\) => getMonthKey\(date\.dateKey\) === nextMonth\)/);
   assert.match(modal, /disabled=\{!calendarDay\.isAvailable\}/);
   assert.match(modal, /aria-pressed/);
@@ -203,6 +260,8 @@ test("owner calendar preserves owner actions, availability settings, and convers
   assert.ok(calendar.includes("owner/messages?conversation"));
   assert.match(calendar, /videoCallAction\("join"/);
   assert.match(calendar, /videoCallAction\("cancel"/);
+  assert.match(calendar, /Awaiting customer confirmation/);
+  assert.match(calendar, /Change proposal/);
   assert.match(sidebar, /CalendarDays/);
   assert.match(sidebar, /\/owner\/calendar/);
   assert.ok(ownerMessages.includes("new URLSearchParams(window.location.search)"));

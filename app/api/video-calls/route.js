@@ -122,7 +122,7 @@ async function loadMeeting(auth, searchParams) {
 
   const { data: call, error } = await auth.admin
     .from("video_calls")
-    .select("id, conversation_id, business_id, customer_id, owner_id, status, created_at, updated_at, requested_slot_at, scheduled_at, available_from_at, expires_at, duration_minutes, buffer_minutes, customer_note, booking_timezone, reschedule_count, cancellation_reason")
+    .select("id, conversation_id, business_id, customer_id, owner_id, status, confirmation_required_by, created_at, updated_at, requested_slot_at, scheduled_at, available_from_at, expires_at, duration_minutes, buffer_minutes, customer_note, booking_timezone, reschedule_count, cancellation_reason")
     .eq("id", callId)
     .maybeSingle();
   if (error) return { error: NextResponse.json({ error: "Meeting details are temporarily unavailable." }, { status: 503 }) };
@@ -153,7 +153,7 @@ async function loadOwnerCalendar(auth) {
   if (!businessIds.length) return { data: { businesses: [], calls: [] } };
   const { data: calls, error: callError } = await auth.admin
     .from("video_calls")
-    .select("id, conversation_id, business_id, customer_id, owner_id, status, created_at, updated_at, requested_slot_at, scheduled_at, available_from_at, expires_at, duration_minutes, buffer_minutes, customer_note, booking_timezone, reschedule_count, cancellation_reason")
+    .select("id, conversation_id, business_id, customer_id, owner_id, status, confirmation_required_by, created_at, updated_at, requested_slot_at, scheduled_at, available_from_at, expires_at, duration_minutes, buffer_minutes, customer_note, booking_timezone, reschedule_count, cancellation_reason")
     .in("business_id", businessIds)
     .order("requested_slot_at", { ascending: true, nullsFirst: false });
   if (callError) return { error: NextResponse.json({ error: "Calendar data is unavailable." }, { status: 503 }) };
@@ -214,15 +214,33 @@ export async function POST(request) {
       if (body.customerNote && String(body.customerNote).length > 500) return NextResponse.json({ error: "Meeting notes must be 500 characters or fewer." }, { status: 400 });
     }
 
+    let previousCall = null;
+    if (["schedule", "confirm"].includes(action)) {
+      const { data: existingCall } = await auth.admin
+        .from("video_calls")
+        .select("status, confirmation_required_by, reschedule_count, rescheduled_from_at")
+        .eq("id", body.callId)
+        .maybeSingle();
+      previousCall = existingCall || null;
+    }
+
     const userClient = getUserScopedClient(auth.token);
     const { data, error } = await userClient.rpc(rpc.name, rpc.args(body));
     if (error) return NextResponse.json({ error: String(error.message || "Unable to update the meeting.").replace(/^.*DETAIL:\s*/i, "").slice(0, 240) }, { status: safeErrorStatus(error.message) });
     const call = Array.isArray(data) ? data[0] : data;
     if (!call) return NextResponse.json({ error: "The meeting was not saved. Please choose the time again." }, { status: 500 });
     let notification = null;
-    const notificationType = { book: "BOOKED", confirm: "CONFIRMED", schedule: "CONFIRMED", reschedule: "RESCHEDULED", request_reschedule: "RESCHEDULE_REQUESTED", cancel: "CANCELLED" }[action];
+    let notificationType = { book: "BOOKED", confirm: "CONFIRMED", schedule: "CONFIRMED", reschedule: "RESCHEDULED", request_reschedule: "RESCHEDULE_REQUESTED", cancel: "CANCELLED" }[action];
+    if (action === "reschedule" && call.status === "REQUESTED") notificationType = null;
+    if (["schedule", "confirm"].includes(action) && (previousCall?.confirmation_required_by || previousCall?.rescheduled_from_at || Number(previousCall?.reschedule_count || 0) > 0)) notificationType = "RESCHEDULED";
     if (call && notificationType) notification = await sendMeetingNotification({ admin: auth.admin, call, eventType: notificationType });
-    return NextResponse.json({ success: true, call: call || null, warning: notification?.ok === false ? "The meeting was saved, but email notification could not be sent." : null });
+    return NextResponse.json({
+      success: true,
+      call: call || null,
+      awaitingOwnerConfirmation: call.status === "REQUESTED" && call.confirmation_required_by === "BUSINESS_OWNER",
+      awaitingCustomerConfirmation: call.status === "REQUESTED" && call.confirmation_required_by === "CUSTOMER",
+      warning: notification?.ok === false ? "The meeting was saved, but email notification could not be sent." : null,
+    });
   } catch {
     console.error("VIDEO_CALL_API_ERROR");
     return NextResponse.json({ error: "Unable to process the video call request." }, { status: 500 });
