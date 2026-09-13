@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sendResendEmail } from "@/lib/resendEmail";
 import { requireAdmin } from "@/lib/serverAuth";
+import { getConfiguredAppUrl } from "@/lib/appUrl";
 
 const escapeHtml = (value) => String(value || "").replace(/[&<>\"']/g, (character) => ({
   "&": "&amp;",
@@ -16,18 +17,28 @@ export async function POST(request) {
     if (auth.error) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
     const { ownerEmail, ownerName, businessName } = await request.json();
+    const normalizedOwnerEmail = String(ownerEmail || "").trim().toLowerCase();
+    const cleanBusinessName = String(businessName || "").trim();
 
-    if (!ownerEmail || !businessName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) {
+    if (!cleanBusinessName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedOwnerEmail)) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
+    const appUrl = getConfiguredAppUrl();
+    if (!appUrl) {
+      console.error("ADMIN_APPROVAL_EMAIL_APP_URL_MISSING");
+      return NextResponse.json({ error: "Email service is temporarily unavailable." }, { status: 503 });
+    }
+
     const safeOwnerName = escapeHtml(ownerName || "Business Owner").slice(0, 120);
-    const safeBusinessName = escapeHtml(businessName).slice(0, 160);
+    const safeBusinessName = escapeHtml(cleanBusinessName).slice(0, 160);
+    const subjectBusinessName = cleanBusinessName.replace(/[\r\n]/g, " ").slice(0, 160);
+    const dashboardUrl = new URL("/owner", appUrl).toString();
 
     const { data, error } = await sendResendEmail({
       from: process.env.EMAIL_FROM || "Press & Present <noreply@pressandpresent.me>",
-      to: [ownerEmail],
-      subject: `🎉 Your business "${businessName}" has been approved!`,
+      to: [normalizedOwnerEmail],
+      subject: `Your business "${subjectBusinessName}" has been approved!`,
       html: `
         <!DOCTYPE html>
         <html lang="en">
@@ -120,7 +131,7 @@ export async function POST(request) {
                       <table cellpadding="0" cellspacing="0">
                         <tr>
                           <td style="background:#1A1A1A;border:4px solid #1A1A1A;box-shadow:6px 6px 0 #EC008C;">
-                            <a href="${process.env.NEXT_PUBLIC_URL || "https://pressandpresent.vercel.app"}/owner" 
+                            <a href="${dashboardUrl}"
                                style="display:inline-block;padding:16px 32px;color:#ffffff;text-decoration:none;font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:3px;">
                               Open_My_Dashboard →
                             </a>
@@ -149,13 +160,17 @@ export async function POST(request) {
     });
 
     if (error) {
-      console.error("Resend error:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      console.error("ADMIN_APPROVAL_EMAIL_SEND_FAILED");
+      return NextResponse.json({
+        error: error.code === "RESEND_RATE_LIMITED"
+          ? "Email service rate limit reached. Please try again shortly."
+          : "The approval was completed, but the email could not be sent. Please try again.",
+      }, { status: error.status === 429 ? 429 : 502 });
     }
 
     return NextResponse.json({ success: true, id: data?.id });
-  } catch (err) {
-    console.error("Email API error:", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+  } catch {
+    console.error("ADMIN_APPROVAL_EMAIL_UNAVAILABLE");
+    return NextResponse.json({ error: "The approval was completed, but the email could not be sent. Please try again." }, { status: 503 });
   }
 }

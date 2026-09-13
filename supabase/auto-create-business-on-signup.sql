@@ -1,17 +1,13 @@
--- Run this in Supabase SQL Editor.
--- Ensures BUSINESS_OWNER signups always get a pending row in public.businesses.
+-- Compatibility setup for installations that apply standalone SQL files.
+-- Prefer applying supabase/migrations/20260912100000_auth_account_flows.sql.
+-- Account creation uses Supabase email confirmation and database-owned rows.
 
--- 1) Allow owner to insert their own business row (for client-side insert after signup/login).
 alter table public.businesses enable row level security;
 
-drop policy if exists "Owners can insert own business" on public.businesses;
-create policy "Owners can insert own business"
-on public.businesses
-for insert
-to authenticated
-with check (owner_id = auth.uid());
+create unique index if not exists businesses_owner_id_unique_idx
+  on public.businesses (owner_id)
+  where owner_id is not null;
 
--- 2) Trigger: when profile is created with BUSINESS_OWNER role, auto-create pending business.
 create or replace function public.handle_new_business_owner_profile()
 returns trigger
 language plpgsql
@@ -23,7 +19,7 @@ declare
   requested_business_background text;
   requested_products_summary text;
 begin
-  if new.role = 'BUSINESS_OWNER' then
+  if new.role::text = 'BUSINESS_OWNER' then
     select
       coalesce(nullif(trim((u.raw_user_meta_data ->> 'business_name')), ''), nullif(trim(new.full_name), '') || '''s Business', 'Pending Business'),
       nullif(trim((u.raw_user_meta_data ->> 'business_background')), ''),
@@ -46,3 +42,40 @@ create trigger trg_profiles_auto_create_business
 after insert on public.profiles
 for each row
 execute function public.handle_new_business_owner_profile();
+
+create or replace function public.handle_new_auth_user_profile()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+begin
+  insert into public.profiles (id, email, full_name, phone, role, updated_at)
+  values (
+    new.id,
+    lower(trim(new.email)),
+    nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''),
+    nullif(trim(new.raw_user_meta_data ->> 'phone'), ''),
+    case
+      when new.raw_user_meta_data ->> 'role' in ('CUSTOMER', 'BUSINESS_OWNER')
+        then new.raw_user_meta_data ->> 'role'
+      else 'CUSTOMER'
+    end,
+    now()
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+drop trigger if exists trg_auth_user_create_profile on auth.users;
+create trigger trg_auth_user_create_profile
+after insert on auth.users
+for each row
+execute function public.handle_new_auth_user_profile();
+
+revoke all on function public.handle_new_business_owner_profile() from public, anon, authenticated;
+revoke all on function public.handle_new_auth_user_profile() from public, anon, authenticated;
+
+drop policy if exists "Owners can insert own business" on public.businesses;

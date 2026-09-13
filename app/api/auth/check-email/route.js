@@ -12,11 +12,11 @@ export async function GET(request) {
     }
 
     // Account existence is intentionally not checked here. A public
-    // availability endpoint is an account-enumeration oracle; signup handles
-    // duplicate addresses through the generic OTP flow instead.
+    // availability endpoint is an account-enumeration oracle; the protected
+    // signup route performs the server-side duplicate check instead.
     return NextResponse.json({ exists: false, checkUnavailable: true });
-  } catch (err) {
-    console.error("Check email API error:", err);
+  } catch {
+    console.error("AUTH_EMAIL_CHECK_UNAVAILABLE");
 
     return NextResponse.json(
       {

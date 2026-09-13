@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { Loader2, ArrowRight, ShieldCheck, Mail, Eye, EyeOff, Lock, CheckCircle2 } from "lucide-react";
+import { Loader2, ArrowRight, Eye, EyeOff, CheckCircle2, AlertCircle } from "lucide-react";
+import { getRoleHome, isValidEmail, normalizeEmail, validatePassword } from "@/lib/auth";
 import BrandMark from "@/components/BrandMark";
 
 export default function LoginPage() {
@@ -18,25 +19,102 @@ export default function LoginPage() {
   const [resetOtp, setResetOtp] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [resetSuccess, setResetSuccess] = useState(null);
+  const [verificationEmail, setVerificationEmail] = useState("");
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendMessage, setResendMessage] = useState(null);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return undefined;
+    const timer = window.setInterval(() => {
+      setResendCooldown((seconds) => Math.max(0, seconds - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [resendCooldown]);
 
   const getReadableError = (err) => {
     const message = err?.message?.toLowerCase() || "";
+    if (message === "profile_unauthorized") {
+      return "Your account is not authorized for this workspace. Please contact support.";
+    }
+    if (message.includes("email not confirmed") || message.includes("email not verified") || message.includes("not verified")) {
+      return "Your email is not verified yet. Check your inbox or resend the verification email.";
+    }
+    if (message.includes("banned") || message.includes("disabled") || message.includes("suspended")) {
+      return "This account is disabled or unauthorized. Please contact support.";
+    }
+    if (message.includes("network") || message.includes("fetch") || message.includes("timeout") || message.includes("service unavailable") || message.includes("rate limit")) {
+      return "Authentication is temporarily unavailable. Please try again in a moment.";
+    }
     if (message.includes("invalid login credentials")) {
       return "Invalid email or password. Please check your credentials.";
     }
-    return err.message || "An unexpected error occurred. Please try again.";
+    return "We could not sign you in. Please check your details and try again.";
+  };
+
+  const resolveLoginError = async (err, email) => {
+    const message = err?.message?.toLowerCase() || "";
+    if (!message.includes("invalid login credentials")) return getReadableError(err);
+
+    try {
+      const statusResponse = await fetch("/api/auth/account-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const statusData = await statusResponse.json().catch(() => ({}));
+      // This lookup only enriches Supabase's safe invalid-credentials error.
+      // If it is unavailable, do not mislabel a bad login as an auth outage.
+      if (statusResponse.status === 503) return "Invalid email or password. Please check your credentials.";
+      if (statusData.status === "not_found") return "This email does not exist. Please check your email address or create an account.";
+      if (statusData.status === "unverified") return "Your email is not verified yet. Check your inbox or resend the verification email.";
+      if (statusData.status === "disabled") return "This account is disabled or unauthorized. Please contact support.";
+      if (statusData.status === "active") return "Incorrect password. Please try again or reset your password.";
+    } catch {
+      // Keep the provider's safe invalid-credentials message if the status
+      // lookup is unavailable.
+    }
+    return "Invalid email or password. Please check your credentials.";
+  };
+
+  const handleResendVerification = async () => {
+    if (!verificationEmail || resendLoading || resendCooldown > 0) return;
+    setResendLoading(true);
+    setResendMessage(null);
+    try {
+      const res = await fetch("/api/auth/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: verificationEmail }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "We could not resend the verification email.");
+      setResendMessage({ type: "success", text: data.message || "A new verification email has been sent." });
+      setResendCooldown(60);
+    } catch (err) {
+      setResendMessage({ type: "error", text: err.message || "We could not resend the verification email." });
+    } finally {
+      setResendLoading(false);
+    }
   };
 
   const handleSendResetOtp = async (e) => {
     e.preventDefault();
-    if (!formData.email) return;
+    if (loading) return;
+    const email = normalizeEmail(formData.email);
+    if (!isValidEmail(email)) {
+      setError("Enter a valid email address.");
+      return;
+    }
     setLoading(true);
     setError(null);
+    setResetSuccess(null);
     try {
       const res = await fetch("/api/auth/send-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: formData.email.trim().toLowerCase(), type: "reset" })
+        body: JSON.stringify({ email, type: "reset" })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to send recovery code.");
@@ -50,14 +128,26 @@ export default function LoginPage() {
 
   const handleVerifyReset = async (e) => {
     e.preventDefault();
+    if (loading) return;
+    const email = normalizeEmail(formData.email);
+    const passwordError = validatePassword(newPassword);
+    if (!isValidEmail(email)) {
+      setError("Enter a valid email address.");
+      return;
+    }
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
     setLoading(true);
     setError(null);
+    setResetSuccess(null);
     try {
       const res = await fetch("/api/auth/verify-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          email: formData.email.trim().toLowerCase(), 
+          email,
           code: resetOtp, 
           type: "reset", 
           password: newPassword 
@@ -70,8 +160,8 @@ export default function LoginPage() {
       setResetSent(false);
       setResetOtp("");
       setNewPassword("");
-      setFormData({ ...formData, password: "" });
-      alert("Password updated successfully. Please log in with your new password.");
+      setFormData((previous) => ({ ...previous, password: "" }));
+      setResetSuccess("Password updated successfully. Please log in with your new password.");
     } catch (err) {
       setError(err.message || "Failed to reset password.");
     } finally {
@@ -81,28 +171,43 @@ export default function LoginPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (loading) return;
+    const email = normalizeEmail(formData.email);
+    if (!isValidEmail(email)) {
+      setError("Enter a valid email address.");
+      return;
+    }
+    if (!formData.password) {
+      setError("Enter your password.");
+      return;
+    }
     setLoading(true);
     setError(null);
+    setResetSuccess(null);
+    setVerificationEmail("");
+    setResendMessage(null);
     try {
       const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email: formData.email.trim().toLowerCase(),
+        email,
         password: formData.password,
       });
 
       if (signInError) throw signInError;
 
-      const { data: profile } = await supabase
+      if (!data?.user) throw new Error("Authentication service did not return a user.");
+
+      const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("role")
         .eq("id", data.user.id)
-        .single();
+        .maybeSingle();
 
-      const role = profile?.role || "CUSTOMER";
-
-      const routes = {
-        ADMIN: "/admin",
-        BUSINESS_OWNER: "/owner"
-      };
+      const role = profile?.role;
+      const route = getRoleHome(role);
+      if (profileError || !route) {
+        await supabase.auth.signOut();
+        throw new Error("PROFILE_UNAUTHORIZED");
+      }
 
       if (role === "BUSINESS_OWNER" && data.session?.access_token) {
         await fetch("/api/auth/owner-activity", {
@@ -116,9 +221,14 @@ export default function LoginPage() {
 
       // Login is a transition into the app, so don't leave the login screen in
       // browser history when sending portal users to their workspace.
-      router.replace(routes[role] || "/");
+      router.replace(route);
     } catch (err) {
-      setError(getReadableError(err));
+      if (String(err?.message || "").toLowerCase().includes("email not confirmed")) {
+        setVerificationEmail(email);
+      }
+      const readableError = await resolveLoginError(err, email);
+      if (readableError.toLowerCase().includes("not verified")) setVerificationEmail(email);
+      setError(readableError);
     } finally {
       setLoading(false);
     }
@@ -126,6 +236,12 @@ export default function LoginPage() {
 
   const handleChange = (e) => {
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+    setError(null);
+    setResetSuccess(null);
+    if (e.target.name === "email") {
+      setVerificationEmail("");
+      setResendMessage(null);
+    }
   };
 
   return (
@@ -158,9 +274,35 @@ export default function LoginPage() {
 
             {/* Error Banner */}
             {error && (
-              <div className="mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-start gap-3">
-                <span className="font-bold shrink-0">Error:</span>
+              <div className="mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-start gap-3" role="alert" aria-live="assertive">
+                <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
                 <span>{error}</span>
+              </div>
+            )}
+
+            {resetSuccess && (
+              <div className="mb-6 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs font-medium text-emerald-700" role="status">
+                <CheckCircle2 size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+                <span>{resetSuccess}</span>
+              </div>
+            )}
+
+            {verificationEmail && !resetSent && (
+              <div className="mb-6 space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900" role="alert">
+                <p className="font-medium">Check your inbox to verify this email before signing in.</p>
+                {resendMessage && (
+                  <p className={resendMessage.type === "error" ? "font-semibold text-rose-700" : "font-semibold text-emerald-700"} role={resendMessage.type === "error" ? "alert" : "status"}>
+                    {resendMessage.text}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={handleResendVerification}
+                  disabled={resendLoading || resendCooldown > 0}
+                  className="font-black text-[#008F8F] underline hover:text-[#00A5A5] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {resendLoading ? "Sending…" : resendCooldown > 0 ? `Resend available in ${resendCooldown}s` : "Resend verification email"}
+                </button>
               </div>
             )}
 
@@ -195,6 +337,7 @@ export default function LoginPage() {
                     <input 
                       type="password" 
                       required 
+                      autoComplete="new-password"
                       value={newPassword} 
                       onChange={(e) => setNewPassword(e.target.value)}
                       className="w-full rounded-2xl border border-[#D8D6CE] bg-white px-4 py-3 text-sm outline-none transition-all focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/30"
@@ -223,9 +366,10 @@ export default function LoginPage() {
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Email address</label>
                   <div className="relative">
                     <input
-                      name="email"
-                      type="email"
-                      required
+                        name="email"
+                        type="email"
+                        required
+                        autoComplete="email"
                       value={formData.email}
                       onChange={handleChange}
                       className="w-full rounded-2xl border border-[#D8D6CE] bg-white px-4 py-3 text-sm outline-none transition-all focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/30"
@@ -236,21 +380,13 @@ export default function LoginPage() {
 
                 {!isResetMode && (
                   <div>
-                    <div className="flex justify-between items-center mb-1">
-                      <label className="block text-xs font-semibold text-slate-700">Password</label>
-                      <button
-                        type="button"
-                        onClick={() => { setIsResetMode(true); setError(null); }}
-                        className="text-xs font-medium text-[#EC008C] hover:underline"
-                      >
-                        Forgot password?
-                      </button>
-                    </div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">Password</label>
                     <div className="relative">
                       <input
                         name="password"
                         type={showPassword ? "text" : "password"}
                         required
+                        autoComplete="current-password"
                         value={formData.password}
                         onChange={handleChange}
                         className="w-full rounded-2xl border border-[#D8D6CE] bg-white px-4 py-3 pr-10 text-sm outline-none transition-all focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/30"
@@ -259,9 +395,20 @@ export default function LoginPage() {
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                        aria-pressed={showPassword}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
                       >
                         {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                    <div className="mt-2 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => { setIsResetMode(true); setError(null); }}
+                        className="text-xs font-medium text-[#EC008C] hover:underline"
+                      >
+                        Forgot password?
                       </button>
                     </div>
                   </div>

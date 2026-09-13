@@ -5,9 +5,9 @@ import L from "leaflet";
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
+import { DEFAULT_MAP_CENTER, normalizeCoordinates } from "@/lib/coordinates";
 import "leaflet/dist/leaflet.css";
 
-const DEFAULT_CENTER = { lat: 14.6806, lng: 120.5375 }; // Balanga, Bataan, Philippines
 const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
@@ -22,17 +22,15 @@ const customIcon = new L.Icon({
 });
 
 const toPosition = (lat, lng) => {
-  const nextLat = Number(lat);
-  const nextLng = Number(lng);
-  return Number.isFinite(nextLat) && Number.isFinite(nextLng)
-    ? { lat: nextLat, lng: nextLng }
-    : null;
+  return normalizeCoordinates(lat, lng);
 };
 
-export default function LocationPicker({ lat, lng, onChange }) {
+export default function LocationPicker({ lat, lng, onChange, readOnly = false, includedRadiusKm = null, maxRadiusKm = null }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
+  const includedCircleRef = useRef(null);
+  const maxCircleRef = useRef(null);
   const onChangeRef = useRef(onChange);
   const [position, setPosition] = useState(() => toPosition(lat, lng));
 
@@ -43,10 +41,8 @@ export default function LocationPicker({ lat, lng, onChange }) {
   // Keep the local marker in sync when the parent loads or changes saved coordinates.
   useEffect(() => {
     const nextPosition = toPosition(lat, lng);
-    if (!nextPosition) return;
-
     setPosition((current) => (
-      current?.lat === nextPosition.lat && current?.lng === nextPosition.lng
+      nextPosition && current?.lat === nextPosition.lat && current?.lng === nextPosition.lng
         ? current
         : nextPosition
     ));
@@ -57,7 +53,7 @@ export default function LocationPicker({ lat, lng, onChange }) {
     if (!container || mapRef.current) return undefined;
 
     let disposed = false;
-    const initialPosition = toPosition(lat, lng) || DEFAULT_CENTER;
+    const initialPosition = toPosition(lat, lng) || DEFAULT_MAP_CENTER;
     const map = L.map(container, { scrollWheelZoom: true });
     map.setView([initialPosition.lat, initialPosition.lng], 13);
     L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION }).addTo(map);
@@ -76,11 +72,12 @@ export default function LocationPicker({ lat, lng, onChange }) {
     };
 
     const handleMapClick = (event) => {
-      setMapPosition({ lat: event.latlng.lat, lng: event.latlng.lng });
+      const nextPosition = toPosition(event.latlng.lat, event.latlng.lng);
+      if (nextPosition) setMapPosition(nextPosition);
     };
 
     mapRef.current = map;
-    map.on("click", handleMapClick);
+    if (!readOnly) map.on("click", handleMapClick);
 
     if (toPosition(lat, lng)) {
       markerRef.current = L.marker([initialPosition.lat, initialPosition.lng], { icon: customIcon }).addTo(map);
@@ -88,6 +85,13 @@ export default function LocationPicker({ lat, lng, onChange }) {
 
     // The map can be mounted inside a responsive grid. Recalculate after its
     // first paint so Leaflet does not retain a zero-sized or stale container.
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
+      if (!disposed && mapRef.current === map && container.isConnected) {
+        map.invalidateSize({ animate: false });
+      }
+    }) : null;
+    resizeObserver?.observe(container);
+
     requestAnimationFrame(() => {
       if (!disposed && mapRef.current === map && container.isConnected) {
         map.invalidateSize({ animate: false });
@@ -96,8 +100,11 @@ export default function LocationPicker({ lat, lng, onChange }) {
 
     return () => {
       disposed = true;
-      map.off("click", handleMapClick);
+      if (!readOnly) map.off("click", handleMapClick);
+      resizeObserver?.disconnect();
       markerRef.current = null;
+      includedCircleRef.current = null;
+      maxCircleRef.current = null;
       if (mapRef.current === map) mapRef.current = null;
       map.remove();
     };
@@ -105,7 +112,14 @@ export default function LocationPicker({ lat, lng, onChange }) {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !position || !containerRef.current?.isConnected) return;
+    if (!map || !containerRef.current?.isConnected) return;
+
+    if (!position) {
+      markerRef.current?.remove();
+      markerRef.current = null;
+      map.invalidateSize({ animate: false });
+      return;
+    }
 
     if (markerRef.current) {
       markerRef.current.setLatLng([position.lat, position.lng]);
@@ -115,6 +129,45 @@ export default function LocationPicker({ lat, lng, onChange }) {
     map.setView([position.lat, position.lng], map.getZoom(), { animate: false });
     map.invalidateSize({ animate: false });
   }, [position]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !containerRef.current?.isConnected) return;
+
+    if (!position) {
+      includedCircleRef.current?.remove();
+      maxCircleRef.current?.remove();
+      includedCircleRef.current = null;
+      maxCircleRef.current = null;
+      return;
+    }
+
+    const updateCircle = (circleRef, radiusKm, pathOptions) => {
+      const radius = Number(radiusKm);
+      if (!Number.isFinite(radius) || radius <= 0) {
+        circleRef.current?.remove();
+        circleRef.current = null;
+        return;
+      }
+      if (!circleRef.current) circleRef.current = L.circle([position.lat, position.lng], { ...pathOptions, radius: radius * 1000 }).addTo(map);
+      circleRef.current.setLatLng([position.lat, position.lng]);
+      circleRef.current.setRadius(radius * 1000);
+    };
+
+    updateCircle(includedCircleRef, includedRadiusKm, {
+      color: "#00AFC0",
+      fillColor: "#00FFFF",
+      fillOpacity: 0.12,
+      weight: 2,
+    });
+    updateCircle(maxCircleRef, maxRadiusKm, {
+      color: "#EC008C",
+      fillColor: "#EC008C",
+      fillOpacity: 0.04,
+      weight: 2,
+      dashArray: "7 7",
+    });
+  }, [position, includedRadiusKm, maxRadiusKm]);
 
   return (
     <div

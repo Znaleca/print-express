@@ -3,14 +3,22 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Search, Star, Loader2, Map as MapIcon, ChevronRight, MapPin, SlidersHorizontal, LocateFixed, X } from "lucide-react";
+import { Search, Star, Loader2, Map as MapIcon, ChevronRight, MapPin, SlidersHorizontal, UserRound, X } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { getRatingStats, ratingLabel } from "@/lib/rating";
 import { withTimeout } from "@/lib/withTimeout";
+import { normalizeCoordinates } from "@/lib/coordinates";
 
 const estimateTravelMinutes = (distanceKm) => (
   distanceKm == null ? null : Math.max(1, Math.round(Number(distanceKm) * 2.5))
 );
+
+const LOCATION_STATUS_MESSAGES = Object.freeze({
+  denied: "Location access was denied. Allow location access in your browser settings to sort shops by distance.",
+  unavailable: "Your location is unavailable right now. Check your device location services and try again.",
+  timeout: "Finding your location took too long. Check your connection and try again.",
+  invalid: "We could not use the location returned by your device. Please try again.",
+});
 
 const MapComponent = dynamic(() => import("@/components/MapComponent"), {
   ssr: false,
@@ -32,26 +40,38 @@ export default function BrowsePage() {
   const [loadError, setLoadError] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [locationLoading, setLocationLoading] = useState(false);
+  const [locationStatus, setLocationStatus] = useState("idle");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const mapSectionRef = useRef(null);
 
   const requestLocation = () => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation) {
+      setUserLocation(null);
+      setLocationStatus("unavailable");
+      return;
+    }
 
     setLocationLoading(true);
+    setLocationStatus("loading");
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setUserLocation({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        });
+        const coordinates = normalizeCoordinates(pos.coords.latitude, pos.coords.longitude);
+        if (!coordinates) {
+          setUserLocation(null);
+          setLocationLoading(false);
+          setLocationStatus("invalid");
+          return;
+        }
+        setUserLocation(coordinates);
         setSelectedId(null);
         setSortMode("nearest");
         setLocationLoading(false);
+        setLocationStatus("granted");
       },
-      () => {
+      (error) => {
         setUserLocation(null);
         setLocationLoading(false);
+        setLocationStatus(error?.code === 1 ? "denied" : error?.code === 3 ? "timeout" : "unavailable");
       },
       { enableHighAccuracy: true, timeout: 7000 }
     );
@@ -69,7 +89,13 @@ export default function BrowsePage() {
   };
 
   useEffect(() => {
+    let active = true;
+    let refreshTimer;
+    let subscription;
+
     async function loadBusinesses() {
+      setLoading(true);
+      setLoadError(null);
       try {
         const { data: bizData, error: bizError } = await withTimeout(
           (signal) => supabase
@@ -104,11 +130,13 @@ export default function BrowsePage() {
           : { data: [] };
         const openStateByBusiness = Object.fromEntries((openStateRows || []).map((row) => [row.business_id, row.is_open]));
 
-        // Keep reviews optional. Embedding the business_reviews view can fail when
+        // Keep ratings optional. The public view contains only visible reviews and
+        // can be absent until the review consistency migration is applied.
+        // Embedding the review view can fail when
         // PostgREST has not inferred a relationship for the view yet.
         const { data: reviewData, error: reviewError } = await withTimeout(
           (signal) => supabase
-            .from("business_reviews")
+            .from("visible_business_reviews")
             .select("business_id, rating")
             .range(0, 999)
             .abortSignal(signal),
@@ -135,13 +163,14 @@ export default function BrowsePage() {
 
           const reviews = reviewsByBusiness[b.id] || [];
           const ratingStats = getRatingStats(reviews);
+          const coordinates = normalizeCoordinates(b.lat, b.lng);
 
           return {
             id: b.id,
             name: b.name || "Print Shop",
             address: b.address || "Location unavailable",
-            lat: b.lat == null ? null : parseFloat(b.lat),
-            lng: b.lng == null ? null : parseFloat(b.lng),
+            lat: coordinates?.lat ?? null,
+            lng: coordinates?.lng ?? null,
             logo_url: b.logo_url,
             is_open: openStateByBusiness[b.id] ?? b.is_open ?? true,
             rating: ratingStats.average,
@@ -151,16 +180,37 @@ export default function BrowsePage() {
           };
         });
 
-        setBusinesses(formatted);
+        if (active) setBusinesses(formatted);
       } catch (error) {
-        console.error("Error loading print shops:", error);
-        setLoadError(error.message || "We could not load verified print shops right now. Please refresh and try again.");
+        if (active) {
+          console.error("Error loading print shops:", error);
+          setLoadError(error.message || "We could not load verified print shops right now. Please refresh and try again.");
+        }
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     }
 
     loadBusinesses();
+
+    const scheduleRefresh = () => {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        if (active) void loadBusinesses();
+      }, 300);
+    };
+
+    subscription = supabase
+      .channel(`public_browse_directory_${Date.now()}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "businesses" }, scheduleRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, scheduleRefresh)
+      .subscribe();
+
+    return () => {
+      active = false;
+      clearTimeout(refreshTimer);
+      if (subscription) supabase.removeChannel(subscription);
+    };
   }, []);
 
   const filtered = useMemo(
@@ -378,10 +428,12 @@ export default function BrowsePage() {
               type="button"
               onClick={requestLocation}
               disabled={locationLoading}
+              aria-busy={locationLoading}
+              title={locationLoading ? "Finding your location" : "Use your device location to sort shops by distance"}
               className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] font-bold text-white/75 transition-colors hover:border-[#00FFFF]/50 hover:text-white disabled:cursor-wait disabled:opacity-60"
             >
-              <LocateFixed size={13} className="text-[#FFF200]" />
-              {locationLoading ? "Finding your exact location..." : userLocation ? "Showing nearby shops" : "Use my location"}
+              <UserRound size={13} className="text-[#FFF200]" aria-hidden="true" />
+              {locationLoading ? "Finding your location..." : userLocation ? "Showing nearby shops" : "Use my location"}
             </button>
             {nearestBusiness && (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-[#FFF200]/45 bg-[#FFF200]/10 px-3 py-1.5 text-[11px] font-bold text-[#FFF200]">
@@ -389,10 +441,16 @@ export default function BrowsePage() {
               </span>
             )}
           </div>
+          {locationStatus !== "idle" && locationStatus !== "loading" && locationStatus !== "granted" && LOCATION_STATUS_MESSAGES[locationStatus] && (
+            <p role="status" className="mx-auto mt-3 flex max-w-2xl items-start justify-center gap-2 text-[11px] font-semibold leading-relaxed text-[#FFF200]">
+              <UserRound size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span>{LOCATION_STATUS_MESSAGES[locationStatus]}</span>
+            </p>
+          )}
         </div>
 
         <div className="relative mx-auto mt-3 flex max-w-5xl items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-wider text-white/45">
-          <MapIcon size={13} className="text-[#FFF200]" /> The map below shows verified shop pins
+          <MapIcon size={13} className="text-[#FFF200]" /> The map below shows your location and verified shop pins
         </div>
       </section>
 

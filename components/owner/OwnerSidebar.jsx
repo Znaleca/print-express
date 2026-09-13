@@ -11,6 +11,7 @@ import {
   ChevronRight,
   ShoppingBag,
   MessageSquare,
+  CalendarDays,
   Printer,
   Star,
   FileText,
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { href: "/owner/services",  label: "Products & services", icon: Layers, badge: null },
   { href: "/owner/orders",    label: "Orders",     icon: ShoppingBag,   badge: "orders" },
   { href: "/owner/messages",  label: "Messages",   icon: MessageSquare, badge: "messages" },
+  { href: "/owner/calendar",  label: "Calendar",   icon: CalendarDays,   badge: null },
   { href: "/owner/reviews",   label: "Reviews",    icon: Star,          badge: null },
   { href: "/owner/documents", label: "Documents",  icon: FileText,      badge: null },
 ];

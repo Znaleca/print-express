@@ -11,7 +11,7 @@ import {
 
 const GENERIC_OTP_RESPONSE = {
   success: true,
-  message: "If the address is eligible, a verification code has been sent.",
+  message: "If the address is eligible, a recovery code has been sent.",
 };
 
 function genericResponse(status = 200) {
@@ -33,16 +33,20 @@ export async function POST(request) {
   try {
     const supabase = getSupabaseAdminClient();
 
-    const { email, type, fullName } = await request.json();
+    const { email, type } = await request.json();
     const normalizedEmail = String(email || "").trim().toLowerCase();
     const normalizedType = String(type || "").trim().toLowerCase();
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
     }
-    if (!["signup", "reset"].includes(normalizedType)) {
+    if (normalizedType !== "reset") {
       return NextResponse.json({ error: "Missing email or type" }, { status: 400 });
     }
+
+    // Signup uses Supabase's native email-confirmation flow. Keeping this
+    // endpoint reset-only prevents the legacy OTP path from creating a
+    // confirmed account outside the transactional signup route.
 
     // Rate-limit before the account lookup so the endpoint cannot be used to
     // probe whether an email belongs to an account. All scopes are hashed.
@@ -66,13 +70,13 @@ export async function POST(request) {
       { lookup_email: normalizedEmail }
     );
     if (lookupError) {
-      console.error("OTP account lookup error:", lookupError);
+      console.error("AUTH_RESET_ACCOUNT_LOOKUP_FAILED");
       return genericResponse(503);
     }
 
     // Do not disclose whether an address is registered. The UI will continue
     // to the code screen and verification will return the same generic result.
-    if ((normalizedType === "signup" && existingUserId) || (normalizedType === "reset" && !existingUserId)) {
+    if (!existingUserId) {
       return genericResponse();
     }
 
@@ -104,25 +108,15 @@ export async function POST(request) {
       .single();
 
     if (dbError) {
-      console.error("Database error saving OTP:", dbError);
+      console.error("AUTH_RESET_CODE_SAVE_FAILED");
       return NextResponse.json({ error: "Failed to generate code." }, { status: 500 });
     }
 
     // 4. Send Email via Resend
-    const subject = normalizedType === "signup" ? "Your Verification Code" : "Password Reset Code";
-    const headerTitle = normalizedType === "signup" ? "Verify_Account" : "Reset_Password";
-    const title = normalizedType === "signup" ? "Welcome aboard!" : "Reset your password";
-    const actionText = normalizedType === "signup"
-      ? "Use the code below to verify your email address and complete your registration." 
-      : "Use the code below to securely reset your password.";
-    const safeFullName = String(fullName || "").trim().slice(0, 120).replace(/[&<>\"']/g, (character) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '\"': "&quot;",
-      "'": "&#39;",
-    }[character]));
-
+    const subject = "Password Reset Code";
+    const headerTitle = "Reset_Password";
+    const title = "Reset your password";
+    const actionText = "Use the code below to securely reset your password.";
     const { error: emailError } = await sendResendEmail({
       from: process.env.EMAIL_FROM || "Press & Present <noreply@pressandpresent.me>",
       to: [normalizedEmail],
@@ -178,7 +172,6 @@ export async function POST(request) {
                       <h1 style="margin:0 0 24px;font-size:32px;font-weight:900;text-transform:uppercase;letter-spacing:-2px;line-height:1;color:#1A1A1A;font-style:italic;">
                         ${title}
                       </h1>
-                      ${safeFullName ? `<p style="margin:0 0 20px;font-size:13px;text-transform:uppercase;line-height:1.8;color:#555555;letter-spacing:1px;">Hi ${safeFullName},</p>` : ''}
                       <p style="margin:0 0 28px;font-size:13px;text-transform:uppercase;line-height:1.8;color:#555555;letter-spacing:1px;">
                         ${actionText}
                       </p>
@@ -218,16 +211,20 @@ export async function POST(request) {
     });
 
     if (emailError) {
-      console.error("Resend error:", emailError);
+      console.error("AUTH_RESET_EMAIL_SEND_FAILED");
       if (savedOtp?.id) {
         await supabase.from("otp_verifications").delete().eq("id", savedOtp.id);
       }
-      return NextResponse.json({ error: "We could not send the verification code. Please try again." }, { status: 502 });
+      return NextResponse.json({
+        error: emailError.code === "RESEND_RATE_LIMITED"
+          ? "Please wait a moment before requesting another recovery code."
+          : "We could not send the recovery code. Please try again.",
+      }, { status: emailError.status === 429 ? 429 : 502 });
     }
 
     return NextResponse.json(GENERIC_OTP_RESPONSE);
-  } catch (err) {
-    console.error("Send OTP API error:", err);
+  } catch {
+    console.error("AUTH_RESET_UNAVAILABLE");
     return NextResponse.json({ error: "We could not start verification. Please try again." }, { status: 503 });
   }
 }

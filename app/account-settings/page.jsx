@@ -21,6 +21,7 @@ const AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 export default function AccountSettingsPage({ isOwnerPortal = false, portalRole = "customer" } = {}) {
   const router = useRouter();
   const onboarding = useOptionalOnboarding();
+  const accountShellWidth = portalRole === "admin" ? "max-w-[1600px]" : "max-w-6xl";
   const [user, setUser] = useState(null);
   const [accountRole, setAccountRole] = useState("CUSTOMER");
   const [loading, setLoading] = useState(true);
@@ -114,11 +115,17 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
     setIsSavingProfile(true);
     setProfileMessage({ text: "", type: "" });
 
+    if (!fullName.trim()) {
+      setIsSavingProfile(false);
+      setProfileMessage({ text: "Enter your name before saving your profile.", type: "error" });
+      return;
+    }
+
     const normalizedPhone = normalizePhilippinePhone(phone);
     if (!normalizedPhone) {
       setPhoneTouched(true);
       setIsSavingProfile(false);
-      setProfileMessage({ text: "Enter the 10 digits after +63. Example: 9459759016.", type: "error" });
+      setProfileMessage({ text: "Enter the 10 digits after +63. Example: 9123456789.", type: "error" });
       return;
     }
 
@@ -229,7 +236,7 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
       ? "Enter your 10-digit mobile number."
       : phone.startsWith("9")
         ? "Enter all 10 digits of your mobile number."
-        : "Your number must start with 9. Example: 9459759016."
+        : "Your number must start with 9. Example: 9123456789."
     : "";
 
   if (loading) {
@@ -242,7 +249,7 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
         <div className="cmyk-bar absolute left-0 right-0 top-0" />
         <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-slate-200" />
 
-        <div className="relative mx-auto max-w-6xl space-y-6">
+        <div className={`relative mx-auto ${accountShellWidth} space-y-6`}>
           {/* HEADER SECTION */}
           <div className="flex flex-col justify-between gap-6 md:flex-row md:items-end">
             <div>
@@ -262,7 +269,7 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
         </div>
       </section>
 
-      <div className="mx-auto grid w-full max-w-6xl grid-cols-1 items-start gap-6 px-4 pb-12 pt-6 sm:px-8 sm:pb-14 sm:pt-8 md:grid-cols-2 lg:px-10">
+      <div className={`mx-auto grid w-full ${accountShellWidth} grid-cols-1 items-start gap-6 px-4 pb-12 pt-6 sm:px-8 sm:pb-14 sm:pt-8 md:grid-cols-2 lg:px-10`}>
           {/* PROFILE SETTINGS */}
           <section className="relative overflow-hidden rounded-2xl border border-[#D8D6CE] bg-white shadow-sm">
             <div className="cmyk-bar-sm absolute left-0 right-0 top-0" />
@@ -338,21 +345,24 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600">
-                  Nickname
+                <label className="text-xs font-semibold text-slate-600" htmlFor="account-full-name">
+                  Full name <span className="text-[#EC008C]">*</span>
                 </label>
                 <input 
+                  id="account-full-name"
                   type="text" 
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   placeholder="Enter your name"
+                  required
+                  aria-required="true"
                   className="w-full rounded-xl border border-[#D8D6CE] bg-white px-4 py-3 text-sm text-[#1A1A1A] outline-none transition-all focus:ring-2 focus:ring-[#FFF200]/50"
                 />
               </div>
 
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-600">
-                  Mobile number
+                  Mobile number <span className="text-[#EC008C]">*</span>
                 </label>
                 <div
                   className={`flex overflow-hidden rounded-xl border bg-white transition-colors focus-within:ring-2 ${
@@ -376,9 +386,10 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
                       setPhoneTouched(true);
                       setPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
                     }}
-                    placeholder="9459759016"
+                    placeholder="9123456789"
                     aria-label="Mobile number without country code"
                     aria-invalid={Boolean(phoneError)}
+                    aria-required="true"
                     aria-describedby="account-phone-help account-phone-error"
                     className="min-w-0 flex-1 bg-transparent px-4 py-3 text-sm text-[#1A1A1A] outline-none"
                   />
@@ -459,7 +470,7 @@ export default function AccountSettingsPage({ isOwnerPortal = false, portalRole 
       </div>
 
       {onboarding && (
-        <section className="mx-auto mb-12 w-full max-w-6xl px-4 sm:px-8 lg:px-10">
+        <section className={`mx-auto mb-12 w-full ${accountShellWidth} px-4 sm:px-8 lg:px-10`}>
           <div className="relative overflow-hidden rounded-2xl border border-[#D8D6CE] bg-white shadow-sm">
             <div className="cmyk-bar-sm absolute left-0 right-0 top-0" />
             <div className="flex flex-col gap-5 p-6 sm:flex-row sm:items-center sm:justify-between sm:p-8">

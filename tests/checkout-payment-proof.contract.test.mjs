@@ -28,7 +28,7 @@ test("checkout phone input accepts only the local ten-digit format", async () =>
   assert.match(page, /inputMode="numeric"/);
   assert.match(page, /maxLength=\{10\}/);
   assert.match(page, /e\.target\.value\.replace\(\/\\D\/g, ""\)\.slice\(0, 10\)/);
-  assert.match(page, /placeholder="9459759016"/);
+  assert.match(page, /placeholder="9123456789"/);
   assert.match(phone, /export function toPhilippinePhoneInput/);
   assert.match(page, /\(effectiveDownpaymentPercent === 0 \|\| !!receiptFile\)/, "receipt upload must not bypass phone validation");
 });

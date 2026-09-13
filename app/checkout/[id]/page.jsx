@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { normalizePhilippinePhone, toPhilippinePhoneInput } from "@/lib/phone";
+import { normalizeCoordinates } from "@/lib/coordinates";
+import { calculateDeliveryFee, formatDeliveryDistance, normalizeDeliverySettings } from "@/lib/delivery";
 import { getDesignFiles } from "@/lib/checkout";
 import OrderSummary from "@/components/checkout/OrderSummary";
 import {
@@ -133,6 +135,13 @@ export default function CheckoutPage({ params }) {
   useEffect(() => {
     fetchInitialData();
   }, [businessId]);
+
+  useEffect(() => {
+    if (business?.delivery_enabled === false && deliveryType === "DELIVERY") {
+      setDeliveryType("PICKUP");
+      setCheckoutMessage({ type: "error", text: "Delivery is currently unavailable for this shop. Store Pickup remains available." });
+    }
+  }, [business, deliveryType]);
 
   const fetchInitialData = async () => {
     try {
@@ -260,7 +269,7 @@ export default function CheckoutPage({ params }) {
         }
       }
 
-      if (!lat || !lng) {
+      if (!normalizeCoordinates(lat, lng)) {
         const data = await fetchJsonWithTimeout(
           `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressToSearch)}`,
           { headers: { "User-Agent": "print-app-v1" } }
@@ -271,8 +280,9 @@ export default function CheckoutPage({ params }) {
         }
       }
 
-      if (lat && lng) {
-        setDeliveryCoordinates({ lat, lng });
+      const coordinates = normalizeCoordinates(lat, lng);
+      if (coordinates) {
+        setDeliveryCoordinates(coordinates);
         setCheckoutMessage({ type: "success", text: "Address pinned on the map." });
       } else {
         setCheckoutMessage({ type: "error", text: "Could not find this address. Adjust it or place the pin on the map." });
@@ -286,10 +296,12 @@ export default function CheckoutPage({ params }) {
   };
 
   const reverseGeocode = async (lat, lng) => {
+    const coordinates = normalizeCoordinates(lat, lng);
+    if (!coordinates) return;
     setDeliveryLocationLoading(true);
     try {
       const data = await fetchJsonWithTimeout(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${coordinates.lat}&lon=${coordinates.lng}`,
         { headers: { "User-Agent": "print-app-v1" } }
       );
       if (data && data.display_name) {
@@ -307,10 +319,14 @@ export default function CheckoutPage({ params }) {
       setDeliveryLocationLoading(true);
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          const lat = position.coords.latitude;
-          const lng = position.coords.longitude;
-          setDeliveryCoordinates({ lat, lng });
-          reverseGeocode(lat, lng);
+          const coordinates = normalizeCoordinates(position.coords.latitude, position.coords.longitude);
+          if (!coordinates) {
+            setCheckoutMessage({ type: "error", text: "Your browser returned an invalid location. Place the pin manually." });
+            setDeliveryLocationLoading(false);
+            return;
+          }
+          setDeliveryCoordinates(coordinates);
+          reverseGeocode(coordinates.lat, coordinates.lng);
         },
         (error) => {
           console.error("Geolocation error:", error);
@@ -331,7 +347,13 @@ export default function CheckoutPage({ params }) {
 
     if (!isCustomer) return rejectOrder("Sign in with a customer account before placing an order.");
     if (isClosed) return rejectOrder("This shop is currently closed and cannot accept new orders.");
-    if (deliveryType === "DELIVERY" && !deliveryAddress) return rejectOrder("Add a delivery address before placing your order.");
+    if (deliveryType === "DELIVERY" && business.delivery_enabled === false) return rejectOrder("Delivery is currently unavailable for this shop. Select Store Pickup instead.");
+    if (deliveryType === "DELIVERY" && !deliveryAddress.trim()) return rejectOrder("Add a delivery address before placing your order.");
+    if (deliveryType === "DELIVERY" && !deliveryQuote.eligible) {
+      if (deliveryQuote.status === "OUT_OF_RANGE") return rejectOrder("This address is outside the shop’s delivery area. Please choose another address or select pickup.");
+      if (deliveryQuote.status === "MISSING_SHOP_COORDINATES") return rejectOrder("This shop has not finished its delivery location setup. Select Store Pickup or ask the shop to add its map pin.");
+      return rejectOrder("Pin your delivery location on the map before placing your order.");
+    }
     if (fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt) return rejectOrder("Choose the date and time for your scheduled order.");
     if (selectedServices.length === 0) return rejectOrder("Your cart is empty. Add a product or service first.");
     const normalizedPhone = normalizePhilippinePhone(customerPhone);
@@ -428,7 +450,9 @@ export default function CheckoutPage({ params }) {
           receipt_url: receiptUrl,
           delivery_type: deliveryType,
           delivery_address: deliveryType === "DELIVERY" ? deliveryAddress : null,
-          delivery_coordinates: deliveryType === "DELIVERY" ? deliveryCoordinates : null,
+          delivery_coordinates: deliveryType === "DELIVERY"
+            ? normalizeCoordinates(deliveryCoordinates?.lat, deliveryCoordinates?.lng)
+            : null,
           fulfillment_mode: fulfillmentMode,
           expected_fulfillment_at: fulfillmentMode === "ADVANCE" ? formatManilaDateTimeForDB(expectedFulfillmentAt) : null,
           customer_phone: normalizedPhone,
@@ -499,23 +523,37 @@ export default function CheckoutPage({ params }) {
   }
 
   const total = selectedServices.reduce((sum, item) => sum + (Number(item.price) * (item.quantity || 1)), 0);
+  const deliverySettings = useMemo(() => normalizeDeliverySettings(business || {}), [business]);
+  const deliveryQuote = useMemo(() => {
+    if (deliveryType === "PICKUP") {
+      return { status: "PICKUP", eligible: true, distanceKm: null, extraDistanceKm: 0, baseFee: 0, extraFee: 0, deliveryFee: 0 };
+    }
+    return calculateDeliveryFee({
+      shopCoordinates: business,
+      customerCoordinates: deliveryCoordinates,
+      settings: deliverySettings,
+    });
+  }, [business, deliveryCoordinates, deliverySettings, deliveryType]);
+  const deliveryFee = deliveryQuote.eligible ? deliveryQuote.deliveryFee : 0;
+  const orderSubtotal = total;
+  const orderTotal = orderSubtotal + deliveryFee;
   const effectiveDownpaymentPercent = userSelectedDownpaymentPercent !== null ? userSelectedDownpaymentPercent : minimumDownpaymentPercent;
-  const downpaymentAmount = total * (effectiveDownpaymentPercent / 100);
-  const balanceAmount = total - downpaymentAmount;
+  const downpaymentAmount = orderTotal * (effectiveDownpaymentPercent / 100);
+  const balanceAmount = Math.max(0, orderTotal - downpaymentAmount);
   const isPhoneValid = Boolean(normalizePhilippinePhone(customerPhone));
   const phoneError = phoneTouched && !isPhoneValid
     ? customerPhone.length === 0
       ? "Enter your 10-digit mobile number."
       : customerPhone.startsWith("9")
         ? "Enter all 10 digits of your mobile number."
-        : "Your number must start with 9. Example: 9459759016."
+        : "Your number must start with 9. Example: 9123456789."
     : "";
   const isReadyToExecute =
     selectedServices.length > 0 &&
     isCustomer &&
     !isClosed &&
     isPhoneValid &&
-    !(deliveryType === "DELIVERY" && !deliveryAddress) &&
+    !(deliveryType === "DELIVERY" && (!deliveryAddress.trim() || !deliveryQuote.eligible)) &&
     !(fulfillmentMode === "ADVANCE" && !expectedFulfillmentAt) &&
     (effectiveDownpaymentPercent === 0 || !!receiptFile);
 
@@ -725,7 +763,7 @@ export default function CheckoutPage({ params }) {
                           setPhoneTouched(true);
                           setCustomerPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
                         }}
-                        placeholder="9459759016"
+                        placeholder="9123456789"
                         aria-label="Mobile number without country code"
                         aria-invalid={Boolean(phoneError)}
                         aria-describedby="customer-phone-help customer-phone-error"
@@ -743,6 +781,7 @@ export default function CheckoutPage({ params }) {
 
                   <div className="grid grid-cols-2 gap-3">
                     <button
+                      type="button"
                       onClick={() => setDeliveryType("PICKUP")}
                       className={`py-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
                         deliveryType === 'PICKUP'
@@ -753,16 +792,22 @@ export default function CheckoutPage({ params }) {
                       <Package size={16} /> Store Pickup
                     </button>
                     <button
+                      type="button"
                       onClick={() => setDeliveryType("DELIVERY")}
+                      disabled={business.delivery_enabled === false}
+                      title={business.delivery_enabled === false ? "Delivery is currently unavailable" : undefined}
                       className={`py-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
-                        deliveryType === 'DELIVERY'
+                        business.delivery_enabled === false
+                          ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
+                          : deliveryType === 'DELIVERY'
                           ? 'bg-[#EC008C] text-white border-[#EC008C] shadow-sm'
                           : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                       }`}
                     >
-                      <Truck size={16} /> Local Delivery
+                      <Truck size={16} /> {business.delivery_enabled === false ? "Delivery unavailable" : "Local Delivery"}
                     </button>
                   </div>
+                  {business.delivery_enabled === false && <p className="text-[11px] font-semibold text-slate-500">This shop currently accepts Store Pickup only.</p>}
 
                   {deliveryType === "DELIVERY" && (
                     <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-4">
@@ -793,9 +838,32 @@ export default function CheckoutPage({ params }) {
                           <LocationPicker
                             lat={deliveryCoordinates?.lat}
                             lng={deliveryCoordinates?.lng}
-                            onChange={(lat, lng) => { setDeliveryCoordinates({ lat, lng }); reverseGeocode(lat, lng); }}
+                            onChange={(lat, lng) => {
+                              const coordinates = normalizeCoordinates(lat, lng);
+                              if (!coordinates) return;
+                              setDeliveryCoordinates(coordinates);
+                              reverseGeocode(coordinates.lat, coordinates.lng);
+                            }}
                           />
                         </div>
+                      </div>
+
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        className={`rounded-xl border p-3 text-[11px] ${deliveryQuote.eligible ? "border-[#00AFC0]/30 bg-[#EFFFFF] text-slate-700" : "border-amber-200 bg-amber-50 text-amber-900"}`}
+                      >
+                        {deliveryQuote.status === "MISSING_SHOP_COORDINATES" && <p className="font-semibold">This shop has not finished its delivery location setup. Choose Store Pickup or ask the shop to add its map pin.</p>}
+                        {deliveryQuote.status === "MISSING_CUSTOMER_COORDINATES" && <p className="font-semibold">Select or confirm your delivery location on the map to calculate the delivery fee.</p>}
+                        {deliveryQuote.status === "OUT_OF_RANGE" && <p className="font-semibold">This address is outside the shop’s delivery area. Please choose another address or select pickup.</p>}
+                        {deliveryQuote.eligible && (
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+                            <div><span className="block text-slate-500">Distance</span><strong>{formatDeliveryDistance(deliveryQuote.distanceKm)}</strong></div>
+                            <div><span className="block text-slate-500">Base fee</span><strong>₱{deliveryQuote.baseFee.toFixed(2)}</strong></div>
+                            <div><span className="block text-slate-500">Extra distance fee</span><strong>₱{deliveryQuote.extraFee.toFixed(2)}</strong></div>
+                            <div><span className="block text-slate-500">Delivery fee</span><strong className="text-[#EC008C]">₱{deliveryQuote.deliveryFee.toFixed(2)}</strong></div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -853,7 +921,7 @@ export default function CheckoutPage({ params }) {
                 </div>
                 <div className="p-6 space-y-3">
                   <p className="text-xs text-slate-500">
-                    Remaining balance after downpayment: <strong className="text-slate-900">₱{balanceAmount > 0 ? balanceAmount.toFixed(2) : '0.00'}</strong>
+                    Remaining balance after downpayment: <strong className="text-slate-900">₱{balanceAmount.toFixed(2)}</strong>
                   </p>
                   <div className="grid grid-cols-2 gap-3">
                     <button onClick={() => setPaymentMethod("COD")}
@@ -909,7 +977,7 @@ export default function CheckoutPage({ params }) {
                     </div>
                     <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-center">
                       <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Full Amount</span>
-                      <span className="text-xl font-extrabold text-slate-900">₱{total.toFixed(2)}</span>
+                      <span className="text-xl font-extrabold text-slate-900">₱{orderTotal.toFixed(2)}</span>
                     </div>
                   </div>
 
@@ -950,7 +1018,11 @@ export default function CheckoutPage({ params }) {
 
             <OrderSummary
               selectedServices={selectedServices}
-              total={total}
+              subtotal={orderSubtotal}
+              total={orderTotal}
+              deliveryType={deliveryType}
+              deliveryFee={deliveryFee}
+              deliveryQuote={deliveryQuote}
               effectiveDownpaymentPercent={effectiveDownpaymentPercent}
               minimumDownpaymentPercent={minimumDownpaymentPercent}
               setUserSelectedDownpaymentPercent={setUserSelectedDownpaymentPercent}

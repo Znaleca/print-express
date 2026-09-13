@@ -2,11 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import BrandMark from "@/components/BrandMark";
+import { supabase } from "@/lib/supabaseClient";
 import {
   BarChart2,
+  LayoutDashboard,
+  Store,
   Users,
-  MessageSquare,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -15,13 +18,35 @@ import {
 } from "lucide-react";
 
 const NAV_ITEMS = [
-  { href: "/admin",          label: "Verifications", icon: BarChart2 },
-  { href: "/admin/accounts", label: "Accounts",      icon: Users },
-  { href: "/admin/reviews",  label: "Reviews",       icon: MessageSquare },
+  { href: "/admin",                    label: "Dashboard",           icon: LayoutDashboard },
+  { href: "/admin/verifications",      label: "Verifications",      icon: BarChart2, countKey: "verifications" },
+  { href: "/admin/shops",               label: "Shops",               icon: Store, countKey: "categoryApprovals" },
+  { href: "/admin/accounts",            label: "Accounts",            icon: Users },
 ];
 
 export default function AdminSidebar({ isOpen, onToggle, adminName, adminEmail, onSignOut, signingOut = false }) {
   const pathname = usePathname();
+  const [pendingCounts, setPendingCounts] = useState({});
+
+  useEffect(() => {
+    let active = true;
+
+    const loadPendingCounts = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      const response = await fetch("/api/admin/counts", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!response.ok || !active) return;
+      const payload = await response.json().catch(() => ({}));
+      if (active) setPendingCounts(payload);
+    };
+
+    loadPendingCounts().catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   return (
     <aside
@@ -55,8 +80,11 @@ export default function AdminSidebar({ isOpen, onToggle, adminName, adminEmail, 
 
       {/* NAVIGATION */}
       <nav className="flex-1 space-y-1 px-3">
-        {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-          const isActive = href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
+        {NAV_ITEMS.map(({ href, label, icon: Icon, countKey }) => {
+          const isActive = href === "/admin"
+            ? pathname === "/admin"
+            : pathname === href || pathname.startsWith(`${href}/`);
+          const pendingCount = countKey ? Number(pendingCounts[countKey] || 0) : 0;
           
           return (
             <Link
@@ -68,9 +96,10 @@ export default function AdminSidebar({ isOpen, onToggle, adminName, adminEmail, 
                   ? "bg-[#00FFFF] text-[#1A1A1A] font-black"
                   : "text-white/55 hover:text-white hover:bg-white/5"
                 }`}
+              aria-current={isActive ? "page" : undefined}
             >
               <Icon size={18} className={isActive ? "text-[#1A1A1A]" : ""} />
-              {isOpen && <span className="truncate">{label}</span>}
+              {isOpen && <span className="flex min-w-0 flex-1 items-center justify-between gap-2"><span className="truncate">{label}</span>{pendingCount > 0 && <span className={`min-w-5 rounded-full px-1.5 py-0.5 text-center text-[10px] font-black ${isActive ? "bg-[#1A1A1A] text-[#00FFFF]" : "bg-[#EC008C] text-white"}`} aria-label={`${pendingCount} pending`}>{pendingCount > 99 ? "99+" : pendingCount}</span>}</span>}
             </Link>
           );
         })}
@@ -87,7 +116,8 @@ export default function AdminSidebar({ isOpen, onToggle, adminName, adminEmail, 
         <Link
           href="/admin/account-settings"
           title="Account settings"
-          className={`mb-1 flex items-center gap-3 rounded-2xl px-3.5 py-3 text-xs font-semibold text-white/55 transition-colors hover:bg-white/5 hover:text-white ${!isOpen ? "justify-center" : ""}`}
+          aria-current={pathname.startsWith("/admin/account-settings") ? "page" : undefined}
+          className={`mb-1 flex items-center gap-3 rounded-2xl px-3.5 py-3 text-xs font-semibold transition-colors hover:bg-white/5 hover:text-white ${pathname.startsWith("/admin/account-settings") ? "bg-white/10 text-white" : "text-white/55"} ${!isOpen ? "justify-center" : ""}`}
         >
           <Settings size={18} />
           {isOpen && <span>Account settings</span>}

@@ -1,14 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 import {
-  Loader2, ArrowRight, Mail, Eye, EyeOff, CheckCircle2,
+  Loader2, ArrowRight, Eye, EyeOff, CheckCircle2,
   AlertCircle, ShieldCheck, UserCheck, Store
 } from "lucide-react";
 import { normalizePhilippinePhone } from "@/lib/phone";
+import { getPasswordRequirements, isValidEmail, normalizeEmail, validatePassword } from "@/lib/auth";
 import BrandMark from "@/components/BrandMark";
 
 const Requirement = ({ label, met }) => (
@@ -19,7 +18,6 @@ const Requirement = ({ label, met }) => (
 );
 
 export default function SignUpPage() {
-  const router = useRouter();
   const [role, setRole] = useState("CUSTOMER");
   const [ownerStep, setOwnerStep] = useState(1);
 
@@ -41,19 +39,22 @@ export default function SignUpPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  // OTP State
-  const [showOtp, setShowOtp] = useState(false);
-  const [otpCode, setOtpCode] = useState("");
-  const [otpError, setOtpError] = useState(null);
-  const [otpLoading, setOtpLoading] = useState(false);
+  const [verificationState, setVerificationState] = useState(null);
+  const [existingAccount, setExistingAccount] = useState(null);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendMessage, setResendMessage] = useState(null);
 
-  const passwordRequirements = {
-    length:  formData.password.length >= 8,
-    capital: /[A-Z]/.test(formData.password),
-    symbol:  /[!@#$%^&*(),.?":{}|<>]/.test(formData.password),
-  };
-  const isPasswordValid   = Object.values(passwordRequirements).every(Boolean);
+  const passwordRequirements = getPasswordRequirements(formData.password);
   const passwordsMatch    = formData.password === formData.confirmPassword && formData.confirmPassword !== "";
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return undefined;
+    const timer = window.setInterval(() => {
+      setResendCooldown((seconds) => Math.max(0, seconds - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [resendCooldown]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -61,6 +62,10 @@ export default function SignUpPage() {
       ...p,
       [name]: name === "phone" ? value.replace(/\D/g, "").slice(0, 10) : value,
     }));
+    if (name === "email") {
+      setExistingAccount(null);
+      setResendMessage(null);
+    }
     if (name === "phone") setPhoneTouched(true);
   };
 
@@ -68,13 +73,52 @@ export default function SignUpPage() {
     setRole(nextRole);
     setOwnerStep(1);
     setError(null);
+    setExistingAccount(null);
+  };
+
+  const handleResendVerification = async (email) => {
+    if (resendLoading || resendCooldown > 0) return;
+    setResendLoading(true);
+    setResendMessage(null);
+    try {
+      const res = await fetch("/api/auth/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: normalizeEmail(email) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "We could not resend the verification email.");
+      setResendMessage({ type: "success", text: data.message || "A new verification email has been sent." });
+      setResendCooldown(60);
+    } catch (err) {
+      setResendMessage({ type: "error", text: err.message || "We could not resend the verification email." });
+    } finally {
+      setResendLoading(false);
+    }
   };
 
   /* Owner onboarding uses two short steps before email verification. */
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    if (loading) return;
+
     if (role === "BUSINESS_OWNER" && ownerStep === 1) {
+      const businessName = formData.businessName.trim();
+      const businessBackground = formData.businessBackground.trim();
+      const productsSummary = formData.productsSummary.trim();
+      if (businessName.length < 2 || businessName.length > 120) {
+        setError("Business name must be between 2 and 120 characters.");
+        return;
+      }
+      if (businessBackground.length < 20 || businessBackground.length > 800) {
+        setError("Business background must be between 20 and 800 characters.");
+        return;
+      }
+      if (productsSummary.length < 10 || productsSummary.length > 500) {
+        setError("Products and services summary must be between 10 and 500 characters.");
+        return;
+      }
       setError(null);
       setOwnerStep(2);
       return;
@@ -83,8 +127,24 @@ export default function SignUpPage() {
     setLoading(true);
     setError(null);
 
-    if (!isPasswordValid || !passwordsMatch) {
-      setError("Please ensure all password requirements are satisfied.");
+    const email = normalizeEmail(formData.email);
+    if (!isValidEmail(email)) {
+      setError("Enter a valid email address.");
+      setLoading(false);
+      return;
+    }
+
+    const firstName = formData.firstName.trim();
+    const lastName = formData.lastName.trim();
+    if (!firstName || !lastName) {
+      setError("Enter your first and last name.");
+      setLoading(false);
+      return;
+    }
+
+    const passwordError = validatePassword(formData.password);
+    if (passwordError || !passwordsMatch) {
+      setError(passwordError || "Passwords do not match.");
       setLoading(false);
       return;
     }
@@ -92,91 +152,49 @@ export default function SignUpPage() {
     const normalizedPhone = normalizePhilippinePhone(formData.phone);
     if (!normalizedPhone) {
       setPhoneTouched(true);
-      setError("Enter the 10 digits after +63. Example: 9459759016.");
+      setError("Enter the 10 digits after +63. Example: 9123456789.");
       setLoading(false);
       return;
     }
 
     try {
-      const res = await fetch("/api/auth/send-otp", {
+      const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: formData.email.trim().toLowerCase(),
-          type: "signup",
-          fullName: `${formData.firstName.trim()} ${formData.lastName.trim()}`.trim()
+          email,
+          password: formData.password,
+          role,
+          firstName,
+          lastName,
+          phone: normalizedPhone,
+          businessName: formData.businessName.trim(),
+          businessBackground: formData.businessBackground.trim(),
+          productsSummary: formData.productsSummary.trim(),
         })
       });
-      
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to send verification code.");
 
-      setShowOtp(true);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (["EMAIL_EXISTS_VERIFIED", "EMAIL_EXISTS_UNVERIFIED"].includes(data.code)) {
+          setExistingAccount({ email, unverified: data.code === "EMAIL_EXISTS_UNVERIFIED" });
+          setResendMessage(null);
+          return;
+        }
+        throw new Error(data.error || "We could not create your account right now.");
+      }
+
+      setVerificationState({ email, role });
+      setExistingAccount(null);
+      setFormData((previous) => ({ ...previous, password: "", confirmPassword: "" }));
     } catch (err) {
-      setError(err.message || "Failed to initiate verification.");
+      setError(err.message || "We could not create your account right now.");
     } finally {
       setLoading(false);
     }
   };
 
-  /* VERIFY OTP & REGISTER */
-  const handleVerifyOtp = async (e) => {
-    e.preventDefault();
-    setOtpLoading(true);
-    setOtpError(null);
-
-    try {
-      const normalizedPhone = normalizePhilippinePhone(formData.phone);
-      if (!normalizedPhone) throw new Error("Enter a valid Philippine mobile number.");
-
-      const userData = {
-        full_name: `${formData.firstName.trim()} ${formData.lastName.trim()}`.trim(),
-        phone: normalizedPhone,
-        role
-      };
-      if (role === "BUSINESS_OWNER") {
-        userData.business_name = formData.businessName.trim();
-        userData.business_background = formData.businessBackground.trim();
-        userData.products_summary = formData.productsSummary.trim();
-      }
-
-      const res = await fetch("/api/auth/verify-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: formData.email.trim().toLowerCase(),
-          code: otpCode,
-          type: "signup",
-          password: formData.password,
-          userData
-        })
-      });
-      
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Verification failed.");
-
-      const { data: authData, error: signInError } = await supabase.auth.signInWithPassword({
-        email: formData.email.trim().toLowerCase(),
-        password: formData.password,
-      });
-
-      if (signInError) throw signInError;
-
-      if (role === "BUSINESS_OWNER") {
-        router.push("/owner/documents");
-      } else {
-        router.push("/browse");
-      }
-
-    } catch (err) {
-      setOtpError(err.message || "Invalid code. Please try again.");
-    } finally {
-      setOtpLoading(false);
-    }
-  };
-
-  /* OTP SCREEN */
-  if (showOtp) {
+  if (verificationState) {
     return (
       <main className="signup-page relative flex min-h-screen flex-col justify-center overflow-hidden bg-[#1A1A1A] px-4 py-12 font-sans text-slate-900 sm:px-6 lg:px-8">
         <div className="cmyk-bar absolute left-0 right-0 top-0" />
@@ -184,58 +202,45 @@ export default function SignUpPage() {
         <div className="relative z-10 mx-auto w-full max-w-md">
           <div className="overflow-hidden rounded-3xl border border-[#D8D6CE] bg-[#F6F6F2] p-7 shadow-2xl sm:p-10">
             <div className="cmyk-bar -mt-8 -mx-8 sm:-mx-10 mb-8" />
-            
-            <div className="mx-auto mb-6 flex h-12 w-12 items-center justify-center rounded-2xl border border-[#00FFFF]/40 bg-[#00FFFF]/15 text-[#00A5A5]">
-              <Mail size={24} />
+
+            <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#00FFFF]/40 bg-[#00FFFF]/15 text-[#00A5A5]">
+              <ShieldCheck size={28} />
             </div>
 
-            <div className="text-center mb-6">
-              <h2 className="text-xl font-bold text-slate-900">Verify your email</h2>
-              <p className="mt-1 text-xs text-slate-500">
-                A 6-digit verification code was sent to:{" "}
-                <strong className="text-slate-900">{formData.email}</strong>
+            <div className="text-center">
+              <h2 className="text-2xl font-black uppercase tracking-tight text-slate-900">Check your inbox</h2>
+              <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                We sent a verification link to <strong className="text-slate-900">{verificationState.email}</strong>.
+                Verify your email before logging in.
               </p>
             </div>
 
-            <form onSubmit={handleVerifyOtp} className="space-y-5">
-              <div>
-                <input 
-                  type="text" 
-                  required 
-                  maxLength={6} 
-                  value={otpCode} 
-                  onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                  className="w-full rounded-2xl border border-[#D8D6CE] bg-white px-4 py-3.5 text-center text-3xl font-black tracking-[0.4em] outline-none transition-all focus:border-[#EC008C] focus:ring-2 focus:ring-[#EC008C]/20"
-                  placeholder="000000" 
-                />
+            <div className="mt-6 rounded-2xl border border-[#D8D6CE] bg-white p-4 text-xs leading-relaxed text-slate-600">
+              <p className="font-bold text-slate-900">Your {verificationState.role === "BUSINESS_OWNER" ? "owner" : "customer"} account is ready.</p>
+              <p className="mt-1">Open the link in the email. If it is missing, check spam or request a new one below.</p>
+            </div>
+
+            {resendMessage && (
+              <div className={`mt-4 rounded-xl border p-3.5 text-xs font-medium ${resendMessage.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-rose-200 bg-rose-50 text-rose-700"}`} role={resendMessage.type === "error" ? "alert" : "status"}>
+                {resendMessage.text}
               </div>
+            )}
 
-              {otpError && (
-                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2">
-                  <AlertCircle size={16} /> {otpError}
-                </div>
-              )}
+            <button
+              type="button"
+              onClick={() => handleResendVerification(verificationState.email)}
+              disabled={resendLoading || resendCooldown > 0}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-full border border-[#1A1A1A] bg-white py-3.5 text-xs font-black uppercase tracking-wider text-[#1A1A1A] transition-colors hover:border-[#EC008C] hover:text-[#EC008C] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {resendLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : resendCooldown > 0 ? `Resend available in ${resendCooldown}s` : "Resend verification email"}
+            </button>
 
-              <button 
-                type="submit" 
-                disabled={otpLoading || otpCode.length !== 6}
-                className="flex w-full items-center justify-center gap-2 rounded-full bg-[#00FFFF] py-3.5 text-xs font-black uppercase tracking-wider text-[#1A1A1A] shadow-md transition-all hover:bg-[#FFF200] disabled:opacity-50"
-              >
-                {otpLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
-                  <>Verify Code <ArrowRight size={16} /></>
-                )}
+            <div className="mt-5 flex items-center justify-between gap-4 text-xs">
+              <button type="button" onClick={() => { setVerificationState(null); setResendMessage(null); }} className="font-semibold text-slate-500 underline hover:text-slate-900">
+                Use a different email
               </button>
-              
-              <div className="text-center pt-2">
-                <button 
-                  type="button" 
-                  onClick={() => setShowOtp(false)} 
-                  className="text-xs text-slate-500 hover:text-slate-900 font-medium"
-                >
-                  Incorrect email? Go back
-                </button>
-              </div>
-            </form>
+              <Link href="/login" className="font-black text-[#EC008C] hover:underline">Go to Login</Link>
+            </div>
           </div>
         </div>
       </main>
@@ -400,6 +405,7 @@ export default function SignUpPage() {
                     name="firstName" 
                     type="text" 
                     required 
+                    autoComplete="given-name"
                     value={formData.firstName} 
                     onChange={handleChange}
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all" 
@@ -412,6 +418,7 @@ export default function SignUpPage() {
                     name="lastName" 
                     type="text" 
                     required 
+                    autoComplete="family-name"
                     value={formData.lastName} 
                     onChange={handleChange}
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all" 
@@ -441,7 +448,7 @@ export default function SignUpPage() {
                     value={formData.phone}
                     onBlur={() => setPhoneTouched(true)}
                     onChange={handleChange}
-                    placeholder="9459759016"
+                    placeholder="9123456789"
                     aria-label="Mobile number without country code"
                     aria-invalid={phoneTouched && !normalizePhilippinePhone(formData.phone)}
                     aria-describedby="signup-phone-help signup-phone-error"
@@ -456,7 +463,7 @@ export default function SignUpPage() {
                       ? "Enter your 10-digit mobile number."
                       : formData.phone.startsWith("9")
                         ? "Enter all 10 digits of your mobile number."
-                        : "Your number must start with 9. Example: 9459759016."}
+                        : "Your number must start with 9. Example: 9123456789."}
                   </p>
                 )}
               </div>
@@ -468,6 +475,7 @@ export default function SignUpPage() {
                     name="email" 
                     type="email" 
                     required 
+                    autoComplete="email"
                     value={formData.email} 
                     onChange={handleChange}
                     className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm outline-none transition-all focus:border-slate-400 focus:ring-2 focus:ring-[#00FFFF]"
@@ -485,6 +493,7 @@ export default function SignUpPage() {
                       name="password" 
                       type={showPassword ? "text" : "password"} 
                       required 
+                      autoComplete="new-password"
                       value={formData.password} 
                       onChange={handleChange}
                       className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#EC008C] focus:border-slate-400 transition-all pr-9" 
@@ -493,6 +502,8 @@ export default function SignUpPage() {
                     <button 
                       type="button" 
                       onClick={() => setShowPassword(!showPassword)} 
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      aria-pressed={showPassword}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                     >
                       {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -507,6 +518,7 @@ export default function SignUpPage() {
                       name="confirmPassword" 
                       type={showConfirmPassword ? "text" : "password"} 
                       required 
+                      autoComplete="new-password"
                       value={formData.confirmPassword} 
                       onChange={handleChange}
                       className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#00FFFF] focus:border-slate-400 transition-all pr-9" 
@@ -515,6 +527,8 @@ export default function SignUpPage() {
                     <button 
                       type="button" 
                       onClick={() => setShowConfirmPassword(!showConfirmPassword)} 
+                      aria-label={showConfirmPassword ? "Hide password confirmation" : "Show password confirmation"}
+                      aria-pressed={showConfirmPassword}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                     >
                       {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -533,8 +547,34 @@ export default function SignUpPage() {
                 </>
               )}
 
-              {error && (
-                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2">
+              {existingAccount && (
+                <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900" role="alert" aria-live="assertive">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+                    <p className="font-medium">
+                      {existingAccount.unverified
+                        ? "This email is already registered but not verified. Check your inbox or resend the verification email."
+                        : "An account with this email already exists. Please log in instead or reset your password."}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-4 pl-6 font-bold">
+                    <Link href="/login" className="text-[#C40075] underline hover:text-[#EC008C]">Go to Login</Link>
+                    {existingAccount.unverified && (
+                      <button
+                        type="button"
+                        onClick={() => handleResendVerification(existingAccount.email)}
+                        disabled={resendLoading || resendCooldown > 0}
+                        className="text-left text-[#008F8F] underline hover:text-[#00A5A5] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {resendLoading ? "Sending…" : resendCooldown > 0 ? `Resend available in ${resendCooldown}s` : "Resend verification email"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {error && !existingAccount && (
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2" role="alert" aria-live="assertive">
                   <AlertCircle size={16} /> {error}
                 </div>
               )}

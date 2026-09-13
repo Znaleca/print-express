@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, MessageSquare } from "lucide-react";
+import { ChevronRight, MessageSquare, Video } from "lucide-react";
 import ProfileAvatar from "@/components/ProfileAvatar";
 
 export default function OwnerConversationList({
@@ -8,6 +8,7 @@ export default function OwnerConversationList({
   loading,
   activeConversation,
   unreadByConversation,
+  meetingRequestIds = new Set(),
   getConversationLabel,
   onSelect,
 }) {
@@ -47,6 +48,7 @@ export default function OwnerConversationList({
             const isActive = activeConversation?.id === conversation.id;
             const unread = unreadByConversation[conversation.id] || 0;
             const label = getConversationLabel(conversation);
+            const hasMeetingRequest = meetingRequestIds.has(conversation.id);
 
             return (
               <button
@@ -73,6 +75,11 @@ export default function OwnerConversationList({
                   <span className="mt-1 block text-[10px] text-slate-400">
                     {new Date(conversation.updated_at).toLocaleDateString()}
                   </span>
+                  {hasMeetingRequest && (
+                    <span className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#FFF0F8] px-2 py-1 text-[10px] font-black text-[#C40075]">
+                      <Video size={12} /> Online meeting requested
+                    </span>
+                  )}
                 </span>
                 {unread > 0 && (
                   <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[#EC008C] px-1.5 text-[10px] font-bold text-white">

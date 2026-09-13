@@ -6,8 +6,11 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
 import { normalizePhilippinePhone, toPhilippinePhoneInput } from "@/lib/phone";
+import { normalizeCoordinates } from "@/lib/coordinates";
+import { calculateDeliveryFeeFromDistance, DEFAULT_DELIVERY_SETTINGS, DELIVERY_ROUNDING_RULES, formatDeliveryDistance, normalizeDeliverySettings, validateDeliverySettings } from "@/lib/delivery";
+import { formatPesoAmount } from "@/lib/paymentSummary";
 import {
-  Store, Save, Loader2, UploadCloud, QrCode, Power, MapPin, MapPinned,
+  Store, Save, Loader2, UploadCloud, QrCode, Power, MapPin, MapPinned, Truck,
   CheckCircle2, ShieldCheck, Phone, Mail, Globe2, ExternalLink, Info, Clock, RotateCcw
 } from "lucide-react";
 
@@ -24,6 +27,12 @@ export default function ShopProfilePage() {
     phone: "", email: "", website: "", logo_url: "", qr_url: "",
     lat: null, lng: null,
     min_downpayment_percent: 30,
+    delivery_enabled: DEFAULT_DELIVERY_SETTINGS.delivery_enabled,
+    delivery_base_fee: String(DEFAULT_DELIVERY_SETTINGS.delivery_base_fee),
+    delivery_included_distance_km: String(DEFAULT_DELIVERY_SETTINGS.delivery_included_distance_km),
+    delivery_fee_per_extra_km: String(DEFAULT_DELIVERY_SETTINGS.delivery_fee_per_extra_km),
+    delivery_max_distance_km: "",
+    delivery_distance_rounding: DEFAULT_DELIVERY_SETTINGS.delivery_distance_rounding,
   });
   const [initialForm, setInitialForm] = useState(null);
   const [businessId, setBusinessId] = useState(null);
@@ -40,6 +49,9 @@ export default function ShopProfilePage() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
   const [phoneTouched, setPhoneTouched] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [profileValidationError, setProfileValidationError] = useState("");
+  const [deliveryValidationErrors, setDeliveryValidationErrors] = useState({});
 
   // Logo upload state
   const [logoPreview, setLogoPreview] = useState(null);
@@ -58,18 +70,25 @@ export default function ShopProfilePage() {
   useEffect(() => {
     const load = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) {
+        setLoadError("Sign in to access your shop profile.");
+        setLoading(false);
+        return;
+      }
 
-      const { data: biz } = await supabase
+      const { data: biz, error: businessError } = await supabase
         .from("businesses")
-        .select("id, name, description, products_summary, address, phone, email, website, logo_url, qr_url, lat, lng, min_downpayment_percent, is_open, timezone, manual_open_override")
+        .select("id, name, description, products_summary, address, phone, email, website, logo_url, qr_url, lat, lng, min_downpayment_percent, delivery_enabled, delivery_base_fee, delivery_included_distance_km, delivery_fee_per_extra_km, delivery_max_distance_km, delivery_distance_rounding, is_open, timezone, manual_open_override")
         .eq("owner_id", user.id)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
 
-      if (biz) {
+      if (businessError) {
+        setLoadError(businessError.message || "Could not load your shop profile.");
+      } else if (biz) {
         setBusinessId(biz.id);
+        const coordinates = normalizeCoordinates(biz.lat, biz.lng);
         const loadedForm = {
           name: biz.name || "",
           description: biz.description || "",
@@ -80,9 +99,15 @@ export default function ShopProfilePage() {
           website: biz.website || "",
           logo_url: biz.logo_url || "",
           qr_url: biz.qr_url || "",
-          lat: biz.lat || null,
-          lng: biz.lng || null,
+          lat: coordinates?.lat ?? null,
+          lng: coordinates?.lng ?? null,
           min_downpayment_percent: Math.min(100, Math.max(1, Number.parseInt(String(biz.min_downpayment_percent ?? 30), 10) || 30)),
+          delivery_enabled: biz.delivery_enabled !== false,
+          delivery_base_fee: String(biz.delivery_base_fee ?? DEFAULT_DELIVERY_SETTINGS.delivery_base_fee),
+          delivery_included_distance_km: String(biz.delivery_included_distance_km ?? DEFAULT_DELIVERY_SETTINGS.delivery_included_distance_km),
+          delivery_fee_per_extra_km: String(biz.delivery_fee_per_extra_km ?? DEFAULT_DELIVERY_SETTINGS.delivery_fee_per_extra_km),
+          delivery_max_distance_km: biz.delivery_max_distance_km == null ? "" : String(biz.delivery_max_distance_km),
+          delivery_distance_rounding: biz.delivery_distance_rounding || DEFAULT_DELIVERY_SETTINGS.delivery_distance_rounding,
         };
         setForm(loadedForm);
         setInitialForm(loadedForm);
@@ -215,9 +240,12 @@ export default function ShopProfilePage() {
     const { name, value } = e.target;
     setForm((p) => ({
       ...p,
-      [name]: name === "phone" ? value.replace(/\D/g, "").slice(0, 10) : value,
+      [name]: name === "phone" ? toPhilippinePhoneInput(value) : value,
     }));
     if (name === "phone") setPhoneTouched(true);
+    if (name.startsWith("delivery_")) {
+      setDeliveryValidationErrors((current) => ({ ...current, [name]: "" }));
+    }
   };
 
   const hasUnsavedChanges = Boolean(initialForm) && (
@@ -282,12 +310,41 @@ export default function ShopProfilePage() {
     e.preventDefault();
     if (!businessId) return;
     setSaving(true);
+    setProfileValidationError("");
+    setDeliveryValidationErrors({});
 
     try {
       const normalizedPhone = form.phone ? normalizePhilippinePhone(form.phone) : "";
-      if (form.phone && !normalizedPhone) {
+      const trimmedName = form.name.trim();
+      const trimmedAddress = form.address.trim();
+      let validationMessage = "";
+      if (trimmedName.length < 2) {
+        validationMessage = "Add a business name with at least 2 characters.";
+      } else if (!form.phone || !normalizedPhone) {
         setPhoneTouched(true);
-        showToast("Enter the 10 digits after +63. Example: 9459759016.", "error");
+        validationMessage = "Enter the 10 digits after +63. Example: 9123456789.";
+      } else if (trimmedAddress.length < 5) {
+        validationMessage = "Add the shop address customers should use for pickup or delivery.";
+      } else if (!normalizeCoordinates(form.lat, form.lng)) {
+        validationMessage = "Place the map pin at your shop entrance before saving.";
+      } else if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+        validationMessage = "Enter a valid business email or leave the field blank.";
+      } else if (form.website) {
+        try {
+          const website = new URL(form.website.trim());
+          if (!['http:', 'https:'].includes(website.protocol)) throw new Error();
+        } catch {
+          validationMessage = "Website URL must start with https:// (or leave it blank).";
+        }
+      }
+      const deliveryValidation = validateDeliverySettings(form);
+      if (!deliveryValidation.valid) {
+        setDeliveryValidationErrors(deliveryValidation.errors);
+        validationMessage = validationMessage || "Fix the delivery pricing fields before saving.";
+      }
+      if (validationMessage) {
+        setProfileValidationError(validationMessage);
+        showToast(validationMessage, "error");
         setSaving(false);
         return;
       }
@@ -309,20 +366,21 @@ export default function ShopProfilePage() {
 
       const parsedDp = Number.parseInt(String(form.min_downpayment_percent), 10);
       const minDp = Number.isFinite(parsedDp) ? Math.min(100, Math.max(1, parsedDp)) : 30;
+      const deliveryValues = deliveryValidation.values;
 
+      const coordinates = normalizeCoordinates(form.lat, form.lng);
       const payload = {
-        name: form.name,
-        description: form.description,
-        products_summary: form.products_summary,
-        address: form.address,
+        name: trimmedName,
+        address: trimmedAddress,
         phone: normalizedPhone,
-        email: form.email,
-        website: form.website,
+        email: form.email.trim(),
+        website: form.website.trim(),
         logo_url: finalLogoUrl,
         qr_url: finalQrUrl,
-        lat: form.lat,
-        lng: form.lng,
+        lat: coordinates.lat,
+        lng: coordinates.lng,
         min_downpayment_percent: minDp,
+        ...deliveryValues,
       };
 
       const { error: err } = await supabase
@@ -334,10 +392,20 @@ export default function ShopProfilePage() {
 
       const savedForm = {
         ...form,
-        phone: normalizedPhone,
+        name: trimmedName,
+        address: trimmedAddress,
+        email: form.email.trim(),
+        website: form.website.trim(),
+        phone: toPhilippinePhoneInput(normalizedPhone),
         logo_url: finalLogoUrl,
         qr_url: finalQrUrl,
         min_downpayment_percent: minDp,
+        delivery_enabled: deliveryValues.delivery_enabled,
+        delivery_base_fee: String(deliveryValues.delivery_base_fee),
+        delivery_included_distance_km: String(deliveryValues.delivery_included_distance_km),
+        delivery_fee_per_extra_km: String(deliveryValues.delivery_fee_per_extra_km),
+        delivery_max_distance_km: deliveryValues.delivery_max_distance_km == null ? "" : String(deliveryValues.delivery_max_distance_km),
+        delivery_distance_rounding: deliveryValues.delivery_distance_rounding,
       };
       setForm(savedForm);
       setInitialForm(savedForm);
@@ -356,11 +424,30 @@ export default function ShopProfilePage() {
     }
   };
 
-  const phoneError = phoneTouched && form.phone && !normalizePhilippinePhone(form.phone)
-    ? form.phone.startsWith("9")
-      ? "Enter all 10 digits of the shop mobile number."
-      : "Your number must start with 9. Example: 9459759016."
+  const phoneError = phoneTouched && (!form.phone || !normalizePhilippinePhone(form.phone))
+    ? !form.phone
+      ? "A shop contact number is required."
+      : form.phone.startsWith("9")
+        ? "Enter all 10 digits of the shop mobile number."
+        : "Your number must start with 9. Example: 9123456789."
     : "";
+  const hasMapCoordinates = Boolean(normalizeCoordinates(form.lat, form.lng));
+  const deliveryPreviewSettings = normalizeDeliverySettings(form);
+  const deliveryStandardPreview = calculateDeliveryFeeFromDistance(
+    Math.min(2.5, deliveryPreviewSettings.delivery_included_distance_km),
+    deliveryPreviewSettings
+  );
+  const deliveryExtraPreview = calculateDeliveryFeeFromDistance(
+    deliveryPreviewSettings.delivery_included_distance_km + 2.2,
+    deliveryPreviewSettings
+  );
+  const deliveryDescription = `Delivery costs ${formatPesoAmount(deliveryPreviewSettings.delivery_base_fee)} within ${deliveryPreviewSettings.delivery_included_distance_km} km. Each additional kilometer adds ${formatPesoAmount(deliveryPreviewSettings.delivery_fee_per_extra_km)}.`;
+  const missingRequiredFields = [
+    !form.name.trim() && "business name",
+    !form.phone && "phone number",
+    !form.address.trim() && "address",
+    !hasMapCoordinates && "map pin",
+  ].filter(Boolean);
 
   if (loading) {
     return (
@@ -368,6 +455,19 @@ export default function ShopProfilePage() {
         <div className="flex flex-col items-center gap-3">
           <Loader2 size={36} className="animate-spin text-[#EC008C]" />
           <p className="text-xs font-semibold uppercase tracking-wider">Loading shop settings...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!initialForm) {
+    return (
+      <main className="owner-shop-page flex min-h-screen items-center justify-center bg-[#F6F6F2] p-6 font-sans text-slate-900">
+        <div className="w-full max-w-lg rounded-3xl border border-[#D8D6CE] bg-white p-7 text-center shadow-sm sm:p-10">
+          <Store size={34} className="mx-auto text-[#EC008C]" />
+          <h1 className="mt-4 text-2xl font-black">Shop profile unavailable</h1>
+          <p className="mt-2 text-sm leading-relaxed text-slate-500">{loadError || "We could not find a shop profile for this owner account yet."}</p>
+          <button type="button" onClick={() => window.location.reload()} className="mt-6 rounded-xl bg-slate-900 px-5 py-3 text-xs font-black text-white hover:bg-[#EC008C]">Reload profile</button>
         </div>
       </main>
     );
@@ -419,6 +519,17 @@ export default function ShopProfilePage() {
           <CheckCircle2 size={16} /> {toast.msg}
         </div>
       )}
+
+      <section className="mx-auto max-w-7xl px-4 pt-5 sm:px-8 lg:px-10" aria-live="polite">
+        <div className={`flex flex-col gap-2 rounded-2xl border px-4 py-3 text-xs sm:flex-row sm:items-center sm:justify-between ${missingRequiredFields.length === 0 ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+          <div>
+            <p className="font-black uppercase tracking-[0.12em]">Profile readiness</p>
+            <p className="mt-1 leading-relaxed">{missingRequiredFields.length === 0 ? "Required customer-facing details are complete." : `Still needed: ${missingRequiredFields.join(", ")}.`}</p>
+          </div>
+          <span className="font-mono text-[10px] font-black uppercase tracking-widest">{missingRequiredFields.length === 0 ? "Ready to save" : `${missingRequiredFields.length} required`}</span>
+        </div>
+        {profileValidationError && <p role="alert" className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">{profileValidationError}</p>}
+      </section>
 
       <section className="mx-auto max-w-7xl px-4 pt-6 sm:px-8 sm:pt-8 lg:px-10">
         <form onSubmit={handleSubmit}>
@@ -547,7 +658,7 @@ export default function ShopProfilePage() {
                   </div>
 
                   <div>
-                    <label htmlFor="shop-name" className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Business name</label>
+                    <label htmlFor="shop-name" className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Business name <span className="text-[#EC008C]">*</span></label>
                     <input
                       id="shop-name"
                       type="text"
@@ -555,6 +666,8 @@ export default function ShopProfilePage() {
                       value={form.name}
                       onChange={handleChange}
                       placeholder="e.g. Apex Print Studio"
+                      required
+                      aria-required="true"
                       className="mt-2 w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3.5 text-sm font-semibold outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40"
                     />
                     <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-slate-400">
@@ -603,7 +716,7 @@ export default function ShopProfilePage() {
                 </div>
                 <div className="mt-5 grid gap-4 md:grid-cols-2">
                   <label className="block">
-                    <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Phone number</span>
+                    <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Phone number <span className="text-[#EC008C]">*</span></span>
                     <span className={`mt-2 flex overflow-hidden rounded-2xl border bg-[#F6F6F2] transition-colors focus-within:ring-2 ${
                       phoneError
                         ? "border-rose-500 focus-within:border-rose-500 focus-within:ring-rose-200"
@@ -623,14 +736,15 @@ export default function ShopProfilePage() {
                         value={form.phone}
                         onBlur={() => setPhoneTouched(true)}
                         onChange={handleChange}
-                        placeholder="9459759016"
+                        placeholder="9123456789"
                         aria-label="Shop mobile number without country code"
                         aria-invalid={Boolean(phoneError)}
+                        aria-required="true"
                         aria-describedby="shop-phone-help shop-phone-error"
                         className="min-w-0 flex-1 bg-transparent px-4 py-3.5 text-sm outline-none"
                       />
                     </span>
-                    <span id="shop-phone-help" className="mt-1 block text-[11px] text-slate-500">Optional · enter 10 digits after +63. We save the complete number for customers.</span>
+                    <span id="shop-phone-help" className="mt-1 block text-[11px] text-slate-500">Required · enter 10 digits after +63. We save the complete number for customers.</span>
                     {phoneError && (
                       <span id="shop-phone-error" role="alert" className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-rose-700">
                         <Info size={14} aria-hidden="true" />
@@ -662,13 +776,13 @@ export default function ShopProfilePage() {
                     <h2 className="mt-1 text-xl font-black text-slate-900">Help customers find you</h2>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">Add a clear address and place the marker at your shop entrance.</p>
                   </div>
-                  <span className={`inline-flex items-center gap-1.5 self-start rounded-full px-3 py-1.5 text-[10px] font-bold ${form.lat && form.lng ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-                    <MapPin size={12} /> {form.lat && form.lng ? "Map pin ready" : "Map pin needed"}
+                  <span className={`inline-flex items-center gap-1.5 self-start rounded-full px-3 py-1.5 text-[10px] font-bold ${hasMapCoordinates ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                    <MapPin size={12} /> {hasMapCoordinates ? "Map pin ready" : "Map pin needed"}
                   </span>
                 </div>
                 <label className="mt-5 block">
-                  <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Address</span>
-                  <input type="text" name="address" value={form.address} onChange={handleChange} placeholder="e.g. 123 Main St, City" className="mt-2 w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3.5 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
+                  <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Address <span className="text-[#EC008C]">*</span></span>
+                  <input type="text" name="address" value={form.address} onChange={handleChange} placeholder="e.g. 123 Main St, City" required aria-required="true" className="mt-2 w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3.5 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
                 </label>
                 <div className="mt-5 overflow-hidden rounded-2xl border border-[#D8D6CE] bg-[#ECECE8]">
                   <div className="flex items-center gap-2 border-b border-[#D8D6CE] bg-white px-4 py-3 text-xs font-bold text-slate-700">
@@ -679,8 +793,25 @@ export default function ShopProfilePage() {
                       lat={form.lat}
                       lng={form.lng}
                       onChange={(lat, lng) => setForm((p) => ({ ...p, lat, lng }))}
+                      includedRadiusKm={form.delivery_enabled ? deliveryPreviewSettings.delivery_included_distance_km : null}
+                      maxRadiusKm={form.delivery_enabled ? deliveryPreviewSettings.delivery_max_distance_km : null}
                     />
                   </div>
+                  {form.delivery_enabled && (
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-[#D8D6CE] bg-white px-4 py-3 text-[10px] font-semibold text-slate-600">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-2.5 w-2.5 rounded-full border-2 border-[#00AFC0] bg-[#00FFFF]/20" aria-hidden="true" />
+                        Included delivery: {deliveryPreviewSettings.delivery_included_distance_km} km
+                      </span>
+                      {deliveryPreviewSettings.delivery_max_distance_km != null && (
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="h-0 w-5 border-t-2 border-dashed border-[#EC008C]" aria-hidden="true" />
+                          Maximum delivery: {deliveryPreviewSettings.delivery_max_distance_km} km
+                        </span>
+                      )}
+                      <span className="text-slate-400">Delivery area updates as you edit the pricing settings.</span>
+                    </div>
+                  )}
                 </div>
               </section>
             </div>
@@ -711,6 +842,16 @@ export default function ShopProfilePage() {
                   <div className="mt-4 space-y-2 border-t border-slate-200 pt-4 text-[11px] text-slate-600">
                     <p className="flex items-start gap-2"><MapPin size={13} className="mt-0.5 shrink-0 text-[#EC008C]" /> <span>{form.address || "Add your shop address"}</span></p>
                     <p className="flex items-center gap-2"><Phone size={13} className="shrink-0 text-[#EC008C]" /> <span>{normalizePhilippinePhone(form.phone) || "Add a contact number"}</span></p>
+                    <p className="flex items-center gap-2">
+                      <Truck size={13} className="shrink-0 text-[#EC008C]" />
+                      <span>
+                        {!form.delivery_enabled
+                          ? "Store pickup only"
+                          : !hasMapCoordinates
+                            ? "Delivery setup needs a map pin"
+                            : `Delivery available · ${formatPesoAmount(deliveryPreviewSettings.delivery_base_fee)} within ${deliveryPreviewSettings.delivery_included_distance_km} km`}
+                      </span>
+                    </p>
                   </div>
                 </div>
                 <Link href="/browse" className="mt-4 inline-flex items-center gap-2 text-xs font-black text-[#C40075] hover:underline">
@@ -750,6 +891,101 @@ export default function ShopProfilePage() {
                 <div className="mt-4 flex items-center gap-2">
                   <input type="number" min="1" max="100" name="min_downpayment_percent" value={form.min_downpayment_percent} onChange={handleChange} className="w-24 rounded-xl border border-slate-200 bg-[#F6F6F2] px-3 py-3 text-sm font-black outline-none focus:border-[#EC008C] focus:bg-white focus:ring-2 focus:ring-[#EC008C]/20" />
                   <span className="text-sm font-black text-slate-500">%</span>
+                </div>
+              </section>
+
+              <section className="rounded-3xl border border-[#D8D6CE] bg-white p-5 shadow-sm" aria-labelledby="delivery-pricing-title">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">Delivery settings</p>
+                    <h2 id="delivery-pricing-title" className="mt-1 text-lg font-black text-slate-900">Delivery pricing</h2>
+                  </div>
+                  <Truck size={20} className="text-[#00AFC0]" />
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-slate-500">Set a fair local delivery price. Customers see the fee before they place an order.</p>
+
+                <label className="mt-4 flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-slate-200 bg-[#F6F6F2] p-3">
+                  <span>
+                    <span className="block text-xs font-black text-slate-800">Offer local delivery</span>
+                    <span className="mt-0.5 block text-[10px] text-slate-500">Turn this off to keep Store Pickup available only.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    name="delivery_enabled"
+                    checked={form.delivery_enabled}
+                    onChange={(event) => setForm((current) => ({ ...current, delivery_enabled: event.target.checked }))}
+                    className="h-5 w-5 shrink-0 accent-[#EC008C]"
+                  />
+                </label>
+
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="block">
+                    <span className="text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">Base delivery fee</span>
+                    <div className="mt-1 flex items-center overflow-hidden rounded-xl border border-slate-200 bg-[#F6F6F2] focus-within:border-[#00AFC0] focus-within:ring-2 focus-within:ring-[#00FFFF]/30">
+                      <span className="px-3 text-xs font-black text-slate-500">₱</span>
+                      <input type="number" min="0" step="0.01" name="delivery_base_fee" value={form.delivery_base_fee} onChange={handleChange} aria-invalid={Boolean(deliveryValidationErrors.delivery_base_fee)} aria-describedby="delivery-base-fee-error" className="min-w-0 flex-1 bg-transparent px-2 py-3 text-sm font-black outline-none" />
+                    </div>
+                    {deliveryValidationErrors.delivery_base_fee && <span id="delivery-base-fee-error" role="alert" className="mt-1 block text-[10px] font-semibold text-rose-700">{deliveryValidationErrors.delivery_base_fee}</span>}
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">Included distance</span>
+                    <div className="mt-1 flex items-center overflow-hidden rounded-xl border border-slate-200 bg-[#F6F6F2] focus-within:border-[#00AFC0] focus-within:ring-2 focus-within:ring-[#00FFFF]/30">
+                      <input type="number" min="0.01" step="0.1" name="delivery_included_distance_km" value={form.delivery_included_distance_km} onChange={handleChange} aria-invalid={Boolean(deliveryValidationErrors.delivery_included_distance_km)} aria-describedby="delivery-included-distance-error" className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm font-black outline-none" />
+                      <span className="px-3 text-xs font-black text-slate-500">km</span>
+                    </div>
+                    {deliveryValidationErrors.delivery_included_distance_km && <span id="delivery-included-distance-error" role="alert" className="mt-1 block text-[10px] font-semibold text-rose-700">{deliveryValidationErrors.delivery_included_distance_km}</span>}
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">Fee per extra km</span>
+                    <div className="mt-1 flex items-center overflow-hidden rounded-xl border border-slate-200 bg-[#F6F6F2] focus-within:border-[#00AFC0] focus-within:ring-2 focus-within:ring-[#00FFFF]/30">
+                      <span className="px-3 text-xs font-black text-slate-500">₱</span>
+                      <input type="number" min="0" step="0.01" name="delivery_fee_per_extra_km" value={form.delivery_fee_per_extra_km} onChange={handleChange} aria-invalid={Boolean(deliveryValidationErrors.delivery_fee_per_extra_km)} aria-describedby="delivery-extra-fee-error" className="min-w-0 flex-1 bg-transparent px-2 py-3 text-sm font-black outline-none" />
+                    </div>
+                    {deliveryValidationErrors.delivery_fee_per_extra_km && <span id="delivery-extra-fee-error" role="alert" className="mt-1 block text-[10px] font-semibold text-rose-700">{deliveryValidationErrors.delivery_fee_per_extra_km}</span>}
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">Maximum distance <span className="font-medium normal-case tracking-normal text-slate-400">(optional)</span></span>
+                    <div className="mt-1 flex items-center overflow-hidden rounded-xl border border-slate-200 bg-[#F6F6F2] focus-within:border-[#00AFC0] focus-within:ring-2 focus-within:ring-[#00FFFF]/30">
+                      <input type="number" min="0.01" step="0.1" name="delivery_max_distance_km" value={form.delivery_max_distance_km} onChange={handleChange} placeholder="No limit" aria-invalid={Boolean(deliveryValidationErrors.delivery_max_distance_km)} aria-describedby="delivery-max-distance-error" className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm font-black outline-none" />
+                      <span className="px-3 text-xs font-black text-slate-500">km</span>
+                    </div>
+                    {deliveryValidationErrors.delivery_max_distance_km && <span id="delivery-max-distance-error" role="alert" className="mt-1 block text-[10px] font-semibold text-rose-700">{deliveryValidationErrors.delivery_max_distance_km}</span>}
+                  </label>
+                </div>
+
+                <label className="mt-3 block">
+                  <span className="text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">Distance rounding</span>
+                  <select name="delivery_distance_rounding" value={form.delivery_distance_rounding} onChange={handleChange} aria-invalid={Boolean(deliveryValidationErrors.delivery_distance_rounding)} aria-describedby="delivery-rounding-error" className="mt-1 w-full rounded-xl border border-slate-200 bg-[#F6F6F2] px-3 py-3 text-xs font-bold outline-none focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/30">
+                    {DELIVERY_ROUNDING_RULES.map((rule) => <option key={rule.value} value={rule.value}>{rule.label}</option>)}
+                  </select>
+                  {deliveryValidationErrors.delivery_distance_rounding && <span id="delivery-rounding-error" role="alert" className="mt-1 block text-[10px] font-semibold text-rose-700">{deliveryValidationErrors.delivery_distance_rounding}</span>}
+                </label>
+
+                <p className="mt-4 rounded-xl border border-[#00AFC0]/25 bg-[#EFFFFF] p-3 text-[11px] font-semibold leading-relaxed text-slate-700">{deliveryDescription}</p>
+
+                <div className="mt-4 rounded-2xl border border-[#00AFC0]/25 bg-[#EFFFFF] p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-black text-slate-900">Delivery area uses the shop map</p>
+                      <p className="mt-0.5 text-[10px] text-slate-600">The map above shows the delivery radius, so you only need to place one shop pin.</p>
+                    </div>
+                    <MapPin size={16} className="text-[#EC008C]" />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-[10px] font-semibold text-slate-700">
+                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border-2 border-[#00AFC0] bg-[#00FFFF]/20" aria-hidden="true" /> {deliveryPreviewSettings.delivery_included_distance_km} km included</span>
+                    {deliveryPreviewSettings.delivery_max_distance_km != null && <span className="inline-flex items-center gap-1.5"><span className="h-0 w-5 border-t-2 border-dashed border-[#EC008C]" aria-hidden="true" /> {deliveryPreviewSettings.delivery_max_distance_km} km maximum</span>}
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="font-black uppercase tracking-[0.08em] text-slate-500">Within included distance</p>
+                    <p className="mt-1 font-bold text-slate-900">{formatDeliveryDistance(deliveryStandardPreview.distanceKm)} · {formatPesoAmount(deliveryStandardPreview.deliveryFee)}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="font-black uppercase tracking-[0.08em] text-slate-500">At included + 2.2 km</p>
+                    <p className="mt-1 font-bold text-slate-900">{formatDeliveryDistance(deliveryExtraPreview.distanceKm)} · {formatPesoAmount(deliveryExtraPreview.deliveryFee)}</p>
+                  </div>
                 </div>
               </section>
 

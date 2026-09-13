@@ -10,7 +10,7 @@ import {
 } from "@/lib/imageUpload";
 import {
   FileText, CheckCircle, XCircle, Clock, Eye, AlertCircle, Loader2, X, Upload, ShieldCheck, File, Info, Image as ImageIcon,
-  LockKeyhole, Send, MessageSquare
+  LockKeyhole, Send, MessageSquare, Trash2
 } from "lucide-react";
 import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
 const REQUIRED_DOCS = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID"];
@@ -22,6 +22,7 @@ const ACCEPTED_FILE_TYPES = {
   "application/pdf": "PDF",
 };
 const SCAN_QUALITY_LABEL = "300 DPI clear scan or sharp unedited photo";
+const IMAGE_DOCUMENT_PATTERN = /\.(jpeg|jpg|png|webp|gif|svg)$/i;
 const DOC_META = {
   DTI:           { label: "DTI Registration Certificate", desc: "Department of Trade and Industry Business Name Registration" },
   MAYORS_PERMIT: { label: "Mayor's Business Permit",    desc: "Valid Business Permit from the City/Municipal Hall" },
@@ -33,6 +34,7 @@ export default function OwnerDocuments() {
   const [docStatuses, setDocStatuses] = useState([]);
   const [businessName, setBusinessName] = useState("");
   const [businessId, setBusinessId] = useState(null);
+  const [businessStatus, setBusinessStatus] = useState("PENDING");
   const [userId, setUserId] = useState(null);
   const [businessProfile, setBusinessProfile] = useState({ description: "", products_summary: "" });
   const [profileRequests, setProfileRequests] = useState([]);
@@ -44,7 +46,10 @@ export default function OwnerDocuments() {
   const [reuploadFiles, setReuploadFiles] = useState({});
   const [reuploadPreviews, setReuploadPreviews] = useState({});
   const [globalLoading, setGlobalLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState({});
+  const [previewDocIsImage, setPreviewDocIsImage] = useState(false);
   const [reuploadError, setReuploadError] = useState(null);
+  const [loadError, setLoadError] = useState("");
   const getDocType = (doc) => doc?.doc_type || doc?.document_type;
   const getFileName = (doc) => {
     if (doc?.file_name) return doc.file_name;
@@ -69,49 +74,121 @@ export default function OwnerDocuments() {
     return null;
   };
   const loadDocs = useCallback(async (bizId) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("business_documents")
       .select("*")
       .eq("business_id", bizId);
+    if (error) throw error;
     return data || [];
   }, []);
   const openDocument = async (doc) => {
     const url = await resolveStorageUrl(doc?.file_url);
-    if (url) setPreviewDocUrl(url);
+    if (url) {
+      const fileType = String(doc?.file_type || "").toLowerCase();
+      const urlPath = String(url).split(/[?#]/)[0];
+      setPreviewDocIsImage(fileType.startsWith("image/") || IMAGE_DOCUMENT_PATTERN.test(urlPath));
+      setPreviewDocUrl(url);
+    }
     else setReuploadError("This document is unavailable or you do not have permission to view it.");
+  };
+  const closeDocumentPreview = () => {
+    setPreviewDocUrl(null);
+    setPreviewDocIsImage(false);
   };
   useEffect(() => {
     const fetchDocs = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      setUserId(user.id);
-      const { data: business } = await supabase
-        .from("businesses")
-        .select("id, name, description, products_summary")
-        .eq("owner_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (business) {
-        setBusinessName(business.name);
-        setBusinessId(business.id);
-        setBusinessProfile({
-          description: business.description || "",
-          products_summary: business.products_summary || "",
-        });
-        const docs = await loadDocs(business.id);
-        setDocStatuses(docs);
-        const { data: requests } = await supabase
-          .from("business_profile_change_requests")
-          .select("id, requested_description, requested_products_summary, reason, status, admin_comment, created_at, reviewed_at")
-          .eq("business_id", business.id)
-          .order("created_at", { ascending: false });
-        setProfileRequests(requests || []);
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          setLoadError("Sign in to manage your business documents.");
+          return;
+        }
+        setUserId(user.id);
+        const { data: business, error: businessError } = await supabase
+          .from("businesses")
+          .select("id, name, description, products_summary, status, lifecycle_state")
+          .eq("owner_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (businessError) throw businessError;
+        if (business) {
+          setBusinessName(business.name);
+          setBusinessId(business.id);
+          setBusinessStatus(String(business.status || "PENDING").toUpperCase());
+          setBusinessProfile({
+            description: business.description || "",
+            products_summary: business.products_summary || "",
+          });
+          const docs = await loadDocs(business.id);
+          setDocStatuses(docs);
+          const { data: requests } = await supabase
+            .from("business_profile_change_requests")
+            .select("id, requested_description, requested_products_summary, reason, status, admin_comment, created_at, reviewed_at")
+            .eq("business_id", business.id)
+            .order("created_at", { ascending: false });
+          setProfileRequests(requests || []);
+        } else {
+          setLoadError("No business profile is linked to this owner account yet.");
+        }
+      } catch (error) {
+        setLoadError(error.message || "Could not load your business documents.");
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
     fetchDocs();
   }, [loadDocs]);
+
+  // Reflect Admin document decisions and shop approval in an already-open
+  // documents page without requiring a full browser refresh.
+  useEffect(() => {
+    if (!businessId) return undefined;
+
+    let active = true;
+    const refreshVerification = async () => {
+      try {
+        const [{ data: business }, docs] = await Promise.all([
+          supabase
+            .from("businesses")
+            .select("name, status")
+            .eq("id", businessId)
+            .maybeSingle(),
+          loadDocs(businessId),
+        ]);
+        if (!active) return;
+        if (business) {
+          setBusinessName(business.name || "");
+          setBusinessStatus(String(business.status || "PENDING").toUpperCase());
+        }
+        setDocStatuses(docs);
+      } catch {
+        // Keep the last known document state if a realtime refresh is
+        // temporarily unavailable; the next event or a manual reload retries.
+      }
+    };
+
+    const channel = supabase
+      .channel(`owner_documents_verification:${businessId}`)
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "business_documents",
+        filter: `business_id=eq.${businessId}`,
+      }, () => { void refreshVerification(); })
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "businesses",
+        filter: `id=eq.${businessId}`,
+      }, () => { void refreshVerification(); })
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [businessId, loadDocs]);
 
   const openProfileRequest = () => {
     const pendingRequest = profileRequests.find((request) => request.status === "PENDING");
@@ -168,6 +245,11 @@ export default function OwnerDocuments() {
     setProfileRequestLoading(false);
   };
   const handlePreviewFile = (docType, file) => {
+    const currentDoc = docStatuses.find((document) => getDocType(document) === docType);
+    if (currentDoc?.status === "APPROVED") {
+      setReuploadError(`${DOC_META[docType]?.label || "This document"} is approved and locked. Replacements are only available after an admin requests action.`);
+      return;
+    }
     if (file) {
       const validationError = validateDocumentFile(file);
       if (validationError) {
@@ -187,7 +269,7 @@ export default function OwnerDocuments() {
       if (!file) {
         delete next[docType];
       }
-      if (file.type.startsWith("image/")) {
+      if (file?.type?.startsWith("image/")) {
         next[docType] = URL.createObjectURL(file);
       } else {
         next[docType] = null;
@@ -195,9 +277,58 @@ export default function OwnerDocuments() {
       return next;
     });
   };
+  const clearSelectedFile = (docType) => {
+    setReuploadFiles((prev) => {
+      const next = { ...prev };
+      delete next[docType];
+      return next;
+    });
+    setReuploadPreviews((prev) => {
+      const next = { ...prev };
+      if (next[docType]) URL.revokeObjectURL(next[docType]);
+      delete next[docType];
+      return next;
+    });
+    const input = document.getElementById(`document-upload-${docType}`);
+    if (input) input.value = "";
+    setReuploadError(null);
+  };
+  const handleDeleteDocument = async (docType, doc) => {
+    if (!doc?.id || doc.status === "APPROVED" || deleteLoading[docType]) return;
+    if (!window.confirm(`Remove the uploaded ${DOC_META[docType]?.label || "document"}?`)) return;
+
+    setDeleteLoading((current) => ({ ...current, [docType]: true }));
+    setReuploadError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error("Your owner session has expired. Please sign in again.");
+      const response = await fetch("/api/owner/documents", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ businessId, documentId: doc.id }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Unable to remove this document.");
+      clearSelectedFile(docType);
+      setDocStatuses(await loadDocs(businessId));
+    } catch (error) {
+      setReuploadError(error.message || "Unable to remove this document.");
+    } finally {
+      setDeleteLoading((current) => ({ ...current, [docType]: false }));
+    }
+  };
   const handleUploadDocument = async (docType) => {
     const file = reuploadFiles[docType];
     if (!file || !businessId || !userId) return;
+    const existingDoc = docStatuses.find((document) => getDocType(document) === docType);
+    if (existingDoc?.status === "APPROVED") {
+      setReuploadError(`${DOC_META[docType]?.label || "This document"} is approved and locked. Replacements are only available after an admin requests action.`);
+      return;
+    }
+    if (existingDoc && !["REJECTED", "NEEDS_CHANGES", "ACTION_REQUIRED"].includes(existingDoc.status)) {
+      setReuploadError("This document is already under review. Wait for the admin decision before submitting a replacement.");
+      return;
+    }
     setGlobalLoading(true);
     setReuploadError(null);
     try {
@@ -214,7 +345,6 @@ export default function OwnerDocuments() {
         });
       if (uploadError) throw uploadError;
       const storageRef = toStorageRef(uploadBucket, fileName);
-      const existingDoc = docStatuses.find((d) => getDocType(d) === docType);
       const metadata = {
         file_name: file.name,
         file_size_bytes: uploadFile.size,
@@ -268,23 +398,60 @@ export default function OwnerDocuments() {
   if (loading) {
     return <OwnerPageSkeleton rows={4} />;
   }
+  if (!businessId) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#F6F6F2] p-6 font-sans text-slate-900">
+        <div className="w-full max-w-lg rounded-3xl border border-[#D8D6CE] bg-white p-8 text-center shadow-sm">
+          <FileText size={34} className="mx-auto text-[#EC008C]" />
+          <h1 className="mt-4 text-2xl font-black">Documents unavailable</h1>
+          <p className="mt-2 text-sm leading-relaxed text-slate-500">{loadError || "We could not find a business profile for this account."}</p>
+          <button type="button" onClick={() => window.location.reload()} className="mt-6 rounded-xl bg-slate-900 px-5 py-3 text-xs font-black text-white hover:bg-[#EC008C]">Reload documents</button>
+        </div>
+      </main>
+    );
+  }
   const approvedCount = docStatuses.filter(d => d.status === "APPROVED").length;
+  const uploadedCount = docStatuses.filter((document) => document?.id || document?.file_url).length;
+  const hasActionRequired = docStatuses.some((document) => ["REJECTED", "NEEDS_CHANGES", "ACTION_REQUIRED"].includes(document?.status));
+  const allDocumentsApproved = REQUIRED_DOCS.every((docType) => docStatuses.some(
+    (document) => getDocType(document) === docType && document?.status === "APPROVED",
+  ));
+  const shopApproved = businessStatus === "APPROVED" && allDocumentsApproved;
+  const awaitingAdminApproval = allDocumentsApproved && !shopApproved;
+  const overallStatus = shopApproved
+    ? "Shop approved"
+    : hasActionRequired
+      ? "Action required"
+      : awaitingAdminApproval
+        ? "Documents accepted · shop locked"
+        : approvedCount > 0 || uploadedCount > 0
+          ? "Under review"
+          : "Documents needed";
+  const overallMessage = shopApproved
+    ? "Your shop is approved. Keep these verification documents available for your records."
+    : hasActionRequired
+      ? "Replace each document marked as needing changes. Your shop stays locked until all four documents are approved."
+      : awaitingAdminApproval
+        ? "All four documents are approved. An Admin still needs to approve your shop before owner tools and customer visibility are unlocked."
+        : "Upload the missing documents and wait for Admin review. Your shop remains locked until all four documents are approved and the shop is approved.";
   return (
     <>
       {/* Large Document Preview Modal */}
       {previewDocUrl && (
-        <div className="dialog-overlay" role="dialog" aria-modal="true" onClick={() => setPreviewDocUrl(null)}>
-          <div className="dialog-surface max-w-6xl w-full p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="dialog-overlay" role="dialog" aria-modal="true" onClick={closeDocumentPreview}>
+          <div className="dialog-surface flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden p-4 sm:p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
               <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
                 <Eye size={18} className="text-[#00FFFF]" /> Document High-Resolution Preview
               </h3>
-              <button onClick={() => setPreviewDocUrl(null)} className="p-1 text-slate-400 hover:text-slate-800"><X size={18} /></button>
+              <button type="button" onClick={closeDocumentPreview} aria-label="Close document preview" className="p-1 text-slate-400 hover:text-slate-800"><X size={18} /></button>
             </div>
-            {previewDocUrl.match(/\.(jpeg|jpg|png|webp|gif|svg)$/i) ? (
-              <img src={previewDocUrl} alt="Document preview" className="w-full h-auto rounded-xl max-h-[82vh] object-contain border border-slate-200 bg-slate-50" />
+            {previewDocIsImage ? (
+              <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2">
+                <img src={previewDocUrl} alt="Document preview" className="block max-h-[calc(94vh-8rem)] max-w-full object-contain" />
+              </div>
             ) : (
-              <iframe src={previewDocUrl} title="Doc" className="w-full h-[82vh] rounded-xl border border-slate-200" />
+              <iframe src={previewDocUrl} title="Document preview" className="min-h-0 h-[calc(94vh-8rem)] w-full rounded-xl border border-slate-200" />
             )}
           </div>
         </div>
@@ -363,13 +530,26 @@ export default function OwnerDocuments() {
           <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10" />
           <div className="relative mx-auto flex max-w-6xl flex-col justify-between gap-6 md:flex-row md:items-end">
             <div>
-              <h1 className="text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">Documents</h1>
+              <p className="font-mono text-[10px] font-black uppercase tracking-[0.2em] text-[#00FFFF]">{businessName || "Your shop"}</p>
+              <h1 className="mt-2 text-4xl font-black uppercase leading-[0.92] tracking-tight sm:text-6xl">Documents</h1>
               <p className="mt-4 max-w-2xl text-xs leading-relaxed text-white/65 sm:text-sm">Submit clear legal and tax documents so your shop can be reviewed and verified.</p>
             </div>
             <div data-tour="owner-documents-status" className="flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-3 text-xs font-black text-white ring-1 ring-white/15">
-              <ShieldCheck size={18} className="text-[#00E5FF]" />
-              <span>{approvedCount} of 4 Documents Verified</span>
+              {awaitingAdminApproval ? <LockKeyhole size={18} className="text-[#FFF200]" /> : <ShieldCheck size={18} className="text-[#00E5FF]" />}
+              <span>{approvedCount} of 4 Documents Approved{awaitingAdminApproval ? " · Shop locked" : ""}</span>
             </div>
+          </div>
+        </section>
+        <section className="mx-auto max-w-5xl px-4 pt-5 sm:px-6 lg:px-8" aria-label="Verification status">
+          <div className={`flex flex-col gap-3 rounded-2xl border px-4 py-4 sm:flex-row sm:items-start sm:justify-between ${shopApproved ? "border-emerald-200 bg-emerald-50" : hasActionRequired ? "border-rose-200 bg-rose-50" : "border-amber-200 bg-amber-50"}`} role="status">
+            <div className="flex min-w-0 items-start gap-3">
+              {shopApproved ? <CheckCircle size={18} className="mt-0.5 shrink-0 text-emerald-700" /> : hasActionRequired ? <XCircle size={18} className="mt-0.5 shrink-0 text-rose-700" /> : awaitingAdminApproval ? <LockKeyhole size={18} className="mt-0.5 shrink-0 text-amber-700" /> : <Clock size={18} className="mt-0.5 shrink-0 text-amber-700" />}
+              <div>
+                <p className={`text-xs font-black uppercase tracking-[0.12em] ${shopApproved ? "text-emerald-900" : hasActionRequired ? "text-rose-900" : "text-amber-900"}`}>{overallStatus}</p>
+                <p className={`mt-1 text-xs leading-relaxed ${shopApproved ? "text-emerald-800" : hasActionRequired ? "text-rose-800" : "text-amber-800"}`}>{overallMessage}</p>
+              </div>
+            </div>
+            <span className="shrink-0 text-xs font-black text-slate-700">{uploadedCount}/4 uploaded</span>
           </div>
         </section>
         {/* Upload Parameters Helper Banner */}
@@ -441,6 +621,8 @@ export default function OwnerDocuments() {
           {REQUIRED_DOCS.map((docType) => {
             const docInfo = DOC_META[docType] || { label: docType, desc: "Legal document" };
             const doc = docStatuses.find(d => getDocType(d) === docType);
+            const isApproved = doc?.status === "APPROVED";
+            const canReplace = !doc || ["REJECTED", "NEEDS_CHANGES", "ACTION_REQUIRED"].includes(doc.status);
             const selectedFile = reuploadFiles[docType];
             const selectedPreview = reuploadPreviews[docType];
             return (
@@ -462,10 +644,10 @@ export default function OwnerDocuments() {
                        doc?.status === "REJECTED" ? <XCircle size={14} /> :
                        doc?.status === "PENDING" ? <Clock size={14} /> :
                        <AlertCircle size={14} />}
-                      {doc?.status || "Not Uploaded"}
+                      {isApproved ? "APPROVED · LOCKED" : doc?.status || "Not Uploaded"}
                     </span>
                   </div>
-                  {doc?.file_url && (
+                  {doc?.file_url && !selectedFile && (
                     <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2 min-w-0">
@@ -487,7 +669,7 @@ export default function OwnerDocuments() {
                       <strong>Admin note:</strong> {doc.admin_comment}
                     </p>
                   )}
-                  {selectedFile && (
+                  {selectedFile && !isApproved && (
                     <div className="p-3 rounded-xl bg-cyan-50/60 border border-cyan-200 text-xs space-y-3">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2 min-w-0">
@@ -505,15 +687,23 @@ export default function OwnerDocuments() {
                       {selectedPreview && (
                         <button
                           type="button"
-                          onClick={() => setPreviewDocUrl(selectedPreview)}
+                          onClick={() => { setPreviewDocIsImage(true); setPreviewDocUrl(selectedPreview); }}
                           className="w-full px-3 py-2 bg-white border border-cyan-200 text-slate-800 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5"
                         >
                           <ImageIcon size={14} /> Preview selected image
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => clearSelectedFile(docType)}
+                        disabled={globalLoading}
+                        className="w-full rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <span className="inline-flex items-center justify-center gap-1.5"><Trash2 size={14} /> Remove replacement file</span>
+                      </button>
                     </div>
                   )}
-                  {doc?.file_url && (
+                  {doc?.file_url && !selectedFile && (
                     <button
                       type="button"
                       onClick={() => openDocument(doc)}
@@ -522,25 +712,74 @@ export default function OwnerDocuments() {
                       <Eye size={15} /> View High-Res Document Preview
                     </button>
                   )}
-                  {/* Upload Drop Zone */}
-                  <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 text-center space-y-3 hover:border-slate-300 transition-colors">
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp,application/pdf"
-                      onChange={(e) => handlePreviewFile(docType, e.target.files[0])}
-                      className="text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3.5 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-slate-900 file:text-white hover:file:bg-[#EC008C] cursor-pointer"
-                    />
-                    {reuploadFiles[docType] && (
-                      <button
-                        type="button"
-                        onClick={() => handleUploadDocument(docType)}
-                        disabled={globalLoading}
-                        className="w-full py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-[#EC008C] transition-colors shadow-sm"
-                      >
-                        {globalLoading ? "Uploading..." : "Submit File for Review"}
-                      </button>
-                    )}
-                  </div>
+                  {doc?.file_url && !isApproved && !selectedFile && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteDocument(docType, doc)}
+                      disabled={deleteLoading[docType] || globalLoading}
+                      className="w-full rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <span className="inline-flex items-center justify-center gap-1.5">
+                        {deleteLoading[docType] ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                        {deleteLoading[docType] ? "Removing uploaded file..." : "Remove uploaded file"}
+                      </span>
+                    </button>
+                  )}
+                  {isApproved ? (
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4" role="status">
+                      <div className="flex items-start gap-3">
+                        <LockKeyhole size={17} className="mt-0.5 shrink-0 text-emerald-700" />
+                        <div className="min-w-0">
+                          <p className="text-xs font-black text-emerald-900">Approved document locked</p>
+                          <p className="mt-1 break-words text-[11px] leading-relaxed text-emerald-800">{getFileName(doc) || "Approved verification document"}</p>
+                          <p className="mt-1 text-[11px] leading-relaxed text-emerald-800/80">This file is read-only. An admin must request action before a replacement can be submitted.</p>
+                          {doc?.file_url && (
+                            <button
+                              type="button"
+                              onClick={() => openDocument(doc)}
+                              className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-100 px-3 py-2 text-[11px] font-black text-emerald-900 hover:bg-emerald-200"
+                            >
+                              <Eye size={14} /> View approved preview
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : canReplace ? (
+                    <div className="space-y-3 rounded-xl border-2 border-dashed border-slate-200 p-4 text-center transition-colors hover:border-slate-300">
+                      <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-[#EC008C]" htmlFor={`document-upload-${docType}`}>
+                        <Upload size={14} /> {doc ? "Choose replacement file" : "Choose file to submit"}
+                      </label>
+                      <input
+                        id={`document-upload-${docType}`}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,application/pdf"
+                        onChange={(e) => handlePreviewFile(docType, e.target.files?.[0])}
+                        aria-label={doc ? "Choose replacement file" : "Choose file to submit"}
+                        className="sr-only"
+                      />
+                      {reuploadFiles[docType] && (
+                        <button
+                          type="button"
+                          onClick={() => handleUploadDocument(docType)}
+                          disabled={globalLoading}
+                          className="w-full rounded-xl bg-slate-900 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-[#EC008C] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {globalLoading ? "Uploading..." : "Submit file for admin review"}
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4" role="status">
+                      <div className="flex items-start gap-3">
+                        <Clock size={17} className="mt-0.5 shrink-0 text-amber-700" />
+                        <div>
+                          <p className="text-xs font-black text-amber-900">Submitted for admin review</p>
+                          <p className="mt-1 text-[11px] leading-relaxed text-amber-800">Replacement uploads are disabled while this document is pending. You can act again if the admin rejects or requests changes.</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             );

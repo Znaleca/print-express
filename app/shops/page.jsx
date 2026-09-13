@@ -7,6 +7,7 @@ import { Search, Star, Loader2, Store, ChevronRight, MapPin, ArrowRight } from "
 import { supabase } from "@/lib/supabaseClient";
 import { getRatingStats, ratingLabel } from "@/lib/rating";
 import { withTimeout } from "@/lib/withTimeout";
+import { normalizeCoordinates } from "@/lib/coordinates";
 
 export default function ShopsPage() {
   const router = useRouter();
@@ -16,7 +17,13 @@ export default function ShopsPage() {
   const [loadError, setLoadError] = useState(null);
 
   useEffect(() => {
+    let active = true;
+    let refreshTimer;
+    let subscription;
+
     async function loadBusinesses() {
+      setLoading(true);
+      setLoadError(null);
       try {
         const { data: bizData, error: bizError } = await withTimeout(
           (signal) => supabase
@@ -53,7 +60,7 @@ export default function ShopsPage() {
 
         const { data: reviewData, error: reviewError } = await withTimeout(
           (signal) => supabase
-            .from("business_reviews")
+            .from("visible_business_reviews")
             .select("business_id, rating")
             .range(0, 999)
             .abortSignal(signal),
@@ -80,13 +87,14 @@ export default function ShopsPage() {
 
           const reviews = reviewsByBusiness[b.id] || [];
           const ratingStats = getRatingStats(reviews);
+          const coordinates = normalizeCoordinates(b.lat, b.lng);
 
           return {
             id: b.id,
             name: b.name || "Print Shop",
             address: b.address || "Location unavailable",
-            lat: b.lat == null ? null : parseFloat(b.lat),
-            lng: b.lng == null ? null : parseFloat(b.lng),
+            lat: coordinates?.lat ?? null,
+            lng: coordinates?.lng ?? null,
             logo_url: b.logo_url,
             is_open: openStateByBusiness[b.id] ?? b.is_open ?? true,
             rating: ratingStats.average,
@@ -95,16 +103,37 @@ export default function ShopsPage() {
           };
         });
 
-        setBusinesses(formatted);
+        if (active) setBusinesses(formatted);
       } catch (error) {
-        console.error("Error loading print shops:", error);
-        setLoadError(error.message || "We could not load verified print shops right now. Please refresh and try again.");
+        if (active) {
+          console.error("Error loading print shops:", error);
+          setLoadError(error.message || "We could not load verified print shops right now. Please refresh and try again.");
+        }
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     }
 
     loadBusinesses();
+
+    const scheduleRefresh = () => {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        if (active) void loadBusinesses();
+      }, 300);
+    };
+
+    subscription = supabase
+      .channel(`public_shops_directory_${Date.now()}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "businesses" }, scheduleRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, scheduleRefresh)
+      .subscribe();
+
+    return () => {
+      active = false;
+      clearTimeout(refreshTimer);
+      if (subscription) supabase.removeChannel(subscription);
+    };
   }, []);
 
   const filtered = businesses.filter(

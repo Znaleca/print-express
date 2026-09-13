@@ -46,6 +46,29 @@ $$;
 revoke all on function public.get_user_id_by_email(text) from public, anon, authenticated;
 grant execute on function public.get_user_id_by_email(text) to service_role;
 
+-- Server-only account state lookup used by the native signup/login routes.
+-- It intentionally returns no email, metadata, or credential information.
+create or replace function public.get_auth_user_status_by_email(lookup_email text)
+returns table (
+  user_id uuid,
+  email_confirmed_at timestamptz,
+  banned_until timestamptz,
+  deleted_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public, auth
+as $$
+  select u.id, u.email_confirmed_at, u.banned_until, u.deleted_at
+  from auth.users u
+  where lower(u.email) = lower(trim(lookup_email))
+  limit 1;
+$$;
+
+revoke all on function public.get_auth_user_status_by_email(text) from public, anon, authenticated;
+grant execute on function public.get_auth_user_status_by_email(text) to service_role;
+
 -- Expired rows are harmless, but deleting them keeps the free-tier table small.
 create or replace function public.delete_expired_otp_verifications()
 returns integer

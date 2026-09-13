@@ -5,11 +5,11 @@ import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import OwnerSidebar from "@/components/owner/OwnerSidebar";
 import OwnerOnboarding from "@/components/onboarding/OwnerOnboarding";
-import { getUploadExtension, PRIVATE_ASSETS_BUCKET, optimizeImageForUpload, toStorageRef } from "@/lib/imageUpload";
+import { getUploadExtension, PRIVATE_ASSETS_BUCKET, optimizeImageForUpload, resolveStorageUrl, toStorageRef } from "@/lib/imageUpload";
 import {
   ShieldAlert, ShieldCheck, Loader2, Construction, Activity,
   CheckCircle, XCircle, Clock, Upload, AlertCircle,
-  RefreshCcw, FileText, Hash, Trash2, Pencil, X, Lock, Menu
+  RefreshCcw, FileText, Hash, Trash2, Pencil, X, Lock, LockKeyhole, Eye, Menu
 } from "lucide-react";
 
 const REQUIRED_DOCS = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID"];
@@ -22,6 +22,12 @@ const DOC_META = {
   BIR:           { label: "BIR Certificate",   color: "#FFF200", textColor: "#1A1A1A" },
   VALID_ID:      { label: "Valid ID",          color: "#1A1A1A", textColor: "#ffffff" },
 };
+
+function hasAllRequiredDocumentsApproved(documents = []) {
+  return REQUIRED_DOCS.every((docType) => documents.some(
+    (document) => document?.doc_type === docType && document?.status === "APPROVED",
+  ));
+}
 
 export default function OwnerLayout({ children }) {
   const router = useRouter();
@@ -60,12 +66,14 @@ export default function OwnerLayout({ children }) {
   const [deleteDocLoading, setDeleteDocLoading] = useState({});
   const [editSubmissionOpen, setEditSubmissionOpen] = useState({});
   const [reuploadError, setReuploadError]       = useState(null);
+  const [approvedPreview, setApprovedPreview] = useState(null);
 
   const loadDocs = useCallback(async (bizId) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("business_documents")
       .select("*")
       .eq("business_id", bizId);
+    if (error) throw error;
     return data || [];
   }, []);
 
@@ -90,36 +98,44 @@ export default function OwnerLayout({ children }) {
         .maybeSingle();
 
       if (!business) {
-        const requestedName =
-          (user.user_metadata?.business_name || "").trim() ||
-          `${(user.user_metadata?.full_name || "").trim()}'s Business`;
-        const { data: created } = await supabase
-          .from("businesses")
-          .insert({ owner_id: user.id, name: requestedName, status: "PENDING" })
-          .select("id, name").single();
-        setBusinessName(created?.name || "");
-        setBusinessId(created?.id);
-        setLifecycleState("ACTIVE");
-        setState("unverified");
+        // Signup creates the owner business in the auth/profile transaction.
+        // Never repair this by inserting from the browser: that can create an
+        // orphan or duplicate business for a partially-created account.
+        setState("unauthorized");
         return;
       }
 
       setBusinessName(business.name || "");
       setBusinessId(business.id);
+      let documents = [];
+      try {
+        documents = await loadDocs(business.id);
+      } catch {
+        // Fail closed: an unavailable document query must never unlock owner
+        // routes. The documents page will present its own retryable error.
+        setDocStatuses([]);
+        setState("unverified");
+        return;
+      }
+      setDocStatuses(documents);
+      const documentsApproved = hasAllRequiredDocumentsApproved(documents);
+      const shopApproved = business.status === "APPROVED" && documentsApproved;
       const { data: inactivityExpired } = await supabase.rpc("is_business_inactivity_expired", {
         p_business_id: business.id,
       });
-      const shouldBeLocked = business.status === "APPROVED"
+      const shouldBeLocked = shopApproved
         && business.lifecycle_state === "ACTIVE"
         && inactivityExpired === true;
       setLifecycleState(shouldBeLocked ? "LOCKED" : (business.lifecycle_state || "ACTIVE"));
       setLastActivityAt(business.last_activity_at || null);
       setLockReason(shouldBeLocked
-        ? "Automatically locked after inactivity. Sign in or contact an administrator to request reactivation."
+        ? "Automatically locked after 30 days without meaningful owner activity. Reactivate your shop to resume operations."
         : (business.lock_reason || ""));
 
-      // If already fully approved at business level, skip doc check
-      if (business.status === "APPROVED") {
+      // A shop is verified only after both the four-document requirement and
+      // the explicit Admin shop approval are present. The business status by
+      // itself is not a sufficient unlock signal.
+      if (shopApproved) {
         setState("approved");
         return;
       }
@@ -130,6 +146,68 @@ export default function OwnerLayout({ children }) {
 
     run();
   }, [router, loadDocs]);
+
+  // Keep a stale owner tab from retaining access after an Admin rejects a
+  // document or revokes shop approval. The database remains the source of
+  // truth; this subscription only makes the UI gate react without a refresh.
+  useEffect(() => {
+    if (!businessId || !userId) return undefined;
+
+    let active = true;
+    const syncVerificationState = async () => {
+      try {
+        const [{ data: business }, documents] = await Promise.all([
+          supabase
+            .from("businesses")
+            .select("id, name, status, lifecycle_state, last_activity_at, lock_reason")
+            .eq("id", businessId)
+            .maybeSingle(),
+          loadDocs(businessId),
+        ]);
+        if (!active || !business) return;
+
+        const shopApproved = business.status === "APPROVED" && hasAllRequiredDocumentsApproved(documents);
+        const { data: inactivityExpired } = await supabase.rpc("is_business_inactivity_expired", {
+          p_business_id: businessId,
+        });
+        const shouldBeLocked = shopApproved
+          && business.lifecycle_state === "ACTIVE"
+          && inactivityExpired === true;
+        setBusinessName(business.name || "");
+        setDocStatuses(documents);
+        setState(shopApproved ? "approved" : "unverified");
+        setLifecycleState(shouldBeLocked ? "LOCKED" : (business.lifecycle_state || "ACTIVE"));
+        setLastActivityAt(business.last_activity_at || null);
+        setLockReason(shouldBeLocked
+          ? "Automatically locked after 30 days without meaningful owner activity. Reactivate your shop to resume operations."
+          : (business.lock_reason || ""));
+      } catch {
+        // The initial gate already has the last known state. A transient
+        // realtime refresh failure must not unlock a protected route.
+      }
+    };
+
+    const channel = supabase
+      .channel(`owner_verification_gate:${businessId}`)
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "businesses",
+        filter: `id=eq.${businessId}`,
+      }, () => { void syncVerificationState(); })
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "business_documents",
+        filter: `business_id=eq.${businessId}`,
+      }, () => { void syncVerificationState(); })
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [businessId, userId, loadDocs]);
 
   // Fetch badge counts when businessId is available
   useEffect(() => {
@@ -193,16 +271,22 @@ export default function OwnerLayout({ children }) {
     };
   }, [businessId, userId]);
 
-  // URL protection: instead of redirecting, we will show a watermark overlay
   // The verification page is the only owner route available before approval.
   // The dashboard must remain behind the gate even when the business record
   // has not yet received all required documents.
   const ALLOWED_UNVERIFIED = ["/owner/documents"];
-  const isLockedPage = state === "unverified" && !ALLOWED_UNVERIFIED.includes(pathname);
+  const isLockedPage = !["checking", "unauthorized", "approved"].includes(state)
+    && !ALLOWED_UNVERIFIED.includes(pathname);
   const isLifecycleBlocked = lifecycleState === "LOCKED" || lifecycleState === "ARCHIVED";
   const inactiveDays = lastActivityAt
     ? Math.max(0, Math.floor((Date.now() - new Date(lastActivityAt).getTime()) / 86400000))
     : null;
+
+  useEffect(() => {
+    if (isLockedPage && !isLifecycleBlocked) {
+      router.replace("/owner/documents");
+    }
+  }, [isLockedPage, isLifecycleBlocked, router]);
 
   useEffect(() => {
     return () => {
@@ -215,6 +299,14 @@ export default function OwnerLayout({ children }) {
   /* ── RE-UPLOAD ── */
   const handleReupload = async (docTypeStr, doc = null) => {
     setReuploadError(null);
+    if (doc?.status === "APPROVED") {
+      setReuploadError(`${DOC_META[docTypeStr]?.label || "This document"} is approved and locked. An admin must request action before it can be replaced.`);
+      return;
+    }
+    if (doc && !["REJECTED", "NEEDS_CHANGES", "ACTION_REQUIRED"].includes(doc.status)) {
+      setReuploadError("This document is already under review. Replacement uploads are only available after an admin requests action.");
+      return;
+    }
     if (!reuploadFiles[docTypeStr]) { setReuploadError(`Please select a file for ${DOC_META[docTypeStr]?.label}.`); return; }
 
     setReuploadLoading((p) => ({ ...p, [docTypeStr]: true }));
@@ -272,6 +364,15 @@ export default function OwnerLayout({ children }) {
       setReuploadError(err.message);
     } finally {
       setReuploadLoading((p) => ({ ...p, [docTypeStr]: false }));
+    }
+  };
+
+  const openApprovedDocument = async (doc) => {
+    const url = await resolveStorageUrl(doc?.file_url);
+    if (url) {
+      setApprovedPreview({ url, label: doc?.file_name || "Approved verification document" });
+    } else {
+      setReuploadError("This approved document is unavailable or you do not have permission to view it.");
     }
   };
 
@@ -369,7 +470,7 @@ export default function OwnerLayout({ children }) {
 
   /* ── DOC REVIEW GATE (pending or action_required) ── */
   const DocReviewGate = () => {
-    const hasRejected = docStatuses.some((d) => d.status === "REJECTED");
+    const hasRejected = docStatuses.some((d) => ["REJECTED", "NEEDS_CHANGES", "ACTION_REQUIRED"].includes(d.status));
     const docMap = Object.fromEntries(docStatuses.map((d) => [d.doc_type, d]));
 
     const handlePreviewFile = (docType, file) => {
@@ -409,7 +510,28 @@ export default function OwnerLayout({ children }) {
     };
 
     return (
-      <main className="owner-doc-review-page min-h-screen overflow-x-hidden bg-[#F6F6F2] text-[#1A1A1A]">
+      <>
+        {approvedPreview && (
+          <div className="dialog-overlay" role="dialog" aria-modal="true" onClick={() => setApprovedPreview(null)}>
+            <div className="dialog-surface w-full max-w-5xl p-5 sm:p-6" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between gap-4 border-b border-slate-200 pb-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Eye size={17} className="shrink-0 text-[#009FA0]" />
+                  <h2 className="truncate text-sm font-black text-slate-900">{approvedPreview.label}</h2>
+                </div>
+                <button type="button" onClick={() => setApprovedPreview(null)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-900" aria-label="Close document preview">
+                  <X size={18} />
+                </button>
+              </div>
+              {approvedPreview.url.match(/\.(jpeg|jpg|png|webp|gif|svg)(\?|$)/i) ? (
+                <img src={approvedPreview.url} alt={`${approvedPreview.label} preview`} className="max-h-[78vh] w-full rounded-xl border border-slate-200 bg-slate-50 object-contain" />
+              ) : (
+                <iframe src={approvedPreview.url} title={`${approvedPreview.label} preview`} className="h-[78vh] w-full rounded-xl border border-slate-200" />
+              )}
+            </div>
+          </div>
+        )}
+        <main className="owner-doc-review-page min-h-screen overflow-x-hidden bg-[#F6F6F2] text-[#1A1A1A]">
         <section className="relative overflow-hidden border-b border-white/10 bg-[#1A1A1A] px-6 py-10 text-white md:px-10 md:py-12">
           <div className="absolute top-0 left-0 w-16 h-16 bg-[#00FFFF] opacity-20" />
           <div className="absolute top-0 right-0 w-16 h-16 bg-[#EC008C] opacity-20" />
@@ -473,8 +595,9 @@ export default function OwnerLayout({ children }) {
               const doc = docMap[docType];
               const meta = DOC_META[docType];
               const status = doc?.status || "NOT_SUBMITTED";
-              const isRejected = status === "REJECTED";
-              const isEditing = status === "NOT_SUBMITTED" || !!editSubmissionOpen[docType];
+              const isRejected = ["REJECTED", "NEEDS_CHANGES", "ACTION_REQUIRED"].includes(status);
+              const canReplace = status === "NOT_SUBMITTED" || isRejected;
+              const isEditing = canReplace && (status === "NOT_SUBMITTED" || !!editSubmissionOpen[docType]);
 
               return (
                 <div
@@ -554,16 +677,41 @@ export default function OwnerLayout({ children }) {
                         </div>
 
                           <div className="border-4 border-[#1A1A1A] bg-[#FDFDFD] p-4 shadow-[6px_6px_0px_0px_rgba(0,255,255,1)]">
-                            {!isEditing && doc ? (
+                            {status === "APPROVED" && doc ? (
+                              <div role="status" className="border-2 border-emerald-300 bg-emerald-50 p-4">
+                                <div className="flex items-start gap-3">
+                                  <LockKeyhole size={18} className="mt-0.5 shrink-0 text-emerald-700" />
+                                  <div className="min-w-0">
+                                    <p className="font-mono text-[9px] font-black uppercase tracking-[0.3em] text-emerald-700">Approved · locked</p>
+                                    <p className="mt-2 break-words text-xs font-black text-emerald-950">{doc.file_name || "Approved verification document"}</p>
+                                    <p className="mt-2 text-[11px] leading-relaxed text-emerald-800">This document is read-only. Replacements are disabled unless an admin requests action.</p>
+                                    {doc.file_url && (
+                                      <button
+                                        type="button"
+                                        onClick={() => openApprovedDocument(doc)}
+                                        className="mt-3 inline-flex items-center gap-2 border-2 border-emerald-700 bg-emerald-100 px-3 py-2 font-black uppercase tracking-widest text-[10px] text-emerald-950 hover:bg-emerald-200"
+                                      >
+                                        <Eye size={13} /> View approved preview
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : !isEditing && doc ? (
                               <div>
-                                <p className="font-mono text-[9px] uppercase tracking-[0.3em] text-gray-500">Submission Actions</p>
+                                <p className="font-mono text-[9px] uppercase tracking-[0.3em] text-gray-500">{isRejected ? "Submission Actions" : "Pending admin review"}</p>
+                                {!isRejected && (
+                                  <p className="mt-2 text-[11px] leading-relaxed text-gray-600">This file is being reviewed. Replacement controls will appear only if an admin rejects or requests changes.</p>
+                                )}
                                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                                  <button
-                                    onClick={() => setEditSubmissionOpen((p) => ({ ...p, [docType]: true }))}
-                                    className="inline-flex items-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] text-white px-3 py-2 font-black uppercase tracking-widest text-[10px] hover:bg-[#EC008C]"
-                                  >
-                                    <Pencil size={12} /> Edit
-                                  </button>
+                                  {isRejected && (
+                                    <button
+                                      onClick={() => setEditSubmissionOpen((p) => ({ ...p, [docType]: true }))}
+                                      className="inline-flex items-center gap-2 border-2 border-[#1A1A1A] bg-[#1A1A1A] px-3 py-2 font-black uppercase tracking-widest text-[10px] text-white hover:bg-[#EC008C]"
+                                    >
+                                      <Pencil size={12} /> Replace file
+                                    </button>
+                                  )}
 
                                   {status !== "APPROVED" && (
                                     <button
@@ -597,7 +745,7 @@ export default function OwnerLayout({ children }) {
                                       {reuploadFiles[docType] ? reuploadFiles[docType].name : status === "NOT_SUBMITTED" ? "Select File" : "Select Replacement"}
                                     </span>
                                     <span className="mt-2 font-mono text-[9px] uppercase tracking-[0.25em] text-gray-500">
-                                      {status === "NOT_SUBMITTED" ? "Tap to choose a document" : "Saving edits sets this document back to pending review"}
+                                      {status === "NOT_SUBMITTED" ? "Tap to choose a document" : "Replacement returns this document to pending review"}
                                     </span>
                                   </label>
 
@@ -675,7 +823,8 @@ export default function OwnerLayout({ children }) {
             </div>
           </div>
         </section>
-      </main>
+        </main>
+      </>
     );
   };
 
@@ -780,7 +929,7 @@ export default function OwnerLayout({ children }) {
 
                 <p className="mt-6 border-l-4 border-[#EC008C] bg-[#F6F6F2] px-4 py-4 text-sm font-semibold leading-relaxed text-slate-700">
                   {lifecycleState === "LOCKED"
-                    ? "Your shop was locked because it was inactive. Customers cannot place new orders while it is locked."
+                    ? "Your shop was automatically locked after 30 days without meaningful owner activity. Customers cannot place new orders while it is locked."
                     : "Your shop was archived by an administrator. Your account and historical records are still preserved."}
                 </p>
 

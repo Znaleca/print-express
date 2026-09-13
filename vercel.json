@@ -1,0 +1,22 @@
+{
+  "redirects": [
+    {
+      "source": "/:path*",
+      "destination": "https://www.pressandpresent.me/:path*",
+      "permanent": true,
+      "has": [{ "type": "host", "value": "press-and-present.vercel.app" }]
+    },
+    {
+      "source": "/:path*",
+      "destination": "https://www.pressandpresent.me/:path*",
+      "permanent": true,
+      "has": [{ "type": "host", "value": "pressandpresent.vercel.app" }]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/video-call-reminders",
+      "schedule": "* * * * *"
+    }
+  ]
+}

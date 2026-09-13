@@ -6,7 +6,11 @@ import { getCartGroups, getDesignFiles } from "@/lib/checkout";
 
 export default function OrderSummary({
   selectedServices,
+  subtotal,
   total,
+  deliveryType,
+  deliveryFee,
+  deliveryQuote,
   effectiveDownpaymentPercent,
   minimumDownpaymentPercent,
   setUserSelectedDownpaymentPercent,
@@ -83,7 +87,21 @@ export default function OrderSummary({
         <div className="space-y-3 border-t border-slate-200 pt-4">
           <div className="flex justify-between text-xs font-medium text-slate-600">
             <span>Subtotal</span>
-            <span>₱{total.toFixed(2)}</span>
+            <span>₱{subtotal.toFixed(2)}</span>
+          </div>
+
+          {deliveryType === "DELIVERY" && (
+            <div className="flex justify-between text-xs font-medium text-slate-600">
+              <span>Delivery fee</span>
+              <span className="font-bold text-[#EC008C]">
+                {deliveryQuote?.eligible ? `₱${deliveryFee.toFixed(2)}` : "Confirm location"}
+              </span>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between border-t border-slate-200 pt-3">
+            <span className="text-sm font-black text-slate-900">Total</span>
+            <span className="text-xl font-black text-slate-900">₱{total.toFixed(2)}</span>
           </div>
 
           <div className="border-t border-slate-100 pt-3">

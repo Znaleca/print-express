@@ -17,7 +17,7 @@ import {
   FileText, Star, MapPin, Loader2, ArrowRight,
   ChevronRight, Info, AlertTriangle, MessageSquare, Package, Minus, Plus, Clock, X, Power, ShieldCheck
 } from "lucide-react";
-import { getRatingStats, ratingLabel } from "@/lib/rating";
+import { getRatingStats, getRatingSummary, ratingLabel } from "@/lib/rating";
 import { getCategoryOptionConfig, normalizeConfiguredOptions } from "@/lib/serviceOptions";
 
 const MAX_DESIGN_FILES = 5;
@@ -145,6 +145,44 @@ function getVisibleSizeChart(specs, service) {
   return allowedSizes.length > 0 ? chart.filter((row) => allowedSizes.includes(row.size)) : chart;
 }
 
+function getVisibleReviewStats(reviewRows) {
+  const allReviews = Array.isArray(reviewRows) ? reviewRows : [];
+  const visibleReviews = allReviews;
+  const writtenReviews = allReviews.filter((review) => !!review.feedback);
+  const ratingStats = getRatingStats(allReviews);
+  const orderCountByName = {};
+  const serviceReviewGroups = {};
+
+  allReviews.forEach((review) => {
+    if (review.item_name) {
+      orderCountByName[review.item_name] = (orderCountByName[review.item_name] || 0) + 1;
+    }
+    if (review.review_service_id) {
+      if (!serviceReviewGroups[review.review_service_id]) serviceReviewGroups[review.review_service_id] = [];
+      serviceReviewGroups[review.review_service_id].push(review);
+    }
+  });
+
+  const sortedByOrders = Object.entries(orderCountByName)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([name]) => name);
+
+  return {
+    reviewCount: ratingStats.count,
+    ratingAvg: ratingStats.average,
+    writtenReviewCount: writtenReviews.length,
+    reviews: [...visibleReviews].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
+    bestSellerNames: new Set(sortedByOrders),
+    serviceRatingStats: Object.fromEntries(Object.entries(serviceReviewGroups).map(([serviceId, reviews]) => [serviceId, getRatingSummary(reviews)])),
+  };
+}
+
+function ServiceRating({ stats }) {
+  if (!stats?.count) return <span className="text-[10px] font-semibold text-slate-400">No ratings yet</span>;
+  return <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-600" aria-label={`${stats.average} average from ${stats.count} reviews`}><Star size={12} className="fill-[#FFF200] text-[#D1C500]" /> {stats.average} ({stats.count})</span>;
+}
+
 export default function BusinessDetailsPage({ params }) {
   const { id } = use(params);
   const router = useRouter();
@@ -254,31 +292,12 @@ export default function BusinessDetailsPage({ params }) {
           // Keep the business query small and avoid relying on a nested view
           // relationship, which can fail when the view is recreated in Supabase.
           const { data: reviewRows } = await supabase
-            .from("business_reviews")
-            .select("order_id, rating, feedback, created_at, customer_name, item_name")
+            .from("visible_business_reviews")
+            .select("order_id, rating, feedback, created_at, customer_name, item_name, review_service_id, review_target_name, review_target_type")
             .eq("business_id", id)
             .order("created_at", { ascending: false })
             .range(0, 999);
-          const allReviews = reviewRows || [];
-          const visibleReviews = allReviews.filter(r => !!r.feedback);
-          const ratingStats = getRatingStats(allReviews);
-          data.reviewCount = ratingStats.count;
-          data.ratingAvg = ratingStats.average;
-          data.writtenReviewCount = visibleReviews.length;
-          data.reviews = visibleReviews.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
-
-          // Compute best seller ranking
-          const orderCountByName = {};
-          allReviews.forEach(r => {
-            if (r.item_name) {
-              orderCountByName[r.item_name] = (orderCountByName[r.item_name] || 0) + 1;
-            }
-          });
-          const sortedByOrders = Object.entries(orderCountByName)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 3)
-            .map(([name]) => name);
-          data.bestSellerNames = new Set(sortedByOrders);
+          Object.assign(data, getVisibleReviewStats(reviewRows));
 
           setBusiness(data);
 
@@ -364,6 +383,42 @@ export default function BusinessDetailsPage({ params }) {
     }
     init();
   }, [id, checkoutServiceId, quoteId, designUrl, designVersion]);
+
+  // Reviews live on orders, so listen to that source and refresh the filtered
+  // public view when a customer rates an order or an owner/admin moderates it.
+  useEffect(() => {
+    if (!id) return undefined;
+
+    let active = true;
+    let refreshTimer;
+    const refreshReviews = async () => {
+      const { data: reviewRows, error } = await supabase
+        .from("visible_business_reviews")
+        .select("order_id, rating, feedback, created_at, customer_name, item_name, review_service_id, review_target_name, review_target_type")
+        .eq("business_id", id)
+        .order("created_at", { ascending: false })
+        .range(0, 999);
+
+      if (!active || error) return;
+      setBusiness((current) => current ? { ...current, ...getVisibleReviewStats(reviewRows) } : current);
+    };
+
+    const scheduleRefresh = () => {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => void refreshReviews(), 250);
+    };
+
+    const subscription = supabase
+      .channel(`public_business_reviews_${id}_${Date.now()}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `business_id=eq.${id}` }, scheduleRefresh)
+      .subscribe();
+
+    return () => {
+      active = false;
+      clearTimeout(refreshTimer);
+      supabase.removeChannel(subscription);
+    };
+  }, [id]);
 
   const cartItemCount = useMemo(
     () => selectedServices.reduce((total, item) => total + (Number(item.quantity) || 0), 0),
@@ -846,6 +901,7 @@ export default function BusinessDetailsPage({ params }) {
                 <div className="border-y border-[#D8D6CE]">
                   {business.services.filter(s => s.item_type !== "product").map((svc) => {
                     const hasAcceptedQuote = selectedServices.some((s) => s.id === svc.id && s.isQuotedCheckout);
+                    const serviceRating = business.serviceRatingStats?.[svc.id];
                     return (
                       <button
                         type="button"
@@ -884,6 +940,7 @@ export default function BusinessDetailsPage({ params }) {
                           {svc.description && (
                             <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500">{svc.description}</p>
                           )}
+                          <div className="mt-2"><ServiceRating stats={serviceRating} /></div>
                           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
                             <span className="inline-flex items-center gap-1.5"><MessageSquare size={14} className="text-[#009FA0]" /> Discuss details with the shop</span>
                             <span className="text-[#009FA0]">Request a quote →</span>
@@ -911,6 +968,7 @@ export default function BusinessDetailsPage({ params }) {
                     const isSelected = selectedServices.some((s) => s.id === svc.id);
                     const stockLeft = Math.max(0, Number(svc.stock_qty || 0));
                     const outOfStock = stockLeft <= 0;
+                    const serviceRating = business.serviceRatingStats?.[svc.id];
 
                     return (
                       <div
@@ -945,6 +1003,7 @@ export default function BusinessDetailsPage({ params }) {
                           <p className="text-sm font-extrabold text-slate-900 mb-3">
                             ₱{Number(svc.price).toFixed(2)}
                           </p>
+                          <div className="mb-3"><ServiceRating stats={serviceRating} /></div>
 
                           {svc.image_url ? (
                             <div className="relative h-40 w-full overflow-hidden rounded-2xl border border-[#ECECE8] bg-[#F6F6F2] p-2">

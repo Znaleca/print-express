@@ -7,14 +7,38 @@ import { supabase } from "@/lib/supabaseClient";
 import { 
   Truck, Printer, Clock, 
   MapPin, CheckCircle2, 
-  Loader2, AlertTriangle, FileText, ShoppingBag,
-  Star, Package, XCircle, RefreshCcw, Eye, MessageSquare, AlertOctagon, X,
+  Loader2, AlertTriangle, ShoppingBag,
+  Star, Package, CreditCard, Upload, XCircle, RefreshCcw, Eye, MessageSquare, AlertOctagon, X,
   ChevronLeft, ChevronRight
 } from "lucide-react";
 import ReceiptModal from "@/components/ReceiptModal";
 import { resolveStorageUrl } from "@/lib/imageUpload";
+import { formatPesoAmount, getOrderPaymentSummary } from "@/lib/paymentSummary";
 
 const ORDERS_PER_PAGE = 5;
+
+// Never request the raw review text from the customer-facing order reader.
+// `feedback_masked` is materialized by the protected Supabase trigger.
+const CUSTOMER_ORDER_SELECT = `
+  id, customer_id, business_id, status, payment_method, total, customer_phone,
+  items, receipt_url, cancel_reason, cancelled_at, refund_proof_url,
+  refund_receipt_url, refund_reason, refund_requested_at, refunded_at,
+  downpayment_amount, balance_amount, fully_paid, design_files,
+  quotation_valid_until, quotation_terms, tax_amount, discount_amount,
+  created_at, updated_at, delivery_type, delivery_address,
+  delivery_coordinates, fulfillment_mode, expected_fulfillment_at,
+  delivery_fee, delivery_distance_km, delivery_extra_distance_km,
+  delivery_base_fee, delivery_extra_fee, confirmed_payment_amount,
+  payment_confirmation_status, payment_confirmed_at, payment_confirmed_by,
+  remaining_payment_status, remaining_payment_method, remaining_payment_proof_url,
+  remaining_payment_proof_name, remaining_payment_proof_content_type,
+  remaining_payment_proof_size_bytes, remaining_payment_note,
+  remaining_payment_rejection_reason, remaining_payment_submitted_at,
+  remaining_payment_reviewed_at, remaining_payment_reviewed_by,
+  rating, feedback_masked, feedback_hidden, feedback_hidden_at,
+  feedback_hidden_by, review_service_id,
+  businesses ( name, address, phone )
+`;
 
 const STATUS_MAP = {
   PENDING:           { label: "Pending Confirmation", color: "border-[#E6C94A] bg-[#FFF9D6] text-[#796900]", accent: "text-[#8A7200]", marker: "bg-[#FFF200]" },
@@ -44,6 +68,7 @@ const getProgressSteps = (order) => [
 
 export default function TrackOrderPage() {
   const router = useRouter();
+  const [reviewOrderId, setReviewOrderId] = useState("");
   const [user, setUser] = useState(null);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -62,6 +87,11 @@ export default function TrackOrderPage() {
   const [viewDocType, setViewDocType] = useState("RECEIPT");
   const [viewRefundProof, setViewRefundProof] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [remainingPaymentModal, setRemainingPaymentModal] = useState(null);
+  const [remainingPaymentFile, setRemainingPaymentFile] = useState(null);
+  const [remainingPaymentNote, setRemainingPaymentNote] = useState("");
+  const [remainingPaymentError, setRemainingPaymentError] = useState("");
+  const [submittingRemainingPayment, setSubmittingRemainingPayment] = useState(false);
 
   const totalPages = Math.ceil(orders.length / ORDERS_PER_PAGE);
   const pageStart = (currentPage - 1) * ORDERS_PER_PAGE;
@@ -70,6 +100,28 @@ export default function TrackOrderPage() {
   useEffect(() => {
     setCurrentPage((page) => Math.min(page, Math.max(totalPages, 1)));
   }, [totalPages]);
+
+  useEffect(() => {
+    setReviewOrderId(new URLSearchParams(window.location.search).get("review") || "");
+  }, []);
+
+  useEffect(() => {
+    if (!reviewOrderId || !orders.length) return;
+    const orderIndex = orders.findIndex((order) => order.id === reviewOrderId);
+    if (orderIndex < 0) return;
+    setCurrentPage(Math.floor(orderIndex / ORDERS_PER_PAGE) + 1);
+  }, [reviewOrderId, orders]);
+
+  useEffect(() => {
+    if (!reviewOrderId) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const reviewElement = document.getElementById(`review-${reviewOrderId}`);
+      if (!reviewElement) return;
+      reviewElement.scrollIntoView({ behavior: "smooth", block: "center" });
+      reviewElement.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [reviewOrderId, currentPage, orders.length]);
 
   useEffect(() => {
     let isActive = true;
@@ -97,10 +149,7 @@ export default function TrackOrderPage() {
         const fetchOrders = async () => {
           const { data, error } = await supabase
             .from("orders")
-            .select(`
-              *,
-              businesses ( name, address, phone )
-            `)
+            .select(CUSTOMER_ORDER_SELECT)
             .eq("customer_id", authUser.id)
             .order("created_at", { ascending: false });
 
@@ -116,9 +165,11 @@ export default function TrackOrderPage() {
           setOrders(rows);
           const initReviews = {};
           rows.forEach((o) => {
+            const reviewItems = Array.isArray(o.items) ? o.items.filter((item) => item?.id && item?.name) : [];
             initReviews[o.id] = {
               rating: o.rating || 0,
-              feedback: o.feedback || "",
+              feedback: o.feedback_masked || "",
+              review_service_id: o.review_service_id || (reviewItems.length === 1 ? reviewItems[0].id : ""),
             };
           });
           setReviewsState(initReviews);
@@ -172,6 +223,69 @@ export default function TrackOrderPage() {
       alert(err.message || "Failed to cancel order.");
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const openRemainingPaymentModal = (order, method) => {
+    setRemainingPaymentModal({ order, method });
+    setRemainingPaymentFile(null);
+    setRemainingPaymentNote("");
+    setRemainingPaymentError("");
+  };
+
+  const handleSubmitRemainingPayment = async () => {
+    if (!remainingPaymentModal || submittingRemainingPayment) return;
+    const { order, method } = remainingPaymentModal;
+    if (method === "E-Wallet") {
+      if (!remainingPaymentFile) {
+        setRemainingPaymentError("Choose your payment proof first.");
+        return;
+      }
+      if (!["image/png", "image/jpeg", "image/webp", "application/pdf"].includes(remainingPaymentFile.type)) {
+        setRemainingPaymentError("Use a PNG, JPG, WebP, or PDF file.");
+        return;
+      }
+      if (!remainingPaymentFile.size || remainingPaymentFile.size > 5 * 1024 * 1024) {
+        setRemainingPaymentError("Payment proof must be between 1 byte and 5 MB.");
+        return;
+      }
+    }
+
+    setSubmittingRemainingPayment(true);
+    setRemainingPaymentError("");
+    try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !sessionData?.session?.access_token) throw new Error("Your customer session has expired. Please sign in again.");
+
+      const headers = { Authorization: `Bearer ${sessionData.session.access_token}` };
+      let body;
+      if (method === "E-Wallet") {
+        body = new FormData();
+        body.append("orderId", order.id);
+        body.append("method", method);
+        body.append("note", remainingPaymentNote.trim());
+        body.append("file", remainingPaymentFile);
+      } else {
+        headers["Content-Type"] = "application/json";
+        body = JSON.stringify({ orderId: order.id, method, note: remainingPaymentNote.trim() });
+      }
+
+      const response = await fetch("/api/orders/payment-proof", { method: "POST", headers, body });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "We could not submit the remaining payment.");
+      if (!payload.order?.id) throw new Error("The server did not return the updated payment state.");
+
+      setOrders((prev) => prev.map((item) => item.id === order.id ? { ...item, ...payload.order } : item));
+      setRemainingPaymentModal(null);
+      setRemainingPaymentFile(null);
+      setRemainingPaymentNote("");
+      alert(payload.notificationWarning
+        ? `Payment submitted. ${payload.notificationWarning}`
+        : "Payment submitted. The shop owner will review it before confirming your balance.");
+    } catch (error) {
+      setRemainingPaymentError(error.message || "We could not submit the remaining payment.");
+    } finally {
+      setSubmittingRemainingPayment(false);
     }
   };
 
@@ -246,6 +360,8 @@ export default function TrackOrderPage() {
     const rev = reviewsState[orderId];
     if (!rev || !rev.rating) return alert("Please select a star rating.");
     const targetOrder = orders.find(o => o.id === orderId);
+    const reviewItems = Array.isArray(targetOrder?.items) ? targetOrder.items.filter((item) => item?.id && item?.name) : [];
+    if (reviewItems.length > 1 && !rev.review_service_id) return alert("Please choose which service or product you are reviewing.");
     if (!["COMPLETED", "DELIVERY_COMPLETED"].includes(targetOrder?.status)) {
       return alert("Feedback and rating can only be submitted after delivery or pickup is completed.");
     }
@@ -253,32 +369,25 @@ export default function TrackOrderPage() {
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const customerName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || "Customer";
 
-      const { error } = await supabase
+      const { data: savedReview, error } = await supabase
         .from("orders")
-        .update({ rating: rev.rating, feedback: rev.feedback })
+        .update({ rating: rev.rating, feedback: rev.feedback, review_service_id: rev.review_service_id || null })
         .eq("id", orderId)
         .eq("customer_id", user?.id)
-        .in("status", ["COMPLETED", "DELIVERY_COMPLETED"]);
+        .in("status", ["COMPLETED", "DELIVERY_COMPLETED"])
+        .select("feedback_masked, review_service_id")
+        .single();
 
       if (error) throw error;
 
-      if (targetOrder && targetOrder.business_id) {
-        await supabase
-          .from("business_reviews")
-          .upsert({
-            order_id: orderId,
-            business_id: targetOrder.business_id,
-            customer_id: user?.id,
-            customer_name: customerName,
-            rating: rev.rating,
-            feedback: rev.feedback,
-            created_at: new Date().toISOString(),
-          }, { onConflict: "order_id" });
-      }
-
-      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, rating: rev.rating, feedback: rev.feedback } : o));
+      setOrders(prev => prev.map(o => o.id === orderId ? {
+        ...o,
+        rating: rev.rating,
+        feedback: savedReview?.feedback_masked || "",
+        feedback_masked: savedReview?.feedback_masked || "",
+        review_service_id: savedReview?.review_service_id || rev.review_service_id || null,
+      } : o));
       alert("Thank you! Your review has been published.");
     } catch (err) {
       alert(err.message || "Failed to submit review.");
@@ -329,6 +438,54 @@ export default function TrackOrderPage() {
               <button onClick={() => setViewRefundProof(null)} className="p-1 text-slate-400 hover:text-slate-800"><X size={18} /></button>
             </div>
             <img src={viewRefundProof} alt="Refund Proof" className="w-full h-auto border border-slate-200 max-h-[60vh] object-contain" />
+          </div>
+        </div>
+      )}
+
+      {remainingPaymentModal && (
+        <div className="dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="remaining-payment-title" onClick={() => !submittingRemainingPayment && setRemainingPaymentModal(null)}>
+          <div className="dialog-surface w-full max-w-lg space-y-5 p-6" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#EC008C]">Remaining balance</p>
+                <h2 id="remaining-payment-title" className="mt-1 text-lg font-black tracking-tight text-slate-950">
+                  {remainingPaymentModal.method === "E-Wallet" ? "Upload payment proof" : "Confirm offline payment"}
+                </h2>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">The shop will review this payment before the order can be completed.</p>
+              </div>
+              <button type="button" onClick={() => setRemainingPaymentModal(null)} disabled={submittingRemainingPayment} className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:opacity-40" aria-label="Close remaining payment dialog"><X size={18} /></button>
+            </div>
+
+            <div className="rounded-xl border border-[#00AFC0]/30 bg-[#EFFFFF] p-4 text-xs">
+              <div className="flex items-center justify-between gap-3"><span className="text-slate-600">Order</span><strong className="text-slate-950">#{String(remainingPaymentModal.order.id).split("-")[0].toUpperCase()}</strong></div>
+              <div className="mt-2 flex items-center justify-between gap-3"><span className="text-slate-600">Remaining balance</span><strong className="text-[#EC008C]">{formatPesoAmount(getOrderPaymentSummary(remainingPaymentModal.order).balance)}</strong></div>
+              <div className="mt-2 flex items-center justify-between gap-3"><span className="text-slate-600">Method</span><strong className="text-slate-950">{remainingPaymentModal.method}</strong></div>
+            </div>
+
+            {remainingPaymentModal.method === "E-Wallet" ? (
+              <div>
+                <label htmlFor="remaining-payment-proof" className="mb-2 block text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Payment proof</label>
+                <input id="remaining-payment-proof" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={(event) => setRemainingPaymentFile(event.target.files?.[0] || null)} className="block w-full rounded-xl border border-dashed border-[#00AFC0] bg-[#F7FFFF] p-3 text-xs font-semibold text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-[#1A1A1A] file:px-3 file:py-2 file:text-xs file:font-black file:text-white" />
+                <p className="mt-2 text-[11px] text-slate-500">PNG, JPG, WebP, or PDF · maximum 5 MB</p>
+                {remainingPaymentFile && <p className="mt-1 break-all text-[11px] font-bold text-slate-700">Selected: {remainingPaymentFile.name}</p>}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-[#FFF200] bg-[#FFFBE0] p-4 text-xs leading-relaxed text-slate-700">
+                Confirm that you already paid the remaining balance by cash, COD, or another offline method. The shop owner will verify it manually.
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="remaining-payment-note" className="mb-2 block text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Note (optional)</label>
+              <textarea id="remaining-payment-note" value={remainingPaymentNote} onChange={(event) => setRemainingPaymentNote(event.target.value)} maxLength={500} rows={3} placeholder="Add a short note for the shop owner" className="w-full resize-none rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-800 outline-none focus:border-[#00AFC0] focus:ring-2 focus:ring-[#00AFC0]/20" />
+            </div>
+
+            {remainingPaymentError && <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700" role="alert">{remainingPaymentError}</p>}
+
+            <div className="flex gap-3">
+              <button type="button" onClick={() => setRemainingPaymentModal(null)} disabled={submittingRemainingPayment} className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-50">Cancel</button>
+              <button type="button" onClick={handleSubmitRemainingPayment} disabled={submittingRemainingPayment} className="flex-1 rounded-xl bg-[#1A1A1A] px-4 py-3 text-xs font-black text-white transition-colors hover:bg-[#EC008C] disabled:cursor-wait disabled:opacity-60">{submittingRemainingPayment ? "Submitting..." : remainingPaymentModal.method === "E-Wallet" ? "Submit payment proof" : "I already paid"}</button>
+            </div>
           </div>
         </div>
       )}
@@ -430,6 +587,7 @@ export default function TrackOrderPage() {
                 const isRefunded = o.status === "REFUNDED";
                 const canRequestRefund = o.status === "CANCELLED";
                 const progressSteps = getProgressSteps(o);
+                const payment = getOrderPaymentSummary(o);
                 const currentProgressIndex = o.delivery_type === "DELIVERY" && o.status === "COMPLETED"
                   ? progressSteps.length - 1
                   : progressSteps.findIndex((step) => step.key === o.status);
@@ -495,19 +653,6 @@ export default function TrackOrderPage() {
                           >
                             Quotation
                           </button>
-                          <button
-                            onClick={() => { setViewDocType("DELIVERY"); setViewReceipt(o); }}
-                            className="inline-flex items-center rounded-xl border border-[#8DEEEE] bg-[#E7FFFF] px-3.5 py-2 text-xs font-bold text-[#006A6A] transition-colors hover:bg-[#00FFFF]"
-                          >
-                            Delivery
-                          </button>
-                          <button
-                            onClick={() => { setViewDocType("INVOICE"); setViewReceipt(o); }}
-                            className="inline-flex items-center rounded-xl border border-[#EFA3D0] bg-[#FFF0F8] px-3.5 py-2 text-xs font-bold text-[#A90063] transition-colors hover:bg-[#EC008C] hover:text-white"
-                          >
-                            Invoice
-                          </button>
-
                           <Link
                             href={`/messages?business=${o.business_id}`}
                             className="inline-flex items-center rounded-xl bg-[#1A1A1A] px-4 py-2 text-xs font-extrabold text-white transition-colors hover:bg-[#EC008C]"
@@ -550,19 +695,73 @@ export default function TrackOrderPage() {
                           <p className="font-bold text-slate-900 uppercase tracking-wider text-[11px] mb-2">Payment Details</p>
                           <div className="flex justify-between text-slate-600">
                             <span>Total Amount:</span>
-                            <span className="font-bold text-slate-900">₱{Number(o.total).toFixed(2)}</span>
+                            <span className="font-bold text-slate-900">{formatPesoAmount(payment.total)}</span>
                           </div>
                           <div className="flex justify-between text-slate-600">
                             <span>Downpayment Paid:</span>
-                            <span className="font-bold text-emerald-600">₱{Number(o.downpayment_amount || 0).toFixed(2)}</span>
+                            <span className="font-bold text-emerald-600">{formatPesoAmount(payment.downpayment)}</span>
                           </div>
+                          <div className="flex justify-between text-slate-600">
+                            <span>Confirmed Paid:</span>
+                            <span className="font-bold text-emerald-600">{formatPesoAmount(payment.confirmedAmount)}</span>
+                          </div>
+                          {o.delivery_type === "DELIVERY" && (
+                            <div className="flex justify-between text-slate-600">
+                              <span>Delivery Fee:</span>
+                              <span className="font-bold text-[#009FA0]">{formatPesoAmount(o.delivery_fee)}</span>
+                            </div>
+                          )}
                           <div className="flex justify-between text-slate-600 pt-1 border-t border-slate-200">
                             <span>Remaining Balance:</span>
-                            <span className="font-bold text-slate-900">₱{Number(o.balance_amount || 0).toFixed(2)}</span>
+                            <span className={`font-bold ${payment.balance > 0 ? "text-[#EC008C]" : "text-emerald-600"}`}>{formatPesoAmount(payment.balance)}</span>
                           </div>
+                          <div className="flex justify-between gap-3 border-t border-slate-200 pt-2 text-slate-600">
+                            <span>Payment status:</span>
+                            <span className={`text-right font-bold ${payment.isPaymentConfirmed ? "text-emerald-600" : payment.paymentProofPresent ? "text-amber-700" : "text-[#EC008C]"}`}>{payment.statusLabel}{payment.isPaymentConfirmed ? " · Paid in full" : ""}</span>
+                          </div>
+                          <p className="border-t border-slate-200 pt-2 text-[11px] leading-relaxed text-slate-500">
+                            {payment.isPaymentConfirmed
+                              ? "Your payment has been confirmed by the shop."
+                              : payment.status === "PROOF_AWAITING_CONFIRMATION"
+                                ? "Your payment proof is awaiting confirmation from the shop."
+                                : payment.balance > 0
+                                  ? "The remaining balance must be paid and confirmed before the shop can complete this order."
+                                  : "Payment is waiting for confirmation from the shop."}
+                          </p>
                         </div>
 
                       </div>
+
+                      {payment.balance > 0 && !isTerminalStatus && !payment.isPaymentConfirmed && payment.downpayment <= payment.confirmedAmount + 0.009 ? (
+                        <section className={`space-y-3 rounded-2xl border p-4 ${payment.remainingPaymentRejected ? "border-rose-200 bg-rose-50" : payment.remainingPaymentPending ? "border-amber-200 bg-amber-50" : "border-[#00AFC0]/30 bg-[#EFFFFF]"}`} aria-label="Remaining payment">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <p className="inline-flex items-center gap-2 text-xs font-black uppercase tracking-[0.12em] text-slate-900"><CreditCard size={15} className="text-[#EC008C]" /> Remaining payment</p>
+                              <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                                {payment.remainingPaymentPending
+                                  ? "Your payment was submitted and is waiting for the shop owner to review it."
+                                  : payment.remainingPaymentRejected
+                                    ? `The shop asked you to resubmit this payment${o.remaining_payment_rejection_reason ? `: ${o.remaining_payment_rejection_reason}` : "."}`
+                                    : "Pay the remaining balance, then submit proof or tell the shop you already paid offline."}
+                              </p>
+                            </div>
+                            <span className={`w-fit rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${payment.remainingPaymentPending ? "border-amber-300 bg-white text-amber-800" : payment.remainingPaymentRejected ? "border-rose-300 bg-white text-rose-700" : "border-[#00AFC0]/40 bg-white text-[#007C82]"}`}>
+                              {payment.remainingPaymentPending ? payment.remainingPaymentStatus === "SUBMITTED" ? "Submitted" : "Under review" : payment.remainingPaymentRejected ? "Resubmission needed" : "Action needed"}
+                            </span>
+                          </div>
+                          {!payment.remainingPaymentPending && (
+                            <div className="flex flex-wrap gap-2">
+                              <button type="button" onClick={() => openRemainingPaymentModal(o, "E-Wallet")} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-[#1A1A1A] px-4 py-2.5 text-xs font-black text-white transition-colors hover:bg-[#EC008C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EC008C]"><Upload size={14} /> {payment.remainingPaymentRejected ? "Resubmit payment proof" : "Upload payment proof"}</button>
+                              <button type="button" onClick={() => openRemainingPaymentModal(o, "COD")} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-[#E6C94A] bg-[#FFFBE0] px-4 py-2.5 text-xs font-black text-[#665F00] transition-colors hover:bg-[#FFF200] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E6C94A]"><CheckCircle2 size={14} /> I already paid offline</button>
+                            </div>
+                          )}
+                        </section>
+                      ) : payment.balance > 0 && !isTerminalStatus && !payment.isPaymentConfirmed ? (
+                        <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4" aria-label="Initial payment status">
+                          <p className="inline-flex items-center gap-2 text-xs font-black uppercase tracking-[0.12em] text-slate-900"><CreditCard size={15} className="text-amber-700" /> Initial payment awaiting confirmation</p>
+                          <p className="mt-1 text-xs leading-relaxed text-slate-600">The shop must confirm your initial downpayment before you can submit the remaining balance.</p>
+                        </section>
+                      ) : null}
 
                       {/* Actions Banner */}
                       {(canCancel || canRequestRefund || isRefundPending) && (
@@ -614,8 +813,24 @@ export default function TrackOrderPage() {
 
                       {/* Review Submission for Completed Orders */}
                       {isReviewable && (
-                        <div className="space-y-3 rounded-2xl border-t border-slate-100 bg-slate-50/50 p-4 pt-4">
-                          <p className="text-xs font-bold text-slate-900">Leave a Review for {bInfo.name}</p>
+                        <div id={`review-${o.id}`} tabIndex="-1" className="space-y-3 rounded-2xl border-t border-slate-100 bg-slate-50/50 p-4 pt-4 outline-none focus-visible:ring-2 focus-visible:ring-[#EC008C]">
+                          <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800" role="status">
+                            Thank you. We appreciate your support. Your order has been completed.
+                          </p>
+                          <p className="text-xs font-bold text-slate-900">Review the service or products from {bInfo.name}</p>
+                          {Array.isArray(o.items) && o.items.filter((item) => item?.id && item?.name).length > 1 && (
+                            <label className="block text-xs font-semibold text-slate-700">
+                              Which service or product are you reviewing?
+                              <select
+                                value={reviewsState[o.id]?.review_service_id || ""}
+                                onChange={(event) => setReviewsState((prev) => ({ ...prev, [o.id]: { ...prev[o.id], review_service_id: event.target.value } }))}
+                                className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-xs outline-none focus:ring-2 focus:ring-[#EC008C]"
+                              >
+                                <option value="">Choose an item</option>
+                                {o.items.filter((item) => item?.id && item?.name).map((item) => <option key={item.id} value={item.id}>{item.name}{item.quantity > 1 ? ` × ${item.quantity}` : ""}</option>)}
+                              </select>
+                            </label>
+                          )}
                           <div className="flex items-center gap-1">
                             {[1, 2, 3, 4, 5].map((star) => (
                               <button

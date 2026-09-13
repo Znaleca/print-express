@@ -22,8 +22,8 @@ export async function POST(request) {
     if (error) throw error;
 
     return NextResponse.json({ success: true, updatedCount: Number(updatedCount || 0) });
-  } catch (error) {
-    console.error("OWNER_ACTIVITY_RECORD_ERROR:", error);
+  } catch {
+    console.error("OWNER_ACTIVITY_RECORD_ERROR");
     return NextResponse.json({ error: "Unable to record owner activity." }, { status: 500 });
   }
 }

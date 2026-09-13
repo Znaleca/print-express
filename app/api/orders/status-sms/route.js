@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabaseAdmin";
 import { normalizePhilippinePhone } from "@/lib/phone";
+import { formatOrderPaymentSummaryForSms } from "@/lib/paymentSummary";
 
 const SMS_STATUS_LABELS = {
   PLACED: "PLACED",
@@ -12,12 +13,12 @@ const SMS_STATUS_LABELS = {
   CANCELLED: "CANCELLED",
 };
 
-const buildSmsMessage = ({ statusLabel, order, business }) => {
+export const buildSmsMessage = ({ statusLabel, order, business }) => {
   const orderCode = order.id.split("-")[0].toUpperCase();
   const shopName = business?.name || "your print shop";
 
   if (statusLabel === "PLACED") {
-    return `Press & Present: Order #${orderCode} has been PLACED at ${shopName}. We will notify you when production starts.`;
+    return `Press & Present: Order #${orderCode} has been PLACED at ${shopName}. We will notify you when production starts.\n\n${formatOrderPaymentSummaryForSms(order)}`;
   }
 
   if (statusLabel === "PREPARING") {
@@ -82,7 +83,7 @@ export async function POST(request) {
 
     const { data: order, error: orderError } = await supabase
       .from("orders")
-      .select("id, business_id, status, customer_phone, total, balance_amount")
+      .select("id, business_id, status, customer_phone, total, downpayment_amount, balance_amount")
       .eq("id", orderId)
       .single();
 
@@ -99,6 +100,16 @@ export async function POST(request) {
     if (businessError || !business || business.owner_id !== userData.user.id) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
+
+    // Keep status alerts compatible with an app node that starts before the
+    // payment migration has reached its database, while using the authoritative
+    // confirmation snapshot as soon as it is available.
+    const { data: paymentSnapshot } = await supabase
+      .from("orders")
+      .select("confirmed_payment_amount, payment_confirmation_status, payment_confirmed_at, fully_paid")
+      .eq("id", orderId)
+      .maybeSingle();
+    if (paymentSnapshot) Object.assign(order, paymentSnapshot);
 
     if (order.status !== status) {
       return NextResponse.json({ skipped: true, reason: "Order status has changed; refresh before sending an update." }, { status: 409 });

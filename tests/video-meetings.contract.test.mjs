@@ -1,0 +1,147 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const source = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
+
+test("meeting scheduling keeps timezone, notice, duration, and overlap rules in one helper", () => {
+  const helper = source("lib/meetingScheduling.js");
+  assert.match(helper, /DEFAULT_MEETING_SETTINGS/);
+  assert.match(helper, /zonedDateTimeToUtc/);
+  assert.match(helper, /meeting_min_notice_minutes/);
+  assert.match(helper, /meeting_max_days_ahead/);
+  assert.match(helper, /busyIntervals/);
+  assert.match(helper, /REQUESTED.*SCHEDULED.*LIVE/s);
+  assert.match(helper, /MINIMUM_MEETING_NOTICE_MINUTES = 30/);
+  assert.match(helper, /isMeetingStartBookable/);
+});
+
+test("meeting booking accepts exactly 30 minutes, accepts later slots, and blocks earlier slots", async () => {
+  const { isMeetingStartBookable } = await import("../lib/meetingScheduling.js");
+  const now = "2026-09-13T01:00:00.000Z";
+  assert.equal(isMeetingStartBookable("2026-09-13T01:30:00.000Z", { now }), true);
+  assert.equal(isMeetingStartBookable("2026-09-13T01:35:00.000Z", { now }), true);
+  assert.equal(isMeetingStartBookable("2026-09-13T01:29:59.000Z", { now }), false);
+  assert.equal(isMeetingStartBookable("2026-09-13T01:35:00.000Z", { now, minimumNoticeMinutes: 60 }), false);
+});
+
+test("database booking is transactional and prevents duplicate business slots", () => {
+  const migration = source("supabase/migrations/20260913200000_calendly_style_video_meetings.sql");
+  assert.match(migration, /create extension if not exists btree_gist/i);
+  assert.match(migration, /exclude using gist/i);
+  assert.match(migration, /video_call_book/);
+  assert.match(migration, /video_call_reschedule/);
+  assert.match(migration, /video_call_confirm/);
+  assert.match(migration, /for update/);
+  assert.match(migration, /meeting_requires_approval/);
+  assert.match(migration, /requested_slot_at/);
+  assert.match(migration, /revoke all on function public.video_call_book/);
+});
+
+test("video-call API exposes availability and never returns secure room names from list queries", () => {
+  const route = source("app/api/video-calls/route.js");
+  assert.match(route, /export async function GET/);
+  assert.match(route, /view === "owner"/);
+  assert.match(route, /buildMeetingSlots/);
+  assert.match(route, /business_hours/);
+  assert.match(route, /requested_slot_at/);
+  assert.match(route, /room_name: _roomName/);
+  assert.match(route, /video_call_book/);
+  assert.match(route, /video_call_reschedule/);
+  assert.match(route, /video_call_confirm/);
+  assert.match(route, /request_reschedule/);
+});
+
+test("owners can reopen a missed meeting for the customer to choose a replacement slot", () => {
+  const migration = source("supabase/migrations/20260913240000_owner_requested_meeting_reschedule.sql");
+  const ownerCalendar = source("app/owner/calendar/page.jsx");
+  const customer = source("app/messages/page.jsx");
+  const ownerMessages = source("app/owner/messages/page.jsx");
+  assert.match(migration, /video_call_request_reschedule/);
+  assert.match(migration, /Only the shop owner can request a reschedule/);
+  assert.match(migration, /status = 'REQUESTED'/);
+  assert.match(migration, /event', 'reschedule_requested'/);
+  assert.match(migration, /event_name = 'reschedule_requested'/);
+  assert.match(ownerCalendar, /Ask customer to reschedule/);
+  assert.match(ownerCalendar, /request_reschedule/);
+  assert.match(customer, /Choose a new meeting time/);
+  assert.match(customer, /rescheduleRequestedMeeting/);
+  assert.match(ownerMessages, /requestVideoCallReschedule/);
+});
+
+test("server reminder worker is protected, scheduled, and sends an idempotent reminder to both participants", () => {
+  const route = source("app/api/cron/video-call-reminders/route.js");
+  const email = source("lib/meetingEmail.js");
+  const migration = source("supabase/migrations/20260913230000_video_call_reminders_and_cutoff.sql");
+  const vercel = source("vercel.json");
+  assert.match(route, /CRON_SECRET/);
+  assert.match(route, /scheduled_at/);
+  assert.match(route, /15 \* 60 \* 1000/);
+  assert.match(route, /sendMeetingReminder/);
+  assert.match(email, /REMINDER_15/);
+  assert.match(email, /CUSTOMER.*OWNER/s);
+  assert.match(email, /starts in 15 minutes/);
+  assert.match(email, /messages[\s\S]*conversation/);
+  assert.match(email, /owner\/calendar/);
+  assert.match(migration, /REMINDER_15/);
+  assert.match(migration, /between 30 and 10080/);
+  assert.match(vercel, /video-call-reminders/);
+});
+
+test("meeting notifications are deduplicated and use branded, escaped Resend email", () => {
+  const email = source("lib/meetingEmail.js");
+  const migration = source("supabase/migrations/20260913200000_calendly_style_video_meetings.sql");
+  assert.match(email, /claim_video_call_email/);
+  assert.match(email, /escapeHtml/);
+  assert.match(email, /Press &amp; Present/);
+  assert.match(email, /EMAIL_FROM/);
+  assert.match(email, /video_call_email_events/);
+  assert.ok(migration.includes("event_type in ('BOOKED', 'CONFIRMED', 'RESCHEDULED', 'CANCELLED')"));
+});
+
+test("customer messages provide booking and rescheduling without replacing the secure call room", () => {
+  const customer = source("app/messages/page.jsx");
+  const modal = source("components/MeetingBookingModal.jsx");
+  assert.match(customer, /MeetingBookingModal/);
+  assert.match(customer, /setShowMeetingBooking\(true\)/);
+  assert.match(customer, /meta.event\)/);
+  assert.match(modal, /videoCallQuery/);
+  assert.match(modal, /videoCallAction\(action/);
+  assert.match(modal, /reschedule/);
+  assert.match(customer, /VideoCallModal/);
+});
+
+test("meeting booking uses a compact month, day, and time picker", () => {
+  const modal = source("components/MeetingBookingModal.jsx");
+  assert.match(modal, /availableMonths/);
+  assert.match(modal, /Previous month/);
+  assert.match(modal, /Next month/);
+  assert.match(modal, /1\. Choose a month/);
+  assert.match(modal, /2\. Choose a day/);
+  assert.match(modal, /3\. Choose a time/);
+  assert.match(modal, /buildCalendarDays/);
+  assert.match(modal, /isAvailable: Boolean\(date\?\.slots\?\.length\)/);
+  assert.match(modal, /disabled=\{!calendarDay\.isAvailable\}/);
+  assert.match(modal, /aria-pressed/);
+  assert.match(modal, /border-\[#00aeb5\] bg-\[#dffafa\]/);
+  assert.match(modal, /border-slate-400 bg-slate-300/);
+  assert.doesNotMatch(modal, /dates\.map\(\(date\) => <button/);
+});
+
+test("owner calendar preserves owner actions, availability settings, and conversation links", () => {
+  const calendar = source("app/owner/calendar/page.jsx");
+  const sidebar = source("components/owner/OwnerSidebar.jsx");
+  const ownerMessages = source("app/owner/messages/page.jsx");
+  assert.match(calendar, /view: "owner"/);
+  assert.match(calendar, /meeting_duration_minutes/);
+  assert.match(calendar, /business_hours/);
+  assert.ok(calendar.includes("owner/messages?conversation"));
+  assert.match(calendar, /videoCallAction\("join"/);
+  assert.match(calendar, /videoCallAction\("cancel"/);
+  assert.match(sidebar, /CalendarDays/);
+  assert.match(sidebar, /\/owner\/calendar/);
+  assert.ok(ownerMessages.includes("new URLSearchParams(window.location.search)"));
+});
