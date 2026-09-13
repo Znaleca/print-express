@@ -73,20 +73,72 @@ async function loadAvailability(auth, searchParams) {
     if (!conversation || conversation.customer_id !== auth.user.id || conversation.business_id !== businessId) return { error: NextResponse.json({ error: "You are not authorized to view this availability." }, { status: 403 }) };
   }
 
-  const [{ data: hours }, { data: bookedCalls }] = await Promise.all([
+  const [hoursResult, bookedCallsResult] = await Promise.all([
     auth.admin.from("business_hours").select("day_of_week, opens_at, closes_at, is_closed").eq("business_id", businessId).order("day_of_week"),
-    auth.admin.from("video_calls").select("id, status, requested_slot_at, scheduled_at, duration_minutes, buffer_minutes").eq("business_id", businessId).in("status", ["REQUESTED", "SCHEDULED", "LIVE"]),
+    auth.admin.from("video_calls").select("id, conversation_id, business_id, customer_id, owner_id, status, requested_slot_at, scheduled_at, duration_minutes, buffer_minutes").eq("business_id", businessId).in("status", ["REQUESTED", "SCHEDULED", "LIVE"]),
   ]);
+  if (hoursResult.error || bookedCallsResult.error) {
+    console.error("VIDEO_CALL_AVAILABILITY_QUERY_FAILED", {
+      hours: hoursResult.error?.code || null,
+      calls: bookedCallsResult.error?.code || null,
+    });
+    return { error: NextResponse.json({ error: "Meeting availability is temporarily unavailable." }, { status: 503 }) };
+  }
+
+  const hours = hoursResult.data || [];
+  const bookedCalls = bookedCallsResult.data || [];
+  const requestedExcludeCallId = String(searchParams.get("excludeCallId") || "").trim();
+  let excludeCallId = null;
+  if (requestedExcludeCallId) {
+    const excludedCall = bookedCalls.find((call) => call.id === requestedExcludeCallId);
+    const canExclude = Boolean(excludedCall)
+      && excludedCall.business_id === businessId
+      && (
+        auth.profile.role === "ADMIN"
+        || excludedCall.owner_id === auth.user.id
+        || (excludedCall.customer_id === auth.user.id && excludedCall.conversation_id === conversationId)
+      );
+    if (!canExclude) return { error: NextResponse.json({ error: "That meeting cannot be excluded from availability." }, { status: 403 }) };
+    excludeCallId = requestedExcludeCallId;
+  }
+
   const settings = normalizeMeetingSettings(business);
   const timeZone = business.timezone || "Asia/Manila";
-  const dates = buildMeetingSlots({ timeZone, hours: hours || [], settings, bookedCalls: bookedCalls || [], excludeCallId: searchParams.get("excludeCallId") || null });
+  const dates = buildMeetingSlots({ timeZone, hours, settings, bookedCalls, excludeCallId, includeBlockedSlots: true });
   return {
     data: {
       business: { id: business.id, name: business.name, timezone: timeZone },
       settings,
-      hours: hours || [],
+      hours,
       dates,
-      hasPublishedHours: Boolean(hours?.length),
+      hasPublishedHours: Boolean(hours.length),
+    },
+  };
+}
+
+async function loadMeeting(auth, searchParams) {
+  const callId = String(searchParams.get("callId") || "").trim();
+  if (!callId) return { error: NextResponse.json({ error: "A meeting ID is required." }, { status: 400 }) };
+
+  const { data: call, error } = await auth.admin
+    .from("video_calls")
+    .select("id, conversation_id, business_id, customer_id, owner_id, status, created_at, updated_at, requested_slot_at, scheduled_at, available_from_at, expires_at, duration_minutes, buffer_minutes, customer_note, booking_timezone, reschedule_count, cancellation_reason")
+    .eq("id", callId)
+    .maybeSingle();
+  if (error) return { error: NextResponse.json({ error: "Meeting details are temporarily unavailable." }, { status: 503 }) };
+  if (!call) return { error: NextResponse.json({ error: "Meeting not found." }, { status: 404 }) };
+  if (auth.profile.role !== "ADMIN" && call.customer_id !== auth.user.id && call.owner_id !== auth.user.id) {
+    return { error: NextResponse.json({ error: "You are not a participant in this meeting." }, { status: 403 }) };
+  }
+
+  const { data: business } = await auth.admin.from("businesses").select("name, timezone").eq("id", call.business_id).maybeSingle();
+  return {
+    data: {
+      call: {
+        ...safeCall(call),
+        business_name: business?.name || "Print shop",
+        timezone: call.booking_timezone || business?.timezone || "Asia/Manila",
+      },
     },
   };
 }
@@ -133,7 +185,11 @@ export async function GET(request) {
     if (auth.error) return auth.error;
     const searchParams = new URL(request.url).searchParams;
     const view = searchParams.get("view") || "availability";
-    const result = view === "owner" ? await loadOwnerCalendar(auth) : await loadAvailability(auth, searchParams);
+    const result = view === "owner"
+      ? await loadOwnerCalendar(auth)
+      : view === "meeting"
+        ? await loadMeeting(auth, searchParams)
+        : await loadAvailability(auth, searchParams);
     if (result.error) return result.error;
     return NextResponse.json(result.data);
   } catch {
@@ -162,6 +218,7 @@ export async function POST(request) {
     const { data, error } = await userClient.rpc(rpc.name, rpc.args(body));
     if (error) return NextResponse.json({ error: String(error.message || "Unable to update the meeting.").replace(/^.*DETAIL:\s*/i, "").slice(0, 240) }, { status: safeErrorStatus(error.message) });
     const call = Array.isArray(data) ? data[0] : data;
+    if (!call) return NextResponse.json({ error: "The meeting was not saved. Please choose the time again." }, { status: 500 });
     let notification = null;
     const notificationType = { book: "BOOKED", confirm: "CONFIRMED", schedule: "CONFIRMED", reschedule: "RESCHEDULED", request_reschedule: "RESCHEDULE_REQUESTED", cancel: "CANCELLED" }[action];
     if (call && notificationType) notification = await sendMeetingNotification({ admin: auth.admin, call, eventType: notificationType });

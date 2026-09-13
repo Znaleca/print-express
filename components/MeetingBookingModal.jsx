@@ -24,6 +24,8 @@ const getDateKey = (monthKey, day) => {
   return `${match[1]}-${match[2]}-${String(day).padStart(2, "0")}`;
 };
 
+const getAvailableSlotCount = (date) => date?.slots?.filter((slot) => slot.available !== false).length || 0;
+
 const buildCalendarDays = (monthKey, dates) => {
   const match = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
   if (!match) return [];
@@ -40,7 +42,7 @@ const buildCalendarDays = (monthKey, dates) => {
     const day = index - firstWeekday + 1;
     const dateKey = getDateKey(monthKey, day);
     const date = datesByKey.get(dateKey) || null;
-    return { key: dateKey, day, date, isAvailable: Boolean(date?.slots?.length) };
+    return { key: dateKey, day, date, isAvailable: getAvailableSlotCount(date) > 0 };
   });
 };
 
@@ -76,7 +78,7 @@ export default function MeetingBookingModal({
       setAvailability(result);
       const firstDate = result.dates?.[0];
       setSelectedMonth(getMonthKey(firstDate?.dateKey));
-      setSelectedDate("");
+      setSelectedDate(firstDate?.dateKey || "");
       setSelectedSlot(null);
     } catch (loadError) {
       setError(loadError.message || "Meeting availability is unavailable.");
@@ -125,7 +127,7 @@ export default function MeetingBookingModal({
     const nextMonth = availableMonths[visibleMonthIndex + direction];
     if (!nextMonth) return;
     setSelectedMonth(nextMonth);
-    setSelectedDate("");
+    setSelectedDate(dates.find((date) => getMonthKey(date.dateKey) === nextMonth)?.dateKey || "");
     setSelectedSlot(null);
   };
 
@@ -143,6 +145,7 @@ export default function MeetingBookingModal({
         customerNote: note.trim() || undefined,
         timezone: availability?.business?.timezone,
       });
+      if (!result?.call?.id) throw new Error("The meeting was not saved. Please choose the time again.");
       setWarning(result.warning || "");
       onBooked?.(result.call);
     } catch (saveError) {
@@ -208,7 +211,7 @@ export default function MeetingBookingModal({
                         className={`min-h-12 rounded-lg border px-1 py-1.5 text-center transition-colors ${calendarDay.isAvailable && calendarDay.date?.dateKey === activeDate?.dateKey ? "border-[#00aeb5] bg-[#b8f0f2] text-slate-900 ring-2 ring-[#00aeb5]/25" : calendarDay.isAvailable ? "border-[#00aeb5] bg-[#dffafa] text-slate-900 hover:bg-[#c8f5f5]" : "cursor-not-allowed border-slate-400 bg-slate-300 text-slate-600 opacity-70"}`}
                       >
                         <span className="block text-xs font-extrabold">{calendarDay.day}</span>
-                        {calendarDay.isAvailable && <span className="mt-0.5 block text-[9px] font-medium text-slate-500">{calendarDay.date.slots.length} {calendarDay.date.slots.length === 1 ? "slot" : "slots"}</span>}
+                        {calendarDay.isAvailable && <span className="mt-0.5 block text-[9px] font-medium text-slate-500">{getAvailableSlotCount(calendarDay.date)} {getAvailableSlotCount(calendarDay.date) === 1 ? "slot" : "slots"}</span>}
                       </button>
                     ) : <span key={calendarDay.key} aria-hidden="true" />)}
                   </div>
@@ -220,10 +223,28 @@ export default function MeetingBookingModal({
                     <>
                       <p className="mt-1 text-sm font-extrabold text-slate-900">{activeDate.label}</p>
                       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                        {activeDate.slots.map((slot) => <button type="button" key={slot.startAt} onClick={() => setSelectedSlot(slot)} aria-pressed={selectedSlot?.startAt === slot.startAt} className={`rounded-lg border px-3 py-3 text-center text-xs font-bold transition-colors ${selectedSlot?.startAt === slot.startAt ? "border-[#EC008C] bg-[#ffe4f2] text-slate-900" : "border-slate-200 bg-white text-slate-600 hover:border-[#EC008C]"}`}>{slot.label}</button>)}
+                        {activeDate.slots.map((slot) => {
+                          const isSlotAvailable = slot.available !== false;
+                          const isSelected = isSlotAvailable && selectedSlot?.startAt === slot.startAt;
+                          return (
+                            <button
+                              type="button"
+                              key={slot.startAt}
+                              onClick={() => isSlotAvailable && setSelectedSlot(slot)}
+                              disabled={!isSlotAvailable}
+                              aria-label={isSlotAvailable ? `Choose ${slot.label}` : `${slot.label} unavailable`}
+                              aria-pressed={isSelected}
+                              title={isSlotAvailable ? undefined : slot.unavailableReason || "Unavailable"}
+                              className={`rounded-lg border px-3 py-2.5 text-center text-xs font-bold transition-colors ${isSelected ? "border-[#EC008C] bg-[#ffe4f2] text-slate-900" : isSlotAvailable ? "border-slate-200 bg-white text-slate-600 hover:border-[#EC008C]" : "cursor-not-allowed border-slate-400 bg-slate-300 text-slate-500 opacity-80"}`}
+                            >
+                              <span className="block">{slot.label}</span>
+                              {!isSlotAvailable && <span className="mt-0.5 block text-[9px] font-semibold uppercase tracking-wide">Unavailable</span>}
+                            </button>
+                          );
+                        })}
                       </div>
                     </>
-                  ) : <p className="mt-2 text-xs font-semibold text-slate-500">Select an available day above to see its open times.</p>}
+                  ) : <p className="mt-2 text-xs font-semibold text-slate-500">Select a cyan day above to see its open times.</p>}
                 </section>
               </div>
               <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4">
@@ -237,7 +258,7 @@ export default function MeetingBookingModal({
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-white px-5 py-4 sm:px-6">
           <button type="button" onClick={onClose} disabled={saving} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Cancel</button>
-          <button type="submit" disabled={loading || saving || !selectedSlot || !dates.length} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-[#EC008C] disabled:cursor-not-allowed disabled:opacity-40">{saving && <Loader2 size={14} className="animate-spin" />}{saving ? "Saving…" : actionLabel}<CheckCircle2 size={14} /></button>
+          <button type="submit" disabled={loading || saving || !selectedSlot || !dates.length} title={!selectedSlot ? "Choose an available day and time first." : undefined} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-[#EC008C] disabled:cursor-not-allowed disabled:opacity-40">{saving && <Loader2 size={14} className="animate-spin" />}{saving ? "Saving…" : !selectedSlot ? "Choose a time" : actionLabel}<CheckCircle2 size={14} /></button>
         </div>
       </form>
     </div>
