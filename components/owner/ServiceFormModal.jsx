@@ -300,7 +300,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
   const [categoryRequestReason, setCategoryRequestReason] = useState("");
   const [categoryRequestLoading, setCategoryRequestLoading] = useState(false);
   const [categoryNotice, setCategoryNotice] = useState(null);
-  const [customSize, setCustomSize] = useState({ label: "", width: "", height: "", unit: "in", rate: "" });
+  const [customSize, setCustomSize] = useState({ label: "", width: "", height: "", unit: "in", price: "" });
   const [customMaterial, setCustomMaterial] = useState({ label: "", modifier: "" });
   const [customQuality, setCustomQuality] = useState({ label: "", modifier: "" });
   const [showCategoryRequest, setShowCategoryRequest] = useState(false);
@@ -456,14 +456,14 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
   const addCalculatedSizePreset = () => {
     const width = Number.parseFloat(customSize.width);
     const height = Number.parseFloat(customSize.height);
-    const rate = Number.parseFloat(customSize.rate);
-    if (!customSize.label.trim() || !Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0 || !Number.isFinite(rate) || rate < 0) {
-      setError("Enter a preset label, valid width, height, and price per area.");
+    const price = Number.parseFloat(customSize.price);
+    if (!customSize.label.trim() || !Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0 || !Number.isFinite(price) || price < 0) {
+      setError("Enter a preset label, valid width, height, and add-on price.");
       return;
     }
 
     const label = `${customSize.label.trim()} (${width} x ${height} ${customSize.unit})`;
-    const modifier = Number((width * height * rate).toFixed(2));
+    const modifier = Number(price.toFixed(2));
 
     setForm((f) => {
       const sizes = f.specs?.allowed_sizes || [];
@@ -481,13 +481,13 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
             unit: customSize.unit,
             last_width: width,
             last_height: height,
-            last_rate: rate,
+            last_price: price,
           },
         },
       };
     });
 
-    setCustomSize({ label: "", width: "", height: "", unit: customSize.unit, rate: customSize.rate });
+    setCustomSize({ label: "", width: "", height: "", unit: customSize.unit, price: customSize.price });
     setError(null);
   };
 
@@ -975,14 +975,14 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
               <details className="mt-3 rounded-xl border border-cyan-200 bg-white">
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-[11px] font-black text-slate-800">
                   <span className="flex items-center gap-2"><Calculator size={14} className="text-[#009FA0]" /> Add a custom size</span>
-                  <span className="text-[10px] font-semibold text-slate-400">Width × height × rate</span>
+                  <span className="text-[10px] font-semibold text-slate-400">Size details + add-on price</span>
                 </summary>
                 <div className="grid grid-cols-2 gap-2 border-t border-cyan-100 p-3 sm:grid-cols-5">
                   <input type="text" value={customSize.label} onChange={(e) => setCustomSize((p) => ({ ...p, label: e.target.value }))} placeholder="Label" className="col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-[#00AFC0] sm:col-span-1" />
                   <input type="number" min="0" step="0.01" value={customSize.width} onChange={(e) => setCustomSize((p) => ({ ...p, width: e.target.value }))} placeholder="Width" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-[#00AFC0]" />
                   <input type="number" min="0" step="0.01" value={customSize.height} onChange={(e) => setCustomSize((p) => ({ ...p, height: e.target.value }))} placeholder="Height" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-[#00AFC0]" />
                   <select value={customSize.unit} onChange={(e) => setCustomSize((p) => ({ ...p, unit: e.target.value }))} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-[#00AFC0]"><option value="in">in</option><option value="ft">ft</option><option value="cm">cm</option></select>
-                  <input type="number" min="0" step="0.01" value={customSize.rate} onChange={(e) => setCustomSize((p) => ({ ...p, rate: e.target.value }))} placeholder="Price / area" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-[#00AFC0]" />
+                  <input type="number" min="0" step="0.01" value={customSize.price} onChange={(e) => setCustomSize((p) => ({ ...p, price: e.target.value }))} placeholder="Add-on price" aria-label="Add-on price" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-[#00AFC0]" />
                   <button type="button" onClick={addCalculatedSizePreset} className="col-span-2 inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-[#EC008C] sm:col-span-1"><Plus size={13} /> Add size</button>
                 </div>
               </details>
