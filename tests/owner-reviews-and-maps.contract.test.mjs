@@ -91,7 +91,7 @@ test("all map consumers normalize coordinates and keep Leaflet client-only", asy
   assert.match(checkout, /delivery_coordinates:/);
   assert.match(ownerShop, /normalizeCoordinates\(form\.lat, form\.lng\)/);
   assert.match(ownerShop, /nominatim\.openstreetmap\.org\/reverse/);
-  assert.match(ownerShop, /Address filled from the map pin\. You can still edit it\./);
+  assert.match(ownerShop, /Address and map pin are synchronized\. You can still edit the address\./);
   assert.match(ownerShop, /addressEditVersionRef\.current \+= 1/);
   assert.match(ownerShop, /addressLookupControllerRef\.current\?\.abort\(\)/);
 });

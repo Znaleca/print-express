@@ -23,6 +23,17 @@ begin
     return true;
   end if;
 
+  -- Shop logos and QR images use {business_id}/{filename}.
+  if folders[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+     and exists (
+       select 1
+       from public.businesses b
+       where b.id = folders[1]::uuid
+         and b.owner_id = current_user_id
+     ) then
+    return true;
+  end if;
+
   -- Service images use services/{business_id}/{user_id}-... .
   if folders[1] = 'services'
      and folders[2] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'

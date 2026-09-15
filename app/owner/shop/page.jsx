@@ -57,6 +57,7 @@ export default function ShopProfilePage() {
   const addressLookupControllerRef = useRef(null);
   const addressEditVersionRef = useRef(0);
   const addressLookupIdRef = useRef(0);
+  const addressLookupValueRef = useRef("");
 
   // Logo upload state
   const [logoPreview, setLogoPreview] = useState(null);
@@ -249,6 +250,7 @@ export default function ShopProfilePage() {
     if (name === "address") {
       addressEditVersionRef.current += 1;
       addressLookupControllerRef.current?.abort();
+      addressLookupValueRef.current = "";
       setAddressLookupStatus("idle");
     }
     setForm((p) => ({
@@ -262,10 +264,85 @@ export default function ShopProfilePage() {
   };
 
   const formatDistanceInput = (name) => {
-    if (name !== "delivery_included_distance_km") return;
+    if (!["delivery_included_distance_km", "delivery_max_distance_km"].includes(name)) return;
     const numericValue = Number(form[name]);
     if (!Number.isFinite(numericValue) || numericValue <= 0) return;
     setForm((current) => ({ ...current, [name]: numericValue.toFixed(1) }));
+  };
+
+  const handleAddressLookup = async () => {
+    const addressToSearch = form.address.trim();
+    if (!addressToSearch) return;
+    if (addressLookupValueRef.current === addressToSearch) return;
+
+    addressLookupControllerRef.current?.abort();
+    addressLookupValueRef.current = addressToSearch;
+    const controller = new AbortController();
+    const lookupId = addressLookupIdRef.current + 1;
+    const editVersion = addressEditVersionRef.current;
+    addressLookupControllerRef.current = controller;
+    addressLookupIdRef.current = lookupId;
+    setAddressLookupStatus("loading");
+    let didTimeout = false;
+    const timeoutId = setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, 8000);
+
+    const searchAddress = async (query) => {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`,
+        {
+          signal: controller.signal,
+          headers: { Accept: "application/json", "Accept-Language": "en" },
+        }
+      );
+      if (!response.ok) throw new Error("Address lookup failed");
+      const results = await response.json();
+      return results?.[0] || null;
+    };
+
+    try {
+      let coordinates = null;
+      const parts = addressToSearch.split(/[\s,]+/).filter(Boolean);
+      const potentialCode = parts[0] || "";
+
+      if (potentialCode.includes("+")) {
+        const { OpenLocationCode } = await import("open-location-code");
+        const olc = new OpenLocationCode();
+
+        if (olc.isFull(potentialCode)) {
+          const decoded = olc.decode(potentialCode);
+          coordinates = normalizeCoordinates(decoded.latitudeCenter, decoded.longitudeCenter);
+        } else if (olc.isShort(potentialCode) && parts.length > 1) {
+          const reference = await searchAddress(addressToSearch.replace(potentialCode, "").trim());
+          if (reference) {
+            const fullCode = olc.recoverNearest(potentialCode, Number(reference.lat), Number(reference.lon));
+            const decoded = olc.decode(fullCode);
+            coordinates = normalizeCoordinates(decoded.latitudeCenter, decoded.longitudeCenter);
+          }
+        }
+      }
+
+      if (!coordinates) {
+        const result = await searchAddress(addressToSearch);
+        coordinates = normalizeCoordinates(result?.lat, result?.lon);
+      }
+
+      if (!coordinates) throw new Error("No address found for this location");
+      if (controller.signal.aborted || addressLookupIdRef.current !== lookupId || addressEditVersionRef.current !== editVersion) return;
+
+      setForm((current) => ({ ...current, lat: coordinates.lat, lng: coordinates.lng }));
+      setAddressLookupStatus("success");
+    } catch (error) {
+      if ((error?.name !== "AbortError" || didTimeout) && addressLookupIdRef.current === lookupId) {
+        addressLookupValueRef.current = "";
+        setAddressLookupStatus("error");
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      if (addressLookupControllerRef.current === controller) addressLookupControllerRef.current = null;
+    }
   };
 
   const handleLocationChange = async (lat, lng) => {
@@ -411,7 +488,13 @@ export default function ShopProfilePage() {
           validationMessage = "Website URL must start with https:// (or leave it blank).";
         }
       }
-      const deliveryValidation = validateDeliverySettings(form);
+      const deliveryValidation = form.delivery_enabled
+        ? validateDeliverySettings(form)
+        : {
+          valid: true,
+          errors: {},
+          values: { ...normalizeDeliverySettings(form), delivery_enabled: false },
+        };
       if (!deliveryValidation.valid) {
         setDeliveryValidationErrors(deliveryValidation.errors);
         validationMessage = validationMessage || "Fix the delivery pricing fields before saving.";
@@ -874,12 +957,12 @@ export default function ShopProfilePage() {
                 </div>
                 <label className="mt-5 block">
                   <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Address <span className="text-[#EC008C]">*</span></span>
-                  <input type="text" name="address" value={form.address} onChange={handleChange} placeholder="e.g. 123 Main St, City" required aria-required="true" aria-describedby="shop-address-help" className="mt-2 w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3.5 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
+                  <input type="text" name="address" value={form.address} onChange={handleChange} onBlur={handleAddressLookup} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); handleAddressLookup(); } }} placeholder="e.g. QFV5+Q6V, Sampaguita Street, Orani, Bataan" required aria-required="true" aria-describedby="shop-address-help" className="mt-2 w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3.5 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
                   <span id="shop-address-help" aria-live="polite" className={`mt-2 block text-[11px] ${addressLookupStatus === "error" ? "font-semibold text-amber-700" : "text-slate-500"}`}>
                     {addressLookupStatus === "loading" && "Finding the address for this map pin…"}
-                    {addressLookupStatus === "success" && "Address filled from the map pin. You can still edit it."}
+                    {addressLookupStatus === "success" && "Address and map pin are synchronized. You can still edit the address."}
                     {addressLookupStatus === "error" && "We could not find an exact address. You can type it manually."}
-                    {addressLookupStatus === "idle" && "Click or drag the map pin to fill this field, or type the address yourself."}
+                    {addressLookupStatus === "idle" && "Type an address or Plus Code, then press Enter or click away to pin it on the map."}
                   </span>
                 </label>
                 <div className="mt-5 overflow-hidden rounded-2xl border border-[#D8D6CE] bg-[#ECECE8]">
@@ -891,25 +974,8 @@ export default function ShopProfilePage() {
                       lat={form.lat}
                       lng={form.lng}
                       onChange={handleLocationChange}
-                      includedRadiusKm={form.delivery_enabled ? deliveryPreviewSettings.delivery_included_distance_km : null}
-                      maxRadiusKm={form.delivery_enabled ? deliveryPreviewSettings.delivery_max_distance_km : null}
                     />
                   </div>
-                  {form.delivery_enabled && (
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-[#D8D6CE] bg-white px-4 py-3 text-[10px] font-semibold text-slate-600">
-                      <span className="inline-flex items-center gap-1.5">
-                        <span className="h-2.5 w-2.5 rounded-full border-2 border-[#00AFC0] bg-[#00FFFF]/20" aria-hidden="true" />
-                        Included delivery: {deliveryPreviewSettings.delivery_included_distance_km} km
-                      </span>
-                      {deliveryPreviewSettings.delivery_max_distance_km != null && (
-                        <span className="inline-flex items-center gap-1.5">
-                          <span className="h-0 w-5 border-t-2 border-dashed border-[#EC008C]" aria-hidden="true" />
-                          Maximum delivery: {deliveryPreviewSettings.delivery_max_distance_km} km
-                        </span>
-                      )}
-                      <span className="text-slate-400">Delivery area updates as you edit the pricing settings.</span>
-                    </div>
-                  )}
                 </div>
               </section>
             </div>
@@ -1016,7 +1082,9 @@ export default function ShopProfilePage() {
                   />
                 </label>
 
-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {form.delivery_enabled && (
+                  <>
+                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="block">
                     <span className="text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">Base delivery fee</span>
                     <div className="mt-1 flex items-center overflow-hidden rounded-xl border border-slate-200 bg-[#F6F6F2] focus-within:border-[#00AFC0] focus-within:ring-2 focus-within:ring-[#00FFFF]/30">
@@ -1044,47 +1112,45 @@ export default function ShopProfilePage() {
                   <label className="block">
                     <span className="text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">Maximum distance <span className="font-medium normal-case tracking-normal text-slate-400">(optional)</span></span>
                     <div className="mt-1 flex items-center overflow-hidden rounded-xl border border-slate-200 bg-[#F6F6F2] focus-within:border-[#00AFC0] focus-within:ring-2 focus-within:ring-[#00FFFF]/30">
-                      <input type="number" min="0.01" step="0.1" name="delivery_max_distance_km" value={form.delivery_max_distance_km} onChange={handleChange} placeholder="No limit" aria-invalid={Boolean(deliveryValidationErrors.delivery_max_distance_km)} aria-describedby="delivery-max-distance-error" className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm font-black outline-none" />
+                      <input type="number" min="0.01" step="any" name="delivery_max_distance_km" value={form.delivery_max_distance_km} onChange={handleChange} onBlur={() => formatDistanceInput("delivery_max_distance_km")} placeholder="No limit" aria-invalid={Boolean(deliveryValidationErrors.delivery_max_distance_km)} aria-describedby="delivery-max-distance-error" className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm font-black outline-none" />
                       <span className="px-3 text-xs font-black text-slate-500">km</span>
                     </div>
                     {deliveryValidationErrors.delivery_max_distance_km && <span id="delivery-max-distance-error" role="alert" className="mt-1 block text-[10px] font-semibold text-rose-700">{deliveryValidationErrors.delivery_max_distance_km}</span>}
                   </label>
-                </div>
+                    </div>
 
-                <label className="mt-3 block">
+                    <label className="mt-3 block">
                   <span className="text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">Distance rounding</span>
                   <select name="delivery_distance_rounding" value={form.delivery_distance_rounding} onChange={handleChange} aria-invalid={Boolean(deliveryValidationErrors.delivery_distance_rounding)} aria-describedby="delivery-rounding-error" className="mt-1 w-full rounded-xl border border-slate-200 bg-[#F6F6F2] px-3 py-3 text-xs font-bold outline-none focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/30">
                     {DELIVERY_ROUNDING_RULES.map((rule) => <option key={rule.value} value={rule.value}>{rule.label}</option>)}
                   </select>
                   {deliveryValidationErrors.delivery_distance_rounding && <span id="delivery-rounding-error" role="alert" className="mt-1 block text-[10px] font-semibold text-rose-700">{deliveryValidationErrors.delivery_distance_rounding}</span>}
-                </label>
+                    </label>
 
-                <p className="mt-4 rounded-xl border border-[#00AFC0]/25 bg-[#EFFFFF] p-3 text-[11px] font-semibold leading-relaxed text-slate-700">{deliveryDescription}</p>
+                    <p className="mt-4 rounded-xl border border-[#00AFC0]/25 bg-[#EFFFFF] p-3 text-[11px] font-semibold leading-relaxed text-slate-700">{deliveryDescription}</p>
 
-                <div className="mt-4 rounded-2xl border border-[#00AFC0]/25 bg-[#EFFFFF] p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-black text-slate-900">Delivery area uses the shop map</p>
-                      <p className="mt-0.5 text-[10px] text-slate-600">The map above shows the delivery radius, so you only need to place one shop pin.</p>
+                    <div className="mt-4 rounded-2xl border border-[#00AFC0]/25 bg-[#EFFFFF] p-3">
+                      <div className="flex items-center gap-2">
+                        <MapPin size={16} className="text-[#EC008C]" />
+                        <div>
+                          <p className="text-xs font-black text-slate-900">Delivery distance uses the shop pin</p>
+                          <p className="mt-0.5 text-[10px] text-slate-600">Customers are charged based on the distance from this pin to their delivery address.</p>
+                        </div>
+                      </div>
                     </div>
-                    <MapPin size={16} className="text-[#EC008C]" />
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-[10px] font-semibold text-slate-700">
-                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border-2 border-[#00AFC0] bg-[#00FFFF]/20" aria-hidden="true" /> {deliveryPreviewSettings.delivery_included_distance_km} km included</span>
-                    {deliveryPreviewSettings.delivery_max_distance_km != null && <span className="inline-flex items-center gap-1.5"><span className="h-0 w-5 border-t-2 border-dashed border-[#EC008C]" aria-hidden="true" /> {deliveryPreviewSettings.delivery_max_distance_km} km maximum</span>}
-                  </div>
-                </div>
 
-                <div className="mt-4 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
-                  <div className="rounded-xl border border-slate-200 bg-white p-3">
-                    <p className="font-black uppercase tracking-[0.08em] text-slate-500">Within included distance</p>
-                    <p className="mt-1 font-bold text-slate-900">{formatDeliveryDistance(deliveryStandardPreview.distanceKm)} · {formatPesoAmount(deliveryStandardPreview.deliveryFee)}</p>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-white p-3">
-                    <p className="font-black uppercase tracking-[0.08em] text-slate-500">At included + 2.2 km</p>
-                    <p className="mt-1 font-bold text-slate-900">{formatDeliveryDistance(deliveryExtraPreview.distanceKm)} · {formatPesoAmount(deliveryExtraPreview.deliveryFee)}</p>
-                  </div>
-                </div>
+                    <div className="mt-4 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
+                      <div className="rounded-xl border border-slate-200 bg-white p-3">
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">Within included distance</p>
+                        <p className="mt-1 font-bold text-slate-900">{formatDeliveryDistance(deliveryStandardPreview.distanceKm)} · {formatPesoAmount(deliveryStandardPreview.deliveryFee)}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-white p-3">
+                        <p className="font-black uppercase tracking-[0.08em] text-slate-500">At included + 2.2 km</p>
+                        <p className="mt-1 font-bold text-slate-900">{formatDeliveryDistance(deliveryExtraPreview.distanceKm)} · {formatPesoAmount(deliveryExtraPreview.deliveryFee)}</p>
+                      </div>
+                    </div>
+                  </>
+                )}
               </section>
 
               <section

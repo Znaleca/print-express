@@ -42,12 +42,10 @@ const createMarker = (map, nextPosition, readOnly, onPositionChange) => {
   return marker;
 };
 
-export default function LocationPicker({ lat, lng, onChange, readOnly = false, includedRadiusKm = null, maxRadiusKm = null }) {
+export default function LocationPicker({ lat, lng, onChange, readOnly = false }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
-  const includedCircleRef = useRef(null);
-  const maxCircleRef = useRef(null);
   const onChangeRef = useRef(onChange);
   const [position, setPosition] = useState(() => toPosition(lat, lng));
 
@@ -125,8 +123,6 @@ export default function LocationPicker({ lat, lng, onChange, readOnly = false, i
       if (!readOnly) map.off("click", handleMapClick);
       resizeObserver?.disconnect();
       markerRef.current = null;
-      includedCircleRef.current = null;
-      maxCircleRef.current = null;
       if (mapRef.current === map) mapRef.current = null;
       map.remove();
     };
@@ -154,45 +150,6 @@ export default function LocationPicker({ lat, lng, onChange, readOnly = false, i
     map.setView([position.lat, position.lng], map.getZoom(), { animate: false });
     map.invalidateSize({ animate: false });
   }, [position, readOnly]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !containerRef.current?.isConnected) return;
-
-    if (!position) {
-      includedCircleRef.current?.remove();
-      maxCircleRef.current?.remove();
-      includedCircleRef.current = null;
-      maxCircleRef.current = null;
-      return;
-    }
-
-    const updateCircle = (circleRef, radiusKm, pathOptions) => {
-      const radius = Number(radiusKm);
-      if (!Number.isFinite(radius) || radius <= 0) {
-        circleRef.current?.remove();
-        circleRef.current = null;
-        return;
-      }
-      if (!circleRef.current) circleRef.current = L.circle([position.lat, position.lng], { ...pathOptions, radius: radius * 1000 }).addTo(map);
-      circleRef.current.setLatLng([position.lat, position.lng]);
-      circleRef.current.setRadius(radius * 1000);
-    };
-
-    updateCircle(includedCircleRef, includedRadiusKm, {
-      color: "#00AFC0",
-      fillColor: "#00FFFF",
-      fillOpacity: 0.12,
-      weight: 2,
-    });
-    updateCircle(maxCircleRef, maxRadiusKm, {
-      color: "#EC008C",
-      fillColor: "#EC008C",
-      fillOpacity: 0.04,
-      weight: 2,
-      dashArray: "7 7",
-    });
-  }, [position, includedRadiusKm, maxRadiusKm]);
 
   return (
     <div
