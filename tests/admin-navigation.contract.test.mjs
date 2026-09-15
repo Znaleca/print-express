@@ -16,13 +16,14 @@ test("admin navigation exposes the shop workspace and pending counts", async () 
   assert.match(sidebar, /href: "\/admin\/shops".*label: "Shops"/s);
   assert.match(sidebar, /href: "\/admin\/accounts"/);
   assert.doesNotMatch(sidebar, /href: "\/admin\/category-approvals"/);
-  assert.doesNotMatch(sidebar, /href: "\/admin\/reviews"/);
+  assert.match(sidebar, /href: "\/admin\/reviews".*countKey: "reviewRemovals"/s);
   assert.match(sidebar, /pathname === href \|\| pathname\.startsWith\(`\$\{href\}\/`\)/);
   assert.match(sidebar, /pendingCounts/);
   assert.match(dashboardPage, /api\/admin\/operations/);
   assert.match(dashboardPage, /Admin dashboard/);
   assert.match(countsRoute, /requireAdmin\(request\)/);
   assert.match(countsRoute, /categoryApprovals/);
+  assert.match(countsRoute, /reviewRemovals/);
 });
 
 test("verification and category routes preserve admin-scoped data actions", async () => {

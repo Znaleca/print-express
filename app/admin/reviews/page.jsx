@@ -154,7 +154,9 @@ export default function AdminReviews() {
 
   const requestGroups = useMemo(() => {
     const groups = new Map();
-    (data.moderationRequests || []).forEach((requestRow) => { const key = requestRow.business_id || "unknown"; if (!groups.has(key)) groups.set(key, { name: requestRow.shop_name || "Unknown shop", rows: [] }); groups.get(key).rows.push(requestRow); });
+    [...(data.moderationRequests || [])]
+      .sort((first, second) => (first.status === "PENDING" ? -1 : 1) - (second.status === "PENDING" ? -1 : 1) || String(second.created_at || "").localeCompare(String(first.created_at || "")))
+      .forEach((requestRow) => { const key = requestRow.business_id || "unknown"; if (!groups.has(key)) groups.set(key, { name: requestRow.shop_name || "Unknown shop", rows: [] }); groups.get(key).rows.push(requestRow); });
     return [...groups.values()];
   }, [data.moderationRequests]);
 

@@ -67,12 +67,18 @@ export default function OwnerReviews() {
         if (!active) return;
         applyReviewPayload(payload);
         if (payload.business?.id) {
-          subscription = supabase.channel(`owner_reviews_${payload.business.id}`).on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `business_id=eq.${payload.business.id}` }, () => {
+          const scheduleRefresh = () => {
             clearTimeout(refreshTimer);
             refreshTimer = setTimeout(async () => {
               try { const nextPayload = await requestReviews(); if (active) applyReviewPayload(nextPayload); } catch (error) { if (active && error.name !== "AbortError") setLoadError("Reviews changed, but the latest data could not be loaded. Retry to refresh."); }
             }, 250);
-          }).subscribe();
+          };
+          subscription = supabase
+            .channel(`owner_reviews_${payload.business.id}`)
+            .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `business_id=eq.${payload.business.id}` }, scheduleRefresh)
+            .on("postgres_changes", { event: "*", schema: "public", table: "order_item_reviews", filter: `business_id=eq.${payload.business.id}` }, scheduleRefresh)
+            .on("postgres_changes", { event: "*", schema: "public", table: "review_moderation_requests", filter: `business_id=eq.${payload.business.id}` }, scheduleRefresh)
+            .subscribe();
         }
       } catch (error) { if (active && error.name !== "AbortError") setLoadError(error.message || "Could not load your reviews."); }
       finally { if (active) setLoading(false); }
@@ -92,11 +98,11 @@ export default function OwnerReviews() {
   const submitRemovalRequest = async (event) => {
     event.preventDefault();
     if (!requestModal || requestReason.trim().length < 5 || actionLoading) return;
-    setActionLoading(requestModal.order_id); setLoadError(null);
+    setActionLoading(requestModal.review_id || requestModal.order_id); setLoadError(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error("Your session has expired. Please sign in again.");
-      const response = await fetch("/api/owner/reviews", { method: "POST", headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ orderId: requestModal.order_id, reason: requestReason.trim() }) });
+      const response = await fetch("/api/owner/reviews", { method: "POST", headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ orderId: requestModal.order_id, reviewId: requestModal.review_id || null, reason: requestReason.trim() }) });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "Could not submit the review removal request.");
       applyReviewPayload(await requestReviews());

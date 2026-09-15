@@ -73,6 +73,13 @@ export async function GET(request) {
         .order("created_at", { ascending: false })
         .range(0, MAX_REVIEW_ROWS - 1),
     );
+    const itemReviewRows = await readRows(
+      auth.supabase
+        .from("order_item_reviews")
+        .select("id, order_id, business_id, customer_id, service_id, item_name, item_type, rating, feedback, feedback_hidden, feedback_hidden_at, feedback_hidden_by, created_at")
+        .order("created_at", { ascending: false })
+        .range(0, MAX_REVIEW_ROWS - 1),
+    );
 
     const businesses = await readRows(
       auth.supabase.from("businesses").select("id, name, owner_id").order("name", { ascending: true }).range(0, MAX_SHOP_ROWS - 1),
@@ -80,6 +87,7 @@ export async function GET(request) {
     const profileIds = [...new Set([
       ...businesses.map((business) => business.owner_id),
       ...orderRows.map((row) => row.customer_id),
+      ...itemReviewRows.map((row) => row.customer_id),
     ].filter(Boolean))];
     const profiles = profileIds.length > 0
       ? await readRows(auth.supabase.from("profiles").select("id, full_name").in("id", profileIds))
@@ -87,11 +95,11 @@ export async function GET(request) {
     const moderationRows = await readRows(
       auth.supabase
         .from("review_moderation_requests")
-        .select("id, order_id, business_id, owner_id, reason, status, admin_response, reviewed_by, reviewed_at, created_at, updated_at")
+        .select("id, order_id, business_id, owner_id, review_id, reason, status, admin_response, reviewed_by, reviewed_at, created_at, updated_at")
         .order("created_at", { ascending: false })
         .range(0, MAX_REVIEW_ROWS - 1),
     );
-    const serviceIds = [...new Set(orderRows.map((row) => row.review_service_id).filter(Boolean))];
+    const serviceIds = [...new Set([...orderRows.map((row) => row.review_service_id), ...itemReviewRows.map((row) => row.service_id)].filter(Boolean))];
     const services = serviceIds.length > 0
       ? await readRows(auth.supabase.from("services").select("id, name, item_type").in("id", serviceIds))
       : [];
@@ -150,7 +158,6 @@ export async function GET(request) {
       if (!group.recentReviewDate || String(row.created_at) > String(group.recentReviewDate)) group.recentReviewDate = row.created_at;
       groups.set(row.business_id, group);
     });
-
     const allGroups = [...groups.values()].map((group) => ({
       ...group,
       averageRating: group.totalReviewCount > 0 ? (group.ratingTotal / group.totalReviewCount).toFixed(1) : "0.0",
@@ -196,20 +203,22 @@ export async function GET(request) {
     }, { total: 0, visible: 0, hidden: 0, ratingTotal: 0 });
     const averageRating = totals.total > 0 ? (totals.ratingTotal / totals.total).toFixed(1) : "0.0";
     const orderMap = Object.fromEntries(orderRows.map((row) => [row.id, row]));
+    const itemReviewMap = Object.fromEntries(itemReviewRows.map((row) => [row.id, row]));
     const moderationRequests = moderationRows.map((request) => {
       const order = orderMap[request.order_id];
+      const itemReview = request.review_id ? itemReviewMap[request.review_id] : null;
       const business = businessMap[request.business_id];
       return {
         ...request,
         shop_name: business?.name || "Unknown shop",
         owner_name: profileMap[business?.owner_id || request.owner_id]?.full_name || "Business Owner",
-        customer_name: profileMap[order?.customer_id]?.full_name || "Customer",
-        rating: order?.rating == null ? null : Number(order.rating),
-        review_text: order?.feedback || "",
-        feedback_hidden: Boolean(order?.feedback_hidden),
-        review_service_id: order?.review_service_id || null,
-        review_target_name: serviceMap[order?.review_service_id]?.name || null,
-        review_target_type: serviceMap[order?.review_service_id]?.item_type || null,
+        customer_name: profileMap[itemReview?.customer_id || order?.customer_id]?.full_name || "Customer",
+        rating: itemReview ? Number(itemReview.rating) : order?.rating == null ? null : Number(order.rating),
+        review_text: itemReview?.feedback || order?.feedback || "",
+        feedback_hidden: Boolean(itemReview?.feedback_hidden ?? order?.feedback_hidden),
+        review_service_id: itemReview?.service_id || order?.review_service_id || null,
+        review_target_name: itemReview?.item_name || serviceMap[order?.review_service_id]?.name || null,
+        review_target_type: itemReview?.item_type || serviceMap[order?.review_service_id]?.item_type || null,
       };
     });
 
@@ -228,7 +237,13 @@ export async function GET(request) {
       truncated: orderRows.length === MAX_REVIEW_ROWS,
     });
   } catch (error) {
-    console.error("ADMIN_REVIEWS_LOAD_ERROR:", error instanceof Error ? error.name : "UnknownError");
+    console.error("ADMIN_REVIEWS_LOAD_ERROR:", {
+      name: error instanceof Error ? error.name : "DatabaseError",
+      code: error?.code,
+      message: error?.message,
+      details: error?.details,
+      hint: error?.hint,
+    });
     return NextResponse.json({ error: "ADMIN_REVIEWS_UNAVAILABLE" }, { status: 503 });
   }
 }

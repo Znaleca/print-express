@@ -307,7 +307,13 @@ export default function BusinessDetailsPage({ params }) {
             .eq("business_id", id)
             .order("created_at", { ascending: false })
             .range(0, 999);
-          Object.assign(data, getVisibleReviewStats(reviewRows));
+          const { data: itemReviewRows } = await supabase
+            .from("visible_order_item_reviews")
+            .select("order_id, rating, feedback, created_at, customer_name, item_name, review_service_id, review_target_name, review_target_type")
+            .eq("business_id", id)
+            .order("created_at", { ascending: false })
+            .range(0, 999);
+          Object.assign(data, getVisibleReviewStats([...(reviewRows || []), ...(itemReviewRows || [])]));
 
           setBusiness(data);
 
@@ -420,7 +426,13 @@ export default function BusinessDetailsPage({ params }) {
         .range(0, 999);
 
       if (!active || error) return;
-      setBusiness((current) => current ? { ...current, ...getVisibleReviewStats(reviewRows) } : current);
+      const { data: itemReviewRows } = await supabase
+        .from("visible_order_item_reviews")
+        .select("order_id, rating, feedback, created_at, customer_name, item_name, review_service_id, review_target_name, review_target_type")
+        .eq("business_id", id)
+        .order("created_at", { ascending: false })
+        .range(0, 999);
+      setBusiness((current) => current ? { ...current, ...getVisibleReviewStats([...(reviewRows || []), ...(itemReviewRows || [])]) } : current);
     };
 
     const scheduleRefresh = () => {
@@ -431,6 +443,7 @@ export default function BusinessDetailsPage({ params }) {
     const subscription = supabase
       .channel(`public_business_reviews_${id}_${Date.now()}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `business_id=eq.${id}` }, scheduleRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "order_item_reviews", filter: `business_id=eq.${id}` }, scheduleRefresh)
       .subscribe();
 
     return () => {

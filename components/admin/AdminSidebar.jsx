@@ -15,12 +15,14 @@ import {
   LogOut,
   Loader2,
   Settings,
+  Star,
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/admin",                    label: "Dashboard",           icon: LayoutDashboard },
   { href: "/admin/verifications",      label: "Verifications",      icon: BarChart2, countKey: "verifications" },
   { href: "/admin/shops",               label: "Shops",               icon: Store, countKey: "categoryApprovals" },
+  { href: "/admin/reviews",             label: "Reviews",             icon: Star, countKey: "reviewRemovals" },
   { href: "/admin/accounts",            label: "Accounts",            icon: Users },
 ];
 
@@ -30,6 +32,7 @@ export default function AdminSidebar({ isOpen, onToggle, adminName, adminEmail, 
 
   useEffect(() => {
     let active = true;
+    let subscription;
 
     const loadPendingCounts = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -45,7 +48,13 @@ export default function AdminSidebar({ isOpen, onToggle, adminName, adminEmail, 
     };
 
     loadPendingCounts().catch(() => {});
-    return () => { active = false; };
+    subscription = supabase
+      .channel(`admin_pending_counts_${Date.now()}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "review_moderation_requests" }, () => loadPendingCounts().catch(() => {}))
+      .on("postgres_changes", { event: "*", schema: "public", table: "category_approval_requests" }, () => loadPendingCounts().catch(() => {}))
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "businesses" }, () => loadPendingCounts().catch(() => {}))
+      .subscribe();
+    return () => { active = false; if (subscription) supabase.removeChannel(subscription); };
   }, []);
 
   return (

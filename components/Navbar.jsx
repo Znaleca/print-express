@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
-import { LogOut, User, ChevronDown, LayoutDashboard, ShoppingBag } from "lucide-react";
+import { LogOut, User, ChevronDown, LayoutDashboard, ShoppingBag, Star } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import BrandMark from "@/components/BrandMark";
 import PillNav from "@/components/PillNav";
@@ -245,6 +245,7 @@ export default function Navbar() {
                 { href: "/browse", label: "Browse Services" },
                 { href: "/shops", label: "Print Shops" },
                 ...(headerUser ? [{ href: "/track", label: "Order Tracking" }] : []),
+                ...(headerUser && headerUserRole === "CUSTOMER" ? [{ href: "/reviews", label: "Purchases & Reviews" }] : []),
               ]}
               activeHref={pathname === "/" ? (activeLandingSection === "about" ? "/about" : "/") : pathname}
               onItemClick={(item, event) => {
@@ -304,13 +305,13 @@ export default function Navbar() {
                     </Link>
 
                     {!isAdminOrOwner && (
-                      <Link
+                      <><Link
                         href="/track"
                         className="flex items-center gap-2.5 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-stone-100 hover:text-slate-900 transition-colors"
                         onClick={() => setIsDropdownOpen(false)}
                       >
                         <ShoppingBag size={16} className="text-slate-400" /> My Orders
-                      </Link>
+                      </Link><Link href="/reviews" className="flex items-center gap-2.5 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-stone-100 hover:text-slate-900 transition-colors" onClick={() => setIsDropdownOpen(false)}><Star size={16} className="text-slate-400" /> Purchases &amp; Reviews</Link></>
                     )}
 
                     <div className="border-t border-stone-100 my-1" />

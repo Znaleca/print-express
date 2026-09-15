@@ -154,7 +154,12 @@ export default function BrowsePage() {
             hint: reviewError.hint,
           });
         }
-        const reviewsByBusiness = (reviewData || []).reduce((map, review) => {
+        const { data: itemReviewData } = await withTimeout(
+          (signal) => supabase.from("visible_order_item_reviews").select("business_id, rating").range(0, 999).abortSignal(signal),
+          8000,
+          "Loading item ratings timed out."
+        );
+        const reviewsByBusiness = [...(reviewData || []), ...(itemReviewData || [])].reduce((map, review) => {
           map[review.business_id] = [...(map[review.business_id] || []), review];
           return map;
         }, {});
