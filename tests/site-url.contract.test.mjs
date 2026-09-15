@@ -46,3 +46,15 @@ test("Supabase local auth only advertises the canonical localhost callback", asy
   assert.match(config, /additional_redirect_urls = \["http:\/\/localhost:3000\/auth\/confirm"\]/);
   assert.doesNotMatch(config, /127\.0\.0\.1:3000/);
 });
+
+test("public footer legal links resolve to real pages and social links never use dead anchors", async () => {
+  const footer = await readFile(path.join(root, "components/Footer.jsx"), "utf8");
+  const sitemap = await readFile(path.join(root, "app/sitemap.js"), "utf8");
+
+  assert.match(footer, /href="\/privacy"/);
+  assert.match(footer, /href="\/terms"/);
+  assert.doesNotMatch(footer, /href:\s*['"]#['"]|href="#"/);
+  assert.match(footer, /NEXT_PUBLIC_FACEBOOK_URL/);
+  assert.match(sitemap, /getAppUrl\("\/privacy"\)/);
+  assert.match(sitemap, /getAppUrl\("\/terms"\)/);
+});

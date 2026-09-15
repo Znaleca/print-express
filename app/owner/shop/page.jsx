@@ -36,6 +36,7 @@ export default function ShopProfilePage() {
   });
   const [initialForm, setInitialForm] = useState(null);
   const [businessId, setBusinessId] = useState(null);
+  const [businessStatus, setBusinessStatus] = useState("PENDING");
   const [isOpen, setIsOpen] = useState(true);
   const [togglingOpen, setTogglingOpen] = useState(false);
   const [hours, setHours] = useState(DAY_NAMES.map((_, day) => DEFAULT_DAY(day)));
@@ -52,6 +53,10 @@ export default function ShopProfilePage() {
   const [loadError, setLoadError] = useState("");
   const [profileValidationError, setProfileValidationError] = useState("");
   const [deliveryValidationErrors, setDeliveryValidationErrors] = useState({});
+  const [addressLookupStatus, setAddressLookupStatus] = useState("idle");
+  const addressLookupControllerRef = useRef(null);
+  const addressEditVersionRef = useRef(0);
+  const addressLookupIdRef = useRef(0);
 
   // Logo upload state
   const [logoPreview, setLogoPreview] = useState(null);
@@ -78,7 +83,7 @@ export default function ShopProfilePage() {
 
       const { data: biz, error: businessError } = await supabase
         .from("businesses")
-        .select("id, name, description, products_summary, address, phone, email, website, logo_url, qr_url, lat, lng, min_downpayment_percent, delivery_enabled, delivery_base_fee, delivery_included_distance_km, delivery_fee_per_extra_km, delivery_max_distance_km, delivery_distance_rounding, is_open, timezone, manual_open_override")
+        .select("id, name, description, products_summary, status, address, phone, email, website, logo_url, qr_url, lat, lng, min_downpayment_percent, delivery_enabled, delivery_base_fee, delivery_included_distance_km, delivery_fee_per_extra_km, delivery_max_distance_km, delivery_distance_rounding, is_open, timezone, manual_open_override")
         .eq("owner_id", user.id)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -88,6 +93,7 @@ export default function ShopProfilePage() {
         setLoadError(businessError.message || "Could not load your shop profile.");
       } else if (biz) {
         setBusinessId(biz.id);
+        setBusinessStatus(String(biz.status || "PENDING").toUpperCase());
         const coordinates = normalizeCoordinates(biz.lat, biz.lng);
         const loadedForm = {
           name: biz.name || "",
@@ -137,6 +143,8 @@ export default function ShopProfilePage() {
     };
     load();
   }, []);
+
+  useEffect(() => () => addressLookupControllerRef.current?.abort(), []);
 
   const handleToggleOpen = async () => {
     if (!businessId || togglingOpen) return;
@@ -238,6 +246,11 @@ export default function ShopProfilePage() {
 
   const handleChange = (e) => {
     const { name, value } = e.target;
+    if (name === "address") {
+      addressEditVersionRef.current += 1;
+      addressLookupControllerRef.current?.abort();
+      setAddressLookupStatus("idle");
+    }
     setForm((p) => ({
       ...p,
       [name]: name === "phone" ? toPhilippinePhoneInput(value) : value,
@@ -245,6 +258,62 @@ export default function ShopProfilePage() {
     if (name === "phone") setPhoneTouched(true);
     if (name.startsWith("delivery_")) {
       setDeliveryValidationErrors((current) => ({ ...current, [name]: "" }));
+    }
+  };
+
+  const formatDistanceInput = (name) => {
+    if (name !== "delivery_included_distance_km") return;
+    const numericValue = Number(form[name]);
+    if (!Number.isFinite(numericValue) || numericValue <= 0) return;
+    setForm((current) => ({ ...current, [name]: numericValue.toFixed(1) }));
+  };
+
+  const handleLocationChange = async (lat, lng) => {
+    const coordinates = normalizeCoordinates(lat, lng);
+    if (!coordinates) return;
+
+    setForm((current) => ({ ...current, lat: coordinates.lat, lng: coordinates.lng }));
+
+    addressLookupControllerRef.current?.abort();
+    const controller = new AbortController();
+    const lookupId = addressLookupIdRef.current + 1;
+    const editVersion = addressEditVersionRef.current;
+    addressLookupControllerRef.current = controller;
+    addressLookupIdRef.current = lookupId;
+    setAddressLookupStatus("loading");
+    let didTimeout = false;
+    const timeoutId = setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, 8000);
+
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${coordinates.lat}&lon=${coordinates.lng}`,
+        {
+          signal: controller.signal,
+          headers: { Accept: "application/json", "Accept-Language": "en" },
+        }
+      );
+      if (!response.ok) throw new Error("Address lookup failed");
+
+      const result = await response.json();
+      if (!result?.display_name) throw new Error("No address found for this location");
+      if (controller.signal.aborted || addressLookupIdRef.current !== lookupId || addressEditVersionRef.current !== editVersion) return;
+
+      setForm((current) => {
+        const currentCoordinates = normalizeCoordinates(current.lat, current.lng);
+        if (!currentCoordinates || currentCoordinates.lat !== coordinates.lat || currentCoordinates.lng !== coordinates.lng) return current;
+        return { ...current, address: result.display_name };
+      });
+      setAddressLookupStatus("success");
+    } catch (error) {
+      if ((error?.name !== "AbortError" || didTimeout) && addressLookupIdRef.current === lookupId) {
+        setAddressLookupStatus("error");
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      if (addressLookupControllerRef.current === controller) addressLookupControllerRef.current = null;
     }
   };
 
@@ -317,9 +386,14 @@ export default function ShopProfilePage() {
       const normalizedPhone = form.phone ? normalizePhilippinePhone(form.phone) : "";
       const trimmedName = form.name.trim();
       const trimmedAddress = form.address.trim();
+      const profileLocked = businessStatus === "APPROVED";
       let validationMessage = "";
       if (trimmedName.length < 2) {
         validationMessage = "Add a business name with at least 2 characters.";
+      } else if (!profileLocked && (form.description.trim().length < 20 || form.description.trim().length > 800)) {
+        validationMessage = "Business background must be between 20 and 800 characters.";
+      } else if (!profileLocked && (form.products_summary.trim().length < 10 || form.products_summary.trim().length > 500)) {
+        validationMessage = "Products and services must be between 10 and 500 characters.";
       } else if (!form.phone || !normalizedPhone) {
         setPhoneTouched(true);
         validationMessage = "Enter the 10 digits after +63. Example: 9123456789.";
@@ -370,7 +444,6 @@ export default function ShopProfilePage() {
 
       const coordinates = normalizeCoordinates(form.lat, form.lng);
       const payload = {
-        name: trimmedName,
         address: trimmedAddress,
         phone: normalizedPhone,
         email: form.email.trim(),
@@ -382,6 +455,11 @@ export default function ShopProfilePage() {
         min_downpayment_percent: minDp,
         ...deliveryValues,
       };
+      payload.name = trimmedName;
+      if (!profileLocked) {
+        payload.description = form.description.trim();
+        payload.products_summary = form.products_summary.trim();
+      }
 
       const { error: err } = await supabase
         .from("businesses")
@@ -474,7 +552,7 @@ export default function ShopProfilePage() {
   }
 
   return (
-    <main data-tour="owner-shop-profile" className="owner-shop-page min-h-screen bg-[#F6F6F2] pb-20 font-sans text-slate-900">
+    <main data-tour="owner-shop-profile" className={`owner-shop-page min-h-screen bg-[#F6F6F2] font-sans text-slate-900 ${hasUnsavedChanges ? "pb-56 sm:pb-40" : "pb-20"}`}>
       <section className="relative overflow-hidden border-b border-slate-200 bg-white px-4 pb-7 pt-8 sm:px-8 sm:pb-8 sm:pt-10 lg:px-10">
         <div className="cmyk-bar absolute left-0 right-0 top-0" />
         <div className="pointer-events-none absolute -right-24 -top-32 h-80 w-80 rounded-full border border-[#00AFC0]/15" />
@@ -489,12 +567,12 @@ export default function ShopProfilePage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-[#F6F6F2] p-2 shadow-sm">
-            <div className="flex items-center gap-2 px-2">
-              <span className={`h-2.5 w-2.5 rounded-full ${isOpen ? "bg-emerald-500" : "bg-slate-400"}`} />
+          <div className="flex w-full max-w-sm items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-[#F6F6F2] p-2.5 shadow-sm sm:w-auto sm:min-w-[300px]">
+            <div className="flex min-w-0 items-center gap-2.5 px-2">
+              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ring-4 ${isOpen ? "bg-emerald-500 ring-emerald-500/10" : "bg-slate-500 ring-slate-500/10"}`} />
               <div>
                 <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Store status</p>
-                <p className="text-xs font-bold text-slate-800">{isOpen ? "Visible to customers" : "Temporarily closed"}</p>
+                <p className="truncate text-xs font-bold text-slate-800">{isOpen ? "Visible to customers" : "Temporarily closed"}</p>
               </div>
             </div>
             <button
@@ -502,11 +580,13 @@ export default function ShopProfilePage() {
               type="button"
               onClick={handleToggleOpen}
               disabled={togglingOpen}
-              className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-xs font-black transition-colors disabled:opacity-60 ${
-                isOpen ? "bg-[#00FFFF] text-[#1A1A1A] hover:bg-[#FFF200]" : "bg-slate-900 text-white hover:bg-[#EC008C]"
+              aria-pressed={isOpen}
+              aria-label={isOpen ? "Close shop to customers" : "Open shop to customers"}
+              className={`inline-flex min-w-[88px] shrink-0 items-center justify-center gap-2 rounded-xl border-2 px-3.5 py-2.5 text-xs font-black shadow-sm transition-colors disabled:cursor-wait disabled:opacity-60 ${
+                isOpen ? "border-[#00AFC0] bg-[#00FFFF] !text-slate-950 hover:border-[#756D00] hover:bg-[#FFF200]" : "border-slate-900 bg-slate-900 !text-white hover:border-[#EC008C] hover:bg-[#EC008C]"
               }`}
             >
-              <Power size={14} /> {isOpen ? "Open" : "Closed"}
+              {togglingOpen ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />} {togglingOpen ? "Saving" : isOpen ? "Open" : "Closed"}
             </button>
           </div>
         </div>
@@ -672,7 +752,7 @@ export default function ShopProfilePage() {
                     />
                     <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-slate-400">
                       <Info size={13} className="mt-0.5 shrink-0 text-[#00AFC0]" />
-                      Use the name customers will recognize on receipts and order updates.
+                       You can update this shop name anytime. It does not require Admin approval.
                     </p>
                   </div>
                 </div>
@@ -682,7 +762,7 @@ export default function ShopProfilePage() {
                 <div className="border-b border-slate-100 pb-4">
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">02 / Public profile</p>
                   <h2 className="mt-1 text-xl font-black text-slate-900">Tell customers what you do</h2>
-                  <p className="mt-1 text-xs leading-relaxed text-slate-500">These sections are reviewed and managed through your business documents.</p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">These customer-facing details are reviewed before your shop is approved.</p>
                 </div>
                 <div className="mt-5 grid gap-4 lg:grid-cols-2">
                   {[
@@ -697,11 +777,23 @@ export default function ShopProfilePage() {
                         </div>
                         <ShieldCheck size={16} className="shrink-0 text-[#00AFC0]" />
                       </div>
-                      <p className={`mt-4 min-h-24 text-xs leading-relaxed ${form[key] ? "text-slate-700" : "italic text-slate-400"}`}>
+                      {businessStatus === "APPROVED" ? <p className={`mt-4 min-h-24 text-xs leading-relaxed ${form[key] ? "text-slate-700" : "italic text-slate-400"}`}>
                         {form[key] || fallback}
-                      </p>
+                      </p> : <textarea
+                        name={key}
+                        value={form[key]}
+                        onChange={handleChange}
+                        minLength={key === "description" ? 20 : 10}
+                        maxLength={key === "description" ? 800 : 500}
+                        rows={4}
+                        placeholder={fallback}
+                        aria-label={label}
+                        className="mt-4 min-h-24 w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs leading-relaxed text-slate-700 outline-none transition-colors focus:border-[#00AFC0] focus:ring-2 focus:ring-[#00FFFF]/30"
+                      />}
                       <p className="mt-3 border-t border-slate-200 pt-3 text-[10px] leading-relaxed text-slate-400">
-                        Read-only after submission. Request changes from the <Link href="/owner/documents" className="font-bold text-[#C40075] hover:underline">Documents</Link> page.
+                        {businessStatus === "APPROVED"
+                          ? <>Locked after approval. Request changes from the <Link href="/owner/documents" className="font-bold text-[#C40075] hover:underline">Documents</Link> page.</>
+                          : "You can edit this field while your shop is pending. Saving sends the updated value back for review."}
                       </p>
                     </div>
                   ))}
@@ -782,7 +874,13 @@ export default function ShopProfilePage() {
                 </div>
                 <label className="mt-5 block">
                   <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Address <span className="text-[#EC008C]">*</span></span>
-                  <input type="text" name="address" value={form.address} onChange={handleChange} placeholder="e.g. 123 Main St, City" required aria-required="true" className="mt-2 w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3.5 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
+                  <input type="text" name="address" value={form.address} onChange={handleChange} placeholder="e.g. 123 Main St, City" required aria-required="true" aria-describedby="shop-address-help" className="mt-2 w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] px-4 py-3.5 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
+                  <span id="shop-address-help" aria-live="polite" className={`mt-2 block text-[11px] ${addressLookupStatus === "error" ? "font-semibold text-amber-700" : "text-slate-500"}`}>
+                    {addressLookupStatus === "loading" && "Finding the address for this map pin…"}
+                    {addressLookupStatus === "success" && "Address filled from the map pin. You can still edit it."}
+                    {addressLookupStatus === "error" && "We could not find an exact address. You can type it manually."}
+                    {addressLookupStatus === "idle" && "Click or drag the map pin to fill this field, or type the address yourself."}
+                  </span>
                 </label>
                 <div className="mt-5 overflow-hidden rounded-2xl border border-[#D8D6CE] bg-[#ECECE8]">
                   <div className="flex items-center gap-2 border-b border-[#D8D6CE] bg-white px-4 py-3 text-xs font-bold text-slate-700">
@@ -792,7 +890,7 @@ export default function ShopProfilePage() {
                     <LocationPicker
                       lat={form.lat}
                       lng={form.lng}
-                      onChange={(lat, lng) => setForm((p) => ({ ...p, lat, lng }))}
+                      onChange={handleLocationChange}
                       includedRadiusKm={form.delivery_enabled ? deliveryPreviewSettings.delivery_included_distance_km : null}
                       maxRadiusKm={form.delivery_enabled ? deliveryPreviewSettings.delivery_max_distance_km : null}
                     />
@@ -930,7 +1028,7 @@ export default function ShopProfilePage() {
                   <label className="block">
                     <span className="text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">Included distance</span>
                     <div className="mt-1 flex items-center overflow-hidden rounded-xl border border-slate-200 bg-[#F6F6F2] focus-within:border-[#00AFC0] focus-within:ring-2 focus-within:ring-[#00FFFF]/30">
-                      <input type="number" min="0.01" step="0.1" name="delivery_included_distance_km" value={form.delivery_included_distance_km} onChange={handleChange} aria-invalid={Boolean(deliveryValidationErrors.delivery_included_distance_km)} aria-describedby="delivery-included-distance-error" className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm font-black outline-none" />
+                      <input type="number" min="0.01" step="any" name="delivery_included_distance_km" value={form.delivery_included_distance_km} onChange={handleChange} onBlur={() => formatDistanceInput("delivery_included_distance_km")} aria-invalid={Boolean(deliveryValidationErrors.delivery_included_distance_km)} aria-describedby="delivery-included-distance-error" className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm font-black outline-none" />
                       <span className="px-3 text-xs font-black text-slate-500">km</span>
                     </div>
                     {deliveryValidationErrors.delivery_included_distance_km && <span id="delivery-included-distance-error" role="alert" className="mt-1 block text-[10px] font-semibold text-rose-700">{deliveryValidationErrors.delivery_included_distance_km}</span>}
@@ -989,16 +1087,26 @@ export default function ShopProfilePage() {
                 </div>
               </section>
 
-              <section className="rounded-3xl border-2 border-slate-900 bg-slate-900 p-5 text-white shadow-[6px_6px_0_rgba(0,255,255,0.8)]">
-                <div className="flex items-center gap-2">
-                  <Save size={17} className="text-[#00FFFF]" />
-                  <p className="text-sm font-black">Save your storefront</p>
+              <section
+                data-floating-save={hasUnsavedChanges ? "true" : "false"}
+                aria-live="polite"
+                className={`rounded-3xl border-2 border-slate-900 bg-slate-900 text-white shadow-[6px_6px_0_rgba(0,255,255,0.8)] transition-[transform,box-shadow] ${
+                  hasUnsavedChanges
+                    ? "fixed bottom-4 left-1/2 z-50 flex w-[calc(100vw-2rem)] max-w-3xl -translate-x-1/2 items-center gap-4 px-4 py-3 sm:w-[min(92vw,760px)] sm:px-5"
+                    : "relative p-5"
+                }`}
+              >
+                <div className={`${hasUnsavedChanges ? "min-w-0 flex-1" : ""}`}>
+                  <div className="flex items-center gap-2">
+                    <Save size={17} className="shrink-0 text-[#00FFFF]" />
+                    <p className="truncate text-sm font-black">Save your storefront</p>
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-white/60">Changes are not visible to customers until you save them.</p>
                 </div>
-                <p className="mt-2 text-xs leading-relaxed text-white/60">Changes are not visible to customers until you save them.</p>
-                <p className={`mt-4 text-[10px] font-black uppercase tracking-[0.16em] ${hasUnsavedChanges ? "text-[#FFF200]" : "text-white/45"}`}>
+                <p className={`shrink-0 text-[10px] font-black uppercase tracking-[0.16em] ${hasUnsavedChanges ? "text-[#FFF200]" : "mt-4 text-white/45"}`}>
                   {hasUnsavedChanges ? "Unsaved changes" : "Everything is up to date"}
                 </p>
-                <button type="submit" disabled={saving || !hasUnsavedChanges} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-[#00FFFF] px-4 py-3.5 text-xs font-black text-slate-900 transition-colors hover:bg-[#FFF200] disabled:cursor-not-allowed disabled:opacity-45">
+                <button type="submit" disabled={saving || !hasUnsavedChanges} className={`flex items-center justify-center gap-2 rounded-xl bg-[#00FFFF] px-4 py-3.5 text-xs font-black text-slate-900 transition-colors hover:bg-[#FFF200] disabled:cursor-not-allowed disabled:opacity-45 ${hasUnsavedChanges ? "w-auto min-w-[150px] shrink-0" : "mt-4 w-full"}`}>
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   {saving ? "Saving changes..." : "Save changes"}
                 </button>

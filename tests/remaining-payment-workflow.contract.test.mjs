@@ -42,12 +42,19 @@ test("remaining payment workflow is server-calculated and protected by RLS-compa
 
 test("customer and owner order surfaces expose remaining payment lifecycle actions", async () => {
   const track = await source("app/track/page.jsx");
+  const checkout = await source("app/checkout/[id]/page.jsx");
+  const orderSummary = await source("components/checkout/OrderSummary.jsx");
+  const route = await source("app/api/orders/payment-proof/route.js");
+  const lockMigration = await source("supabase/migrations/20260915200000_lock_checkout_payment_method_and_final_orders.sql");
+  const ownerFixMigration = await source("supabase/migrations/20260915210000_fix_owner_payment_method_ambiguity.sql");
   const owner = await source("app/owner/orders/page.jsx");
   const summary = await source("lib/paymentSummary.js");
   const sql = await migrations();
 
   assert.match(track, /Upload payment proof/);
-  assert.match(track, /I already paid offline/);
+  assert.match(track, /Notify shop I already paid/);
+  assert.match(track, /o\.payment_method === "E-Wallet"/);
+  assert.match(track, /openRemainingPaymentModal\(o, remainingPaymentMethod\)/);
   assert.match(track, /remainingPaymentPending/);
   assert.match(track, /payment-proof/);
   assert.match(track, /application\/pdf/);
@@ -63,4 +70,14 @@ test("customer and owner order surfaces expose remaining payment lifecycle actio
   assert.match(sql, /CUSTOMER_COD_DECLARATION/);
   assert.match(sql, /CUSTOMER_PAYMENT_PROOF/);
   assert.match(sql, /OWNER_MANUAL/);
+  assert.match(checkout, /Upload Downpayment Proof/);
+  assert.match(checkout, /paymentMethod=\{paymentMethod\}/);
+  assert.match(orderSummary, /Final-order notice:/);
+  assert.match(orderSummary, /cannot be cancelled or refunded by the customer/);
+  assert.match(route, /method !== selectedMethod/);
+  assert.match(lockMigration, /normalized_method <> checkout_method/);
+  assert.match(lockMigration, /Use the remaining payment method selected at checkout/);
+  assert.match(ownerFixMigration, /reviewed_method text/);
+  assert.doesNotMatch(ownerFixMigration, /\n\s*payment_method text;/);
+  assert.match(ownerFixMigration, /remaining_payment_method = reviewed_method/);
 });

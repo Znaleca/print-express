@@ -8,7 +8,7 @@ import {
   Truck, Printer, Clock, 
   MapPin, CheckCircle2, 
   Loader2, AlertTriangle, ShoppingBag,
-  Star, Package, CreditCard, Upload, XCircle, RefreshCcw, Eye, MessageSquare, AlertOctagon, X,
+  Star, Package, CreditCard, Upload, XCircle, Eye, MessageSquare, AlertOctagon, X,
   ChevronLeft, ChevronRight
 } from "lucide-react";
 import ReceiptModal from "@/components/ReceiptModal";
@@ -77,12 +77,6 @@ export default function TrackOrderPage() {
   const [submittingReviewId, setSubmittingReviewId] = useState(null);
   const [confirmingRefundId, setConfirmingRefundId] = useState(null);
   const [reportingRefundId, setReportingRefundId] = useState(null);
-  const [cancelModal, setCancelModal] = useState(null);
-  const [cancelReason, setCancelReason] = useState("");
-  const [cancelling, setCancelling] = useState(false);
-  const [refundRequestModal, setRefundRequestModal] = useState(null);
-  const [refundReason, setRefundReason] = useState("");
-  const [requestingRefund, setRequestingRefund] = useState(false);
   const [viewReceipt, setViewReceipt] = useState(null);
   const [viewDocType, setViewDocType] = useState("RECEIPT");
   const [viewRefundProof, setViewRefundProof] = useState(null);
@@ -199,33 +193,6 @@ export default function TrackOrderPage() {
     };
   }, []);
 
-  const handleCancelOrder = async () => {
-    if (!cancelModal) return;
-    setCancelling(true);
-    try {
-      const { error } = await supabase
-        .from("orders")
-        .update({
-          status: "CANCELLED",
-          cancel_reason: cancelReason || "Cancelled by customer",
-          cancelled_at: new Date().toISOString()
-        })
-        .eq("id", cancelModal.orderId)
-        .eq("customer_id", user?.id)
-        .in("status", ["PENDING", "PLACED", "PREPARING"]);
-
-      if (error) throw error;
-
-      setOrders(prev => prev.map(o => o.id === cancelModal.orderId ? { ...o, status: "CANCELLED", cancel_reason: cancelReason || "Cancelled by customer" } : o));
-      setCancelModal(null);
-      setCancelReason("");
-    } catch (err) {
-      alert(err.message || "Failed to cancel order.");
-    } finally {
-      setCancelling(false);
-    }
-  };
-
   const openRemainingPaymentModal = (order, method) => {
     setRemainingPaymentModal({ order, method });
     setRemainingPaymentFile(null);
@@ -281,41 +248,13 @@ export default function TrackOrderPage() {
       setRemainingPaymentNote("");
       alert(payload.notificationWarning
         ? `Payment submitted. ${payload.notificationWarning}`
-        : "Payment submitted. The shop owner will review it before confirming your balance.");
+        : method === "E-Wallet"
+          ? "Payment proof submitted. The shop owner will review it before confirming your balance."
+          : "The shop owner was notified that you paid in cash. Your balance remains pending until the shop confirms receipt.");
     } catch (error) {
       setRemainingPaymentError(error.message || "We could not submit the remaining payment.");
     } finally {
       setSubmittingRemainingPayment(false);
-    }
-  };
-
-  const handleRequestRefund = async () => {
-    if (!refundRequestModal) return;
-    setRequestingRefund(true);
-    try {
-      const { error } = await supabase
-        .from("orders")
-        .update({
-          status: "REFUND_PENDING",
-          refund_reason: refundReason || "Customer requested a refund after cancellation",
-          refund_requested_at: new Date().toISOString(),
-        })
-        .eq("id", refundRequestModal.orderId)
-        .eq("customer_id", user?.id);
-
-      if (error) throw error;
-
-      setOrders((prev) => prev.map((o) => (
-        o.id === refundRequestModal.orderId
-          ? { ...o, status: "REFUND_PENDING", refund_reason: refundReason || "Customer requested a refund after cancellation" }
-          : o
-      )));
-      setRefundRequestModal(null);
-      setRefundReason("");
-    } catch (err) {
-      alert(err.message || "Failed to request refund.");
-    } finally {
-      setRequestingRefund(false);
     }
   };
 
@@ -451,7 +390,7 @@ export default function TrackOrderPage() {
                 <h2 id="remaining-payment-title" className="mt-1 text-lg font-black tracking-tight text-slate-950">
                   {remainingPaymentModal.method === "E-Wallet" ? "Upload payment proof" : "Confirm offline payment"}
                 </h2>
-                <p className="mt-1 text-xs leading-relaxed text-slate-500">The shop will review this payment before the order can be completed.</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">The shop must confirm this payment before it can complete the order.</p>
               </div>
               <button type="button" onClick={() => setRemainingPaymentModal(null)} disabled={submittingRemainingPayment} className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:opacity-40" aria-label="Close remaining payment dialog"><X size={18} /></button>
             </div>
@@ -471,7 +410,7 @@ export default function TrackOrderPage() {
               </div>
             ) : (
               <div className="rounded-xl border border-[#FFF200] bg-[#FFFBE0] p-4 text-xs leading-relaxed text-slate-700">
-                Confirm that you already paid the remaining balance by cash, COD, or another offline method. The shop owner will verify it manually.
+                Tap the button only after paying the full remaining balance in cash. This notifies the shop owner; it does not mark the order paid until the shop confirms receipt.
               </div>
             )}
 
@@ -484,57 +423,7 @@ export default function TrackOrderPage() {
 
             <div className="flex gap-3">
               <button type="button" onClick={() => setRemainingPaymentModal(null)} disabled={submittingRemainingPayment} className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-black text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-50">Cancel</button>
-              <button type="button" onClick={handleSubmitRemainingPayment} disabled={submittingRemainingPayment} className="flex-1 rounded-xl bg-[#1A1A1A] px-4 py-3 text-xs font-black text-white transition-colors hover:bg-[#EC008C] disabled:cursor-wait disabled:opacity-60">{submittingRemainingPayment ? "Submitting..." : remainingPaymentModal.method === "E-Wallet" ? "Submit payment proof" : "I already paid"}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CANCEL MODAL */}
-      {cancelModal && (
-        <div className="dialog-overlay" role="dialog" aria-modal="true" onClick={() => setCancelModal(null)}>
-          <div className="dialog-surface max-w-md w-full p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-bold text-base text-slate-900">Request Order Cancellation</h3>
-            <p className="text-xs text-slate-500">Please select or type a reason for cancelling this print order:</p>
-            <textarea
-              value={cancelReason}
-              onChange={(e) => setCancelReason(e.target.value)}
-              placeholder="e.g. Changed specs, ordered wrong item..."
-              className="h-24 w-full border border-slate-200 bg-slate-50 p-3 text-xs outline-none focus:ring-2 focus:ring-rose-400"
-            />
-            <div className="flex gap-3 pt-2">
-              <button onClick={() => setCancelModal(null)} className="flex-1 bg-slate-100 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-200">
-                Back
-              </button>
-              <button onClick={handleCancelOrder} disabled={cancelling} className="flex-1 bg-rose-600 py-2.5 text-xs font-bold text-white hover:bg-rose-700">
-                {cancelling ? "Cancelling..." : "Confirm Cancellation"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* REFUND REQUEST MODAL */}
-      {refundRequestModal && (
-        <div className="dialog-overlay" role="dialog" aria-modal="true" onClick={() => setRefundRequestModal(null)}>
-          <div className="dialog-surface w-full max-w-md space-y-4 p-6" onClick={(e) => e.stopPropagation()}>
-            <div>
-              <h3 className="font-bold text-base text-slate-900">Request a refund</h3>
-              <p className="mt-1 text-xs leading-relaxed text-slate-500">Tell the print shop why you are requesting a refund. The shop will review it and upload proof when the refund is sent.</p>
-            </div>
-            <textarea
-              value={refundReason}
-              onChange={(e) => setRefundReason(e.target.value)}
-              placeholder="e.g. I paid a downpayment but the order was cancelled..."
-              className="h-24 w-full border border-slate-200 bg-slate-50 p-3 text-xs outline-none focus:ring-2 focus:ring-[#EC008C]"
-            />
-            <div className="flex gap-3 pt-2">
-              <button type="button" onClick={() => setRefundRequestModal(null)} className="flex-1 bg-slate-100 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-200">
-                Back
-              </button>
-              <button type="button" onClick={handleRequestRefund} disabled={requestingRefund} className="flex-1 bg-[#EC008C] py-2.5 text-xs font-bold text-white hover:bg-[#c90076] disabled:opacity-60">
-                {requestingRefund ? "Submitting..." : "Submit refund request"}
-              </button>
+              <button type="button" onClick={handleSubmitRemainingPayment} disabled={submittingRemainingPayment} className="flex-1 rounded-xl bg-[#1A1A1A] px-4 py-3 text-xs font-black text-white transition-colors hover:bg-[#EC008C] disabled:cursor-wait disabled:opacity-60">{submittingRemainingPayment ? "Submitting..." : remainingPaymentModal.method === "E-Wallet" ? "Submit payment proof" : "Notify shop I already paid"}</button>
             </div>
           </div>
         </div>
@@ -581,11 +470,11 @@ export default function TrackOrderPage() {
                   marker: "bg-[#B9B8B1]",
                 };
                 const bInfo = o.businesses || {};
-                const canCancel = o.status === "PLACED" || o.status === "PENDING";
                 const isReviewable = ["COMPLETED", "DELIVERY_COMPLETED"].includes(o.status);
                 const isRefundPending = o.status === "REFUND_PENDING";
                 const isRefunded = o.status === "REFUNDED";
-                const canRequestRefund = o.status === "CANCELLED";
+                const remainingPaymentMethod = o.payment_method === "E-Wallet" ? "E-Wallet" : "COD";
+                const isEWalletRemainingPayment = remainingPaymentMethod === "E-Wallet";
                 const progressSteps = getProgressSteps(o);
                 const payment = getOrderPaymentSummary(o);
                 const currentProgressIndex = o.delivery_type === "DELIVERY" && o.status === "COMPLETED"
@@ -742,17 +631,22 @@ export default function TrackOrderPage() {
                                   ? "Your payment was submitted and is waiting for the shop owner to review it."
                                   : payment.remainingPaymentRejected
                                     ? `The shop asked you to resubmit this payment${o.remaining_payment_rejection_reason ? `: ${o.remaining_payment_rejection_reason}` : "."}`
-                                    : "Pay the remaining balance, then submit proof or tell the shop you already paid offline."}
+                                    : isEWalletRemainingPayment
+                                      ? `Pay the remaining balance of ${formatPesoAmount(payment.balance)} by e-wallet, then upload your payment proof. The shop must confirm it before completing the order.`
+                                      : `Pay the remaining balance of ${formatPesoAmount(payment.balance)} in cash on pickup or delivery, then notify the shop. The shop must confirm receipt before completing the order.`}
                               </p>
                             </div>
                             <span className={`w-fit rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${payment.remainingPaymentPending ? "border-amber-300 bg-white text-amber-800" : payment.remainingPaymentRejected ? "border-rose-300 bg-white text-rose-700" : "border-[#00AFC0]/40 bg-white text-[#007C82]"}`}>
-                              {payment.remainingPaymentPending ? payment.remainingPaymentStatus === "SUBMITTED" ? "Submitted" : "Under review" : payment.remainingPaymentRejected ? "Resubmission needed" : "Action needed"}
+                              {payment.remainingPaymentPending ? payment.remainingPaymentStatus === "SUBMITTED" ? "Submitted" : "Under review" : payment.remainingPaymentRejected ? "Resubmission needed" : isEWalletRemainingPayment ? "E-Wallet" : "Cash"}
                             </span>
                           </div>
                           {!payment.remainingPaymentPending && (
                             <div className="flex flex-wrap gap-2">
-                              <button type="button" onClick={() => openRemainingPaymentModal(o, "E-Wallet")} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-[#1A1A1A] px-4 py-2.5 text-xs font-black text-white transition-colors hover:bg-[#EC008C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EC008C]"><Upload size={14} /> {payment.remainingPaymentRejected ? "Resubmit payment proof" : "Upload payment proof"}</button>
-                              <button type="button" onClick={() => openRemainingPaymentModal(o, "COD")} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-[#E6C94A] bg-[#FFFBE0] px-4 py-2.5 text-xs font-black text-[#665F00] transition-colors hover:bg-[#FFF200] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E6C94A]"><CheckCircle2 size={14} /> I already paid offline</button>
+                              {isEWalletRemainingPayment ? (
+                                <button type="button" onClick={() => openRemainingPaymentModal(o, remainingPaymentMethod)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-[#1A1A1A] px-4 py-2.5 text-xs font-black text-white transition-colors hover:bg-[#EC008C] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#EC008C]"><Upload size={14} /> {payment.remainingPaymentRejected ? "Resubmit payment proof" : "Upload payment proof"}</button>
+                              ) : (
+                                <button type="button" onClick={() => openRemainingPaymentModal(o, remainingPaymentMethod)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-[#E6C94A] bg-[#FFFBE0] px-4 py-2.5 text-xs font-black text-[#665F00] transition-colors hover:bg-[#FFF200] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E6C94A]"><CheckCircle2 size={14} /> Notify shop I already paid</button>
+                              )}
                             </div>
                           )}
                         </section>
@@ -764,29 +658,11 @@ export default function TrackOrderPage() {
                       ) : null}
 
                       {/* Actions Banner */}
-                      {(canCancel || canRequestRefund || isRefundPending) && (
+                      {isRefundPending && (
                         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-4">
-                          {canCancel && (
-                            <button
-                              onClick={() => setCancelModal({ orderId: o.id })}
-                              className="rounded-xl border border-rose-200 px-4 py-2 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50"
-                            >
-                              Cancel Order
-                            </button>
-                          )}
-                          {canRequestRefund && (
-                            <button
-                              onClick={() => setRefundRequestModal({ orderId: o.id })}
-                              className="inline-flex items-center gap-1.5 rounded-xl bg-[#EC008C] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#c90076]"
-                            >
-                              <RefreshCcw size={14} /> Request Refund
-                            </button>
-                          )}
-                          {isRefundPending && (
-                            <div className="w-full rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-xs font-semibold text-orange-800 sm:w-auto">
-                              Refund request sent — waiting for shop review.
-                            </div>
-                          )}
+                          <div className="w-full rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-xs font-semibold text-orange-800 sm:w-auto">
+                            Refund is being processed by the shop.
+                          </div>
                         </div>
                       )}
 

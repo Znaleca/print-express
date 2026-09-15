@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { ArrowRight, FileText, Loader2, Package } from "lucide-react";
+import { AlertTriangle, ArrowRight, FileText, Loader2, Package } from "lucide-react";
 import { getCartGroups, getDesignFiles } from "@/lib/checkout";
 
 export default function OrderSummary({
@@ -16,6 +16,7 @@ export default function OrderSummary({
   setUserSelectedDownpaymentPercent,
   downpaymentAmount,
   balanceAmount,
+  paymentMethod,
   isProcessing,
   isReadyToExecute,
   handleExecuteOrder,
@@ -127,11 +128,22 @@ export default function OrderSummary({
           </div>
 
           {balanceAmount > 0 && (
-            <div className="flex items-center justify-between text-xs text-slate-500">
-              <span>Remaining Balance</span>
-              <span>₱{balanceAmount.toFixed(2)}</span>
+            <div className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs">
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Remaining Balance</span>
+                <span className="font-bold text-[#EC008C]">₱{balanceAmount.toFixed(2)}</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Payment Method</span>
+                <span className="font-bold text-slate-900">{paymentMethod === "E-Wallet" ? "E-Wallet" : "Cash on pickup / delivery"}</span>
+              </div>
             </div>
           )}
+
+          <div className="flex gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3 text-[11px] leading-relaxed text-amber-950" role="note">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-700" aria-hidden="true" />
+            <p><strong>Final-order notice:</strong> Once placed, this order cannot be cancelled or refunded by the customer. Review all items, specifications, fulfillment details, and payment amounts before continuing.</p>
+          </div>
 
           <button
             type="button"

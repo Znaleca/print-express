@@ -36,11 +36,14 @@ export default function Footer() {
     if (pathname?.startsWith("/owner") || pathname?.startsWith("/admin") || pathname === "/messages") return null;
 
     const socialLinks = [
-        { icon: <FaFacebookF size={14} />, label: 'Facebook', href: '#' },
-        { icon: <FaInstagram size={14} />, label: 'Instagram', href: '#' },
-        { icon: <SiTiktok size={14} />, label: 'TikTok', href: '#' },
-        { icon: <FaYoutube size={14} />, label: 'YouTube', href: '#' },
-    ];
+        { icon: <FaFacebookF size={14} />, label: 'Facebook', href: process.env.NEXT_PUBLIC_FACEBOOK_URL },
+        { icon: <FaInstagram size={14} />, label: 'Instagram', href: process.env.NEXT_PUBLIC_INSTAGRAM_URL },
+        { icon: <SiTiktok size={14} />, label: 'TikTok', href: process.env.NEXT_PUBLIC_TIKTOK_URL },
+        { icon: <FaYoutube size={14} />, label: 'YouTube', href: process.env.NEXT_PUBLIC_YOUTUBE_URL },
+    ].map((social) => ({
+        ...social,
+        href: /^https?:\/\//i.test(String(social.href || '').trim()) ? String(social.href).trim() : null,
+    }));
 
     const exploreLinks = [
         { name: "Browse Services", href: "/browse" },
@@ -134,15 +137,29 @@ export default function Footer() {
                                 Connect
                             </h4>
                             <div className="flex flex-wrap gap-2">
-                                {socialLinks.map((social, index) => (
-                                    <a
-                                        key={index}
-                                        href={social.href}
-                                        className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white/70 hover:text-white hover:bg-[#EC008C] hover:border-[#EC008C] transition-all"
-                                        aria-label={social.label}
-                                    >
-                                        {social.icon}
-                                    </a>
+                                {socialLinks.map((social) => (
+                                    social.href ? (
+                                        <a
+                                            key={social.label}
+                                            href={social.href}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/70 transition-all hover:border-[#EC008C] hover:bg-[#EC008C] hover:text-white"
+                                            aria-label={`Visit Press & Present on ${social.label}`}
+                                        >
+                                            {social.icon}
+                                        </a>
+                                    ) : (
+                                        <span
+                                            key={social.label}
+                                            title={`${social.label} profile coming soon`}
+                                            aria-label={`${social.label} profile coming soon`}
+                                            aria-disabled="true"
+                                            className="flex h-8 w-8 cursor-not-allowed items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/25"
+                                        >
+                                            {social.icon}
+                                        </span>
+                                    )
                                 ))}
                             </div>
                         </div>
@@ -164,8 +181,8 @@ export default function Footer() {
                 <div className="pt-2 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-white/40 font-medium">
                     <p>© 2026 Press & Present. All rights reserved.</p>
                     <div className="flex items-center gap-6">
-                        <a href="#" className="hover:text-white/80 transition-colors">Privacy</a>
-                        <a href="#" className="hover:text-white/80 transition-colors">Terms</a>
+                        <Link href="/privacy" className="transition-colors hover:text-white/80">Privacy</Link>
+                        <Link href="/terms" className="transition-colors hover:text-white/80">Terms</Link>
                     </div>
                 </div>
 

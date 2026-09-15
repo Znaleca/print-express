@@ -40,8 +40,9 @@ test("verification and category routes preserve admin-scoped data actions", asyn
   assert.match(verificationApi, /PROFILE_STATUSES/);
   assert.match(verificationApi, /PROFILE_REQUEST_ALREADY_PENDING/);
   assert.match(verificationApi, /pendingProfileChangeRequests/);
-  assert.match(verification, /ProfileChangeRequestsSummary/);
-  assert.match(verification, /Open request/);
+  assert.match(verification, /ProfileFieldReviewCards/);
+  assert.doesNotMatch(verification, /ProfileChangeRequestsSummary/);
+  assert.match(verification, /Profile change requests/);
   assert.match(verification, /api\/admin\/shops\/lifecycle/);
   assert.match(verification, /Reopen for review/);
   assert.match(verification, /Save comment/);

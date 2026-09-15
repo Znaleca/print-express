@@ -35,6 +35,9 @@ test("approved owner documents are visibly locked in both document surfaces", as
   assert.match(ownerLayout, /if \(doc\?\.status === "APPROVED"\)/);
   assert.match(documentsPage, /Remove replacement file/);
   assert.match(documentsPage, /Remove uploaded file/);
+  assert.match(documentsPage, /const \[uploadLoading, setUploadLoading\] = useState\(\{\}\)/);
+  assert.match(documentsPage, /uploadLoading\[docType\]/);
+  assert.doesNotMatch(documentsPage, /globalLoading/);
   assert.match(documentsPage, /api\/owner\/documents/);
   assert.match(documentsPage, /previewDocIsImage/);
   assert.match(documentsPage, /overflow-hidden/);
@@ -86,6 +89,47 @@ test("owner shop phone input keeps the country code out of the textbox and saves
   assert.match(shop, /phone: toPhilippinePhoneInput\(normalizedPhone\)/);
   assert.match(phone, /if \(digits\.startsWith\("63"\)\) digits = digits\.slice\(2\)/);
   assert.match(phone, /return `\+63\$\{digits\}`/);
+});
+
+test("owner shop save action floats whenever there are unsaved changes", async () => {
+  const shop = await source("app/owner/shop/page.jsx");
+
+  assert.match(shop, /data-floating-save=\{hasUnsavedChanges \? "true" : "false"\}/);
+  assert.match(shop, /hasUnsavedChanges[\s\S]*?"fixed bottom-4 left-1\/2 z-50 flex w-\[calc\(100vw-2rem\)\] max-w-3xl -translate-x-1\/2 items-center gap-4/);
+  assert.match(shop, /hasUnsavedChanges \? "w-auto min-w-\[150px\] shrink-0" : "mt-4 w-full"/);
+  assert.match(shop, /hasUnsavedChanges \? "pb-56 sm:pb-40" : "pb-20"/);
+  assert.match(shop, /disabled=\{saving \|\| !hasUnsavedChanges\}/);
+});
+
+test("owners can edit pending profile fields and must request approved changes", async () => {
+  const shop = await source("app/owner/shop/page.jsx");
+  const documents = await source("app/owner/documents/page.jsx");
+  const migration = await source("supabase/migrations/20260915120000_business_profile_review_workflow.sql");
+  const fieldReviewMigration = await source("supabase/migrations/20260915150000_profile_change_field_review.sql");
+
+  assert.match(shop, /businessStatus === "APPROVED"/);
+  assert.doesNotMatch(shop, /disabled=\{businessStatus === "APPROVED"\}/);
+  assert.match(shop, /payload\.name = trimmedName/);
+  assert.match(shop, /payload\.description = form\.description\.trim\(\)/);
+  assert.match(shop, /You can update this shop name anytime/);
+  assert.match(documents, /savePreApprovalProfile/);
+  assert.doesNotMatch(documents, /saveApprovedShopName/);
+  assert.match(documents, /Preview only on this page/);
+  assert.doesNotMatch(documents, /requested_name: name/);
+  assert.match(documents, /Request profile change/);
+  assert.match(documents, /profile-change-scope/);
+  assert.match(documents, /PRODUCT_SERVICE_OPTIONS/);
+  assert.match(documents, /type="checkbox"/);
+  assert.match(documents, /requested_description: requestsDescription \? description : null/);
+  assert.match(documents, /requested_products_summary: requestsProducts \? productsSummary : null/);
+  assert.match(documents, /table: "business_profile_change_requests"/);
+  assert.match(documents, /setProfileRequests\(requests \|\| \[\]\)/);
+  assert.match(migration, /old\.status::text = 'APPROVED'/);
+  assert.match(migration, /new\.description_review_status := 'PENDING'/);
+  assert.match(migration, /new\.products_review_status := 'PENDING'/);
+  assert.match(fieldReviewMigration, /change_scope in \('BACKGROUND', 'PRODUCTS', 'BOTH'\)/);
+  assert.match(fieldReviewMigration, /admin_apply_business_profile_change/);
+  assert.match(fieldReviewMigration, /for insert to authenticated/);
 });
 
 test("order workflow is sequential in UI and database", async () => {

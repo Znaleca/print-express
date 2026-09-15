@@ -233,19 +233,13 @@ otp_length = 6
 # Number of seconds before the email OTP expires (defaults to 1 hour).
 otp_expiry = 3600
 
-# Use Resend for Supabase Auth delivery. The API key is read from the
-# environment and is never committed to this file.
+# The app generates Auth links server-side and sends them through the Resend
+# API. Do not use Supabase's local SMTP sender for signup verification.
 [auth.email.smtp]
-enabled = true
-host = "smtp.resend.com"
-port = 587
-user = "resend"
-pass = "env(RESEND_API_KEY)"
-admin_email = "noreply@pressandpresent.me"
-sender_name = "Press & Present"
+enabled = false
 
-# Keep Supabase Auth confirmation messages on-brand while Resend handles
-# delivery. Hosted projects must copy this template in the Auth dashboard.
+# Kept for reference if a hosted Supabase Auth template is ever needed. The
+# current signup and resend routes do not call Supabase's email sender.
 [auth.email.template.confirmation]
 subject = "Confirm your Press & Present account"
 content_path = "./supabase/templates/confirmation.html"

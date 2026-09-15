@@ -31,6 +31,32 @@ test("customer reads explicitly request approved active shops", async () => {
   }
 });
 
+test("shops search tells customers they can search products and services", async () => {
+  const shops = await source("app/shops/page.jsx");
+
+  assert.match(shops, /placeholder="Search printing shops, products, services, or area\.\.\."/);
+  assert.match(shops, /aria-label="Search printing shops, products, services, or area"/);
+  assert.match(shops, /getShopSearchResult/);
+  assert.match(shops, /Available products &amp; services/);
+});
+
+test("customer discovery queries only request public catalog fields and visibility", async () => {
+  const browse = await source("app/browse/page.jsx");
+  const shops = await source("app/shops/page.jsx");
+  for (const page of [browse, shops]) {
+    assert.match(page, /services \( name, category, description, item_type, available \)/);
+    assert.match(page, /service\?\.available !== false/);
+    assert.match(page, /\.eq\("status",\s*"APPROVED"\)/);
+    assert.match(page, /\.eq\("lifecycle_state",\s*"ACTIVE"\)/);
+  }
+});
+
+test("public catalog RLS hides unavailable rows from customer queries", async () => {
+  const migration = await source("supabase/migrations/20260915190000_public_catalog_visibility.sql");
+  assert.match(migration, /available = true/);
+  assert.match(migration, /public\.is_business_customer_visible\(business_id\)/);
+});
+
 test("database visibility and checkout remain protected by lifecycle state", async () => {
   const sql = await migrationSource();
 

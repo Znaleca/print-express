@@ -169,7 +169,7 @@ function MapResizeHandler() {
   return null;
 }
 
-export default function MapComponent({ businesses, selectedBusinessId, userLocation, nearestBusinessId }) {
+export default function MapComponent({ businesses, selectedBusinessId, userLocation, nearestBusinessId, emptyMessage }) {
   const router = useRouter();
   const markerRefs = useRef({});
   const [isMounted, setIsMounted] = useState(false);
@@ -300,6 +300,12 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
                     <span className="truncate">{b.address}</span>
                   </p>
 
+                  {b.matchReason && (
+                    <p className="mb-3 rounded-lg bg-[#00FFFF]/10 px-2.5 py-2 text-[10px] font-bold text-[#008F91]">
+                      {b.matchReason}
+                    </p>
+                  )}
+
                   {safeUserLocation && b.distanceKm != null && (
                     <p className="mb-3 rounded-lg bg-[#FFF200]/20 px-2.5 py-2 text-[10px] font-bold text-slate-700">
                       {b.distanceKm.toFixed(1)} km · ~{b.travelMinutes || Math.max(1, Math.round(b.distanceKm * 2.5))} min estimated travel time
@@ -339,7 +345,9 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
       {mapBusinesses.length === 0 && !safeUserLocation && (
         <div className="pointer-events-none absolute inset-x-4 top-24 z-10 flex justify-center sm:top-20">
           <div className="rounded-xl border border-[#D8D6CE] bg-white/95 px-4 py-3 text-center text-xs font-bold text-slate-700 shadow-md">
-            No verified shop locations are available yet.
+            {emptyMessage || (businesses.length > 0
+              ? "Matching shops do not have mapped locations yet."
+              : "No verified shop locations are available yet.")}
           </div>
         </div>
       )}

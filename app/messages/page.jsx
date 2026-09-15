@@ -48,6 +48,7 @@ function MessagesInner() {
   const router = useRouter();
   const initBizId = searchParams.get("business");
   const initConversationId = searchParams.get("conversation");
+  const openScheduleFromLink = searchParams.get("schedule") === "1";
 
   const [user, setUser] = useState(null);
   const [conversations, setConversations] = useState([]);
@@ -76,6 +77,7 @@ function MessagesInner() {
   const msgLimitRef = useRef(20);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
+  const scheduleLinkHandledRef = useRef(false);
 
   const shopQuestions = useMemo(
     () => getShopQuestions(activeConv?.businesses),
@@ -498,11 +500,31 @@ function MessagesInner() {
     setSending(false);
   };
 
-  const pendingMeetingRequest = videoCalls.find((call) => call.status === "REQUESTED");
+  const bookingDraftMeeting = videoCalls.find((call) => call.status === "REQUESTED" && !call.requested_slot_at && !call.rescheduled_from_at && Number(call.reschedule_count || 0) === 0);
+  const blockingMeeting = videoCalls.find((call) => {
+    if (!["REQUESTED", "SCHEDULED", "LIVE"].includes(call.status) || call.id === bookingDraftMeeting?.id) return false;
+    return !(["SCHEDULED", "LIVE"].includes(call.status) && getVideoCallWindow(call).expired);
+  });
+  const pendingMeetingRequest = blockingMeeting?.status === "REQUESTED" ? blockingMeeting : null;
   const rescheduleRequestedMeeting = videoCalls.find((call) => call.status === "REQUESTED" && Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at);
   const pendingOwnerConfirmation = videoCalls.find((call) => call.status === "REQUESTED" && call.requested_slot_at && (call.confirmation_required_by === "BUSINESS_OWNER" || (!call.confirmation_required_by && Number(call.reschedule_count || 0) > 0)));
   const pendingCustomerConfirmation = videoCalls.find((call) => call.status === "REQUESTED" && call.requested_slot_at && call.confirmation_required_by === "CUSTOMER");
-  const activeMeeting = videoCalls.find((call) => ["SCHEDULED", "LIVE"].includes(call.status));
+  const activeMeeting = ["SCHEDULED", "LIVE"].includes(blockingMeeting?.status) ? blockingMeeting : null;
+  const meetingButtonLabel = pendingMeetingRequest ? "Request pending" : activeMeeting ? "Meeting scheduled" : "Schedule meeting";
+  const meetingButtonHelp = pendingMeetingRequest
+    ? "This meeting request is awaiting confirmation."
+    : activeMeeting
+      ? "A meeting is already scheduled. Use its meeting card to reschedule or cancel it."
+      : "Choose an available day and time.";
+
+  useEffect(() => {
+    if (!openScheduleFromLink || scheduleLinkHandledRef.current || !activeConv) return;
+    scheduleLinkHandledRef.current = true;
+    setShowMeetingBooking(true);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("schedule");
+    router.replace(`/messages?${params.toString()}`, { scroll: false });
+  }, [activeConv, openScheduleFromLink, router, searchParams]);
 
   const joinVideoCall = async (callId) => {
     try {
@@ -762,10 +784,12 @@ function MessagesInner() {
                               const isRescheduleRequested = Boolean(call && call.status === "REQUESTED" && Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at);
                               const isPendingOwnerConfirmation = Boolean(call && call.status === "REQUESTED" && call.requested_slot_at && (call.confirmation_required_by === "BUSINESS_OWNER" || (!call.confirmation_required_by && Number(call.reschedule_count || 0) > 0)));
                               const isPendingCustomerConfirmation = Boolean(call && call.status === "REQUESTED" && call.requested_slot_at && call.confirmation_required_by === "CUSTOMER");
+                              const isSchedulingInvite = Boolean(call && call.status === "REQUESTED" && !call.requested_slot_at && meta.event === "scheduling_invite");
                               return (
                                 <div className="w-full min-w-60 rounded-xl border border-slate-200 bg-white p-4 text-center text-slate-900 shadow-sm">
                                   <Video size={26} className={`mx-auto mb-2 ${isScheduled ? "text-[#00aeb5]" : "text-[#EC008C]"}`} />
-                                   <p className="font-bold">{isScheduled ? "Video call scheduled" : isPendingCustomerConfirmation ? "Awaiting your confirmation" : isPendingOwnerConfirmation ? "Reschedule awaiting owner confirmation" : isRescheduleRequested || meta.event === "reschedule_requested" ? "Choose a new meeting time" : meta.event === "cancelled" ? "Video call cancelled" : "Video call requested"}</p>
+                                   <p className="font-bold">{isScheduled ? "Video call scheduled" : isSchedulingInvite ? "Choose a meeting time" : isPendingCustomerConfirmation ? "Awaiting your confirmation" : isPendingOwnerConfirmation ? "Reschedule awaiting owner confirmation" : isRescheduleRequested || meta.event === "reschedule_requested" ? "Choose a new meeting time" : meta.event === "cancelled" ? "Video call cancelled" : "Video call requested"}</p>
+                                   {isSchedulingInvite && <p className="mt-1 text-[11px] opacity-80">The shop invited you to choose any open time from its calendar.</p>}
                                    {isRescheduleRequested && <p className="mt-1 text-[11px] opacity-80">The shop asked you to choose another available time.</p>}
                                    {isPendingOwnerConfirmation && <p className="mt-1 text-[11px] opacity-80">Requested for {formatMeetingDateTime(call.requested_slot_at, call.booking_timezone || "Asia/Manila")}. Waiting for the owner to confirm.</p>}
                                    {isPendingCustomerConfirmation && <p className="mt-1 text-[11px] opacity-80">The owner proposed {formatMeetingDateTime(call.requested_slot_at, call.booking_timezone || "Asia/Manila")}.</p>}
@@ -783,6 +807,7 @@ function MessagesInner() {
                                    {!isScheduled && isRescheduleRequested && !isMe && (
                                      <button type="button" onClick={() => setShowMeetingBooking(true)} className="mt-3 w-full rounded-lg bg-[#EC008C] px-4 py-2 text-[11px] font-bold text-white hover:bg-[#c90078]">Choose a new time</button>
                                    )}
+                                   {!isScheduled && isSchedulingInvite && !isMe && <button type="button" onClick={() => setShowMeetingBooking(true)} className="mt-3 w-full rounded-lg bg-[#EC008C] px-4 py-2 text-[11px] font-bold text-white hover:bg-[#c90078]">Choose time</button>}
                                    {!isScheduled && isPendingCustomerConfirmation && <div className="mt-3 flex w-full flex-col gap-2"><button type="button" onClick={() => confirmProposedMeetingTime(call.id)} disabled={sending} className="rounded-lg bg-slate-900 px-4 py-2 text-[11px] font-bold text-white hover:bg-[#EC008C] disabled:opacity-40">Accept proposed time</button><button type="button" onClick={() => setShowMeetingBooking(true)} disabled={sending} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-[11px] font-bold text-slate-700 hover:border-[#EC008C] disabled:opacity-40">Choose another time</button></div>}
                                 </div>
                               );
@@ -1006,13 +1031,13 @@ function MessagesInner() {
                 <button
                   type="button"
                   onClick={() => setShowMeetingBooking(true)}
-                  disabled={sending || Boolean(videoCalls.find((call) => ["REQUESTED", "SCHEDULED", "LIVE"].includes(call.status)))}
-                  title={pendingMeetingRequest ? "Online meeting request sent" : "Schedule an online meeting"}
-                  aria-label={pendingMeetingRequest ? "Online meeting request sent" : "Schedule an online meeting"}
+                  disabled={sending || Boolean(blockingMeeting)}
+                  title={meetingButtonHelp}
+                  aria-label={meetingButtonHelp}
                   className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-3 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Video size={18} />
-                  <span className="hidden text-[10px] font-black uppercase tracking-wide sm:inline">{pendingMeetingRequest ? "Request sent" : "Schedule meeting"}</span>
+                  <span className="hidden text-[10px] font-black uppercase tracking-wide sm:inline">{meetingButtonLabel}</span>
                 </button>
                 <button
                   type="submit"
@@ -1044,7 +1069,7 @@ function MessagesInner() {
         <MeetingBookingModal
           businessId={activeConv.business_id}
           conversationId={activeConv.id}
-          existingCall={videoCalls.find((call) => ["REQUESTED", "SCHEDULED", "LIVE"].includes(call.status)) || null}
+          existingCall={blockingMeeting || null}
           onClose={() => setShowMeetingBooking(false)}
           onBooked={(call) => {
             if (call) setVideoCalls((current) => [call, ...current.filter((item) => item.id !== call.id)]);

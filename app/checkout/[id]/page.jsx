@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useEffect, useState } from "react";
 import Image from "next/image";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
@@ -496,6 +496,14 @@ export default function CheckoutPage({ params }) {
     setDesignFilesToView(resolvedFiles.filter((file) => file.url));
   };
 
+  const deliveryQuote = deliveryType === "PICKUP"
+    ? { status: "PICKUP", eligible: true, distanceKm: null, extraDistanceKm: 0, baseFee: 0, extraFee: 0, deliveryFee: 0 }
+    : calculateDeliveryFee({
+      shopCoordinates: business,
+      customerCoordinates: deliveryCoordinates,
+      settings: normalizeDeliverySettings(business || {}),
+    });
+
   if (loading) {
     return (
       <main className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-600">
@@ -523,17 +531,6 @@ export default function CheckoutPage({ params }) {
   }
 
   const total = selectedServices.reduce((sum, item) => sum + (Number(item.price) * (item.quantity || 1)), 0);
-  const deliverySettings = useMemo(() => normalizeDeliverySettings(business || {}), [business]);
-  const deliveryQuote = useMemo(() => {
-    if (deliveryType === "PICKUP") {
-      return { status: "PICKUP", eligible: true, distanceKm: null, extraDistanceKm: 0, baseFee: 0, extraFee: 0, deliveryFee: 0 };
-    }
-    return calculateDeliveryFee({
-      shopCoordinates: business,
-      customerCoordinates: deliveryCoordinates,
-      settings: deliverySettings,
-    });
-  }, [business, deliveryCoordinates, deliverySettings, deliveryType]);
   const deliveryFee = deliveryQuote.eligible ? deliveryQuote.deliveryFee : 0;
   const orderSubtotal = total;
   const orderTotal = orderSubtotal + deliveryFee;
@@ -924,7 +921,7 @@ export default function CheckoutPage({ params }) {
                     Remaining balance after downpayment: <strong className="text-slate-900">₱{balanceAmount.toFixed(2)}</strong>
                   </p>
                   <div className="grid grid-cols-2 gap-3">
-                    <button onClick={() => setPaymentMethod("COD")}
+                    <button type="button" onClick={() => setPaymentMethod("COD")}
                       className={`py-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
                         paymentMethod === 'COD'
                           ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
@@ -932,7 +929,7 @@ export default function CheckoutPage({ params }) {
                       }`}>
                       <Banknote size={16} /> Cash (On Pickup / Delivery)
                     </button>
-                    <button onClick={() => setPaymentMethod("E-Wallet")}
+                    <button type="button" onClick={() => setPaymentMethod("E-Wallet")}
                       className={`py-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
                         paymentMethod === 'E-Wallet'
                           ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
@@ -941,6 +938,11 @@ export default function CheckoutPage({ params }) {
                       <CreditCard size={16} /> E-Wallet
                     </button>
                   </div>
+                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] leading-relaxed text-slate-600">
+                    {paymentMethod === "E-Wallet"
+                      ? "After paying the remaining balance, upload your e-wallet proof from Order Tracking. The shop must confirm it before completing the order."
+                      : "Pay the remaining balance in cash on pickup or delivery, then notify the shop from Order Tracking. The shop must confirm receipt before completing the order."}
+                  </p>
                 </div>
               </div>
 
@@ -949,7 +951,7 @@ export default function CheckoutPage({ params }) {
                 <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-3">
                   <span className="w-6 h-6 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">4</span>
                   <h2 className="font-bold text-sm text-slate-900">
-                    Upload Payment Proof{effectiveDownpaymentPercent === 0 ? " (Optional)" : ""}
+                    Upload Downpayment Proof{effectiveDownpaymentPercent === 0 ? " (Optional)" : ""}
                   </h2>
                 </div>
 
@@ -1028,6 +1030,7 @@ export default function CheckoutPage({ params }) {
               setUserSelectedDownpaymentPercent={setUserSelectedDownpaymentPercent}
               downpaymentAmount={downpaymentAmount}
               balanceAmount={balanceAmount}
+              paymentMethod={paymentMethod}
               isProcessing={isProcessing}
               isReadyToExecute={isReadyToExecute}
               handleExecuteOrder={handleExecuteOrder}

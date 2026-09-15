@@ -57,6 +57,7 @@ export default function MeetingBookingModal({
   conversationId,
   existingCall = null,
   isOwner = false,
+  ownerAction = "manage",
   onClose,
   onBooked,
   }) {
@@ -119,10 +120,14 @@ export default function MeetingBookingModal({
   );
   const activeDate = dates.find((date) => date.dateKey === selectedDate);
   const visibleMonthIndex = availableMonths.indexOf(visibleMonth);
-  const title = isOwner
+  const title = isOwner && ownerAction === "propose"
+    ? "Propose a meeting time"
+    : isOwner
     ? existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by === "CUSTOMER" ? "Change proposed meeting time" : existingCall?.status === "REQUESTED" ? "Confirm online meeting" : "Reschedule online meeting"
     : existingCall ? "Reschedule online meeting" : "Schedule an online meeting";
-  const actionLabel = isOwner && existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by === "CUSTOMER"
+  const actionLabel = isOwner && ownerAction === "propose"
+    ? "Send time proposal"
+    : isOwner && existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by === "CUSTOMER"
     ? "Send updated proposal"
     : isOwner && existingCall?.status === "REQUESTED"
     ? "Confirm meeting"
@@ -161,11 +166,13 @@ export default function MeetingBookingModal({
     setError("");
     setWarning("");
     try {
-      const action = isOwner
+      const action = isOwner && ownerAction === "propose"
+        ? "propose"
+        : isOwner
         ? existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by !== "CUSTOMER" ? "schedule" : "reschedule"
         : existingCall ? "reschedule" : "book";
       const result = await videoCallAction(action, {
-        ...(existingCall ? { callId: existingCall.id } : { conversationId }),
+        ...(action === "propose" ? { conversationId } : existingCall ? { callId: existingCall.id } : { conversationId }),
         scheduledAt: selectedSlot.startAt,
         customerNote: note.trim() || undefined,
         timezone: availability?.business?.timezone,
@@ -207,7 +214,7 @@ export default function MeetingBookingModal({
             <>
               <div className="mb-5 flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
                 <Clock3 size={17} className="shrink-0 text-[#00aeb5]" />
-                <span><strong className="text-slate-900">{availability.settings.meeting_duration_minutes} minutes</strong> · {availability.business.timezone} · {getMeetingStatusLabel(existingCall?.status || "REQUESTED")}<small className="mt-1 block text-[10px] text-slate-500">Times less than 30 minutes from server time are hidden.</small></span>
+                <span><strong className="text-slate-900">{availability.settings.meeting_duration_minutes} minutes</strong> · {availability.business.timezone} · {getMeetingStatusLabel(existingCall?.status || "REQUESTED")}<small className="mt-1 block text-[10px] text-slate-500">Times inside the shop&apos;s {availability.settings.meeting_min_notice_minutes}-minute notice period are hidden.</small></span>
               </div>
               <div className="space-y-5">
                 <section className="rounded-xl border border-slate-200 bg-white p-4" aria-labelledby="meeting-month-heading">
@@ -278,7 +285,7 @@ export default function MeetingBookingModal({
               <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4">
                 <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">{existingCall ? isCurrentSelection ? "Current meeting" : "New meeting time" : "Selected meeting"}</p>
                 <p className="mt-1 text-sm font-extrabold text-slate-900">{selectedLabel}</p>
-                <p className="mt-1 text-[11px] text-slate-500">{needsDifferentTime ? "Choose a different available time to reschedule this meeting." : existingCall && selectedSlot ? isOwner && existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by !== "CUSTOMER" ? `This will confirm the requested appointment. Both participants will be emailed in ${availability.business.timezone}.` : isOwner ? `The customer must accept this proposed time. The reschedule email will be sent after confirmation in ${availability.business.timezone}.` : `The owner must confirm this new time. The reschedule email will be sent after confirmation in ${availability.business.timezone}.` : `The shop will see this time in ${availability.business.timezone}.`}</p>
+                <p className="mt-1 text-[11px] text-slate-500">{needsDifferentTime ? "Choose a different available time to reschedule this meeting." : isOwner && ownerAction === "propose" ? `The customer must accept this time. Only after confirmation will both participants receive the meeting details and secure call link in ${availability.business.timezone}.` : existingCall && selectedSlot ? isOwner && existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by !== "CUSTOMER" ? `This will confirm the requested appointment. Both participants will be emailed in ${availability.business.timezone}.` : isOwner ? `The customer must accept this proposed time. The reschedule email will be sent after confirmation in ${availability.business.timezone}.` : `The owner must confirm this new time. The reschedule email will be sent after confirmation in ${availability.business.timezone}.` : `This open time will be booked immediately. You and the shop will both receive an email in ${availability.business.timezone}.`}</p>
                 <label className="mt-4 block text-xs font-bold text-slate-700">Note (optional)<textarea value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} rows={3} placeholder="Tell the shop what you want to discuss" className="mt-1 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-[#00aeb5] focus:ring-2 focus:ring-[#00aeb5]/20" /></label>
               </div>
             </>

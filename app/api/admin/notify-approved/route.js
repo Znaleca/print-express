@@ -1,15 +1,6 @@
 import { NextResponse } from "next/server";
-import { sendResendEmail } from "@/lib/resendEmail";
+import { sendBusinessApprovalEmail } from "@/lib/businessApprovalEmail";
 import { requireAdmin } from "@/lib/serverAuth";
-import { getConfiguredAppUrl } from "@/lib/appUrl";
-
-const escapeHtml = (value) => String(value || "").replace(/[&<>\"']/g, (character) => ({
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '\"': "&quot;",
-  "'": "&#39;",
-}[character]));
 
 export async function POST(request) {
   try {
@@ -24,151 +15,22 @@ export async function POST(request) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    const appUrl = getConfiguredAppUrl();
-    if (!appUrl) {
-      console.error("ADMIN_APPROVAL_EMAIL_APP_URL_MISSING");
-      return NextResponse.json({ error: "Email service is temporarily unavailable." }, { status: 503 });
-    }
-
-    const safeOwnerName = escapeHtml(ownerName || "Business Owner").slice(0, 120);
-    const safeBusinessName = escapeHtml(cleanBusinessName).slice(0, 160);
-    const subjectBusinessName = cleanBusinessName.replace(/[\r\n]/g, " ").slice(0, 160);
-    const dashboardUrl = new URL("/owner", appUrl).toString();
-
-    const { data, error } = await sendResendEmail({
-      from: process.env.EMAIL_FROM || "Press & Present <noreply@pressandpresent.me>",
-      to: [normalizedOwnerEmail],
-      subject: `Your business "${subjectBusinessName}" has been approved!`,
-      html: `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>Business Approved</title>
-        </head>
-        <body style="margin:0;padding:0;background-color:#FDFDFD;font-family:'Courier New',Courier,monospace;">
-          <table width="100%" cellpadding="0" cellspacing="0" style="background:#FDFDFD;padding:40px 0;">
-            <tr>
-              <td align="center">
-                <table width="580" cellpadding="0" cellspacing="0" style="background:#ffffff;border:4px solid #1A1A1A;box-shadow:10px 10px 0px #00FFFF;">
-                  
-                  <!-- Header -->
-                  <tr>
-                    <td style="background:#1A1A1A;padding:24px 32px;">
-                      <table width="100%" cellpadding="0" cellspacing="0">
-                        <tr>
-                          <td>
-                            <span style="color:#ffffff;font-size:22px;font-weight:900;text-transform:uppercase;font-style:italic;letter-spacing:-1px;">
-                              Press <span style="color:#00FFFF;">&</span> Present
-                            </span>
-                            <br/>
-                            <span style="color:#ffffff;font-size:9px;opacity:0.4;text-transform:uppercase;letter-spacing:4px;">
-                              Production Grade Portal // 2026
-                            </span>
-                          </td>
-                          <td align="right">
-                            <span style="display:inline-block;background:#FFF200;color:#1A1A1A;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:3px;padding:4px 10px;border:2px solid #1A1A1A;">
-                              VERIFIED
-                            </span>
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-
-                  <!-- CMYK Strip -->
-                  <tr>
-                    <td>
-                      <table width="100%" cellpadding="0" cellspacing="0">
-                        <tr>
-                          <td width="25%" style="background:#00FFFF;height:6px;"></td>
-                          <td width="25%" style="background:#EC008C;height:6px;"></td>
-                          <td width="25%" style="background:#FFF200;height:6px;"></td>
-                          <td width="25%" style="background:#1A1A1A;height:6px;"></td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-
-                  <!-- Body -->
-                  <tr>
-                    <td style="padding:40px 32px;">
-                      <p style="margin:0 0 6px;font-size:9px;text-transform:uppercase;letter-spacing:4px;color:#EC008C;font-weight:900;">
-                        Status_Update
-                      </p>
-                      <h1 style="margin:0 0 24px;font-size:36px;font-weight:900;text-transform:uppercase;letter-spacing:-2px;line-height:1;color:#1A1A1A;font-style:italic;">
-                        You're Approved!
-                      </h1>
-                      <p style="margin:0 0 20px;font-size:13px;text-transform:uppercase;line-height:1.8;color:#555555;letter-spacing:1px;">
-                        Hi ${safeOwnerName},
-                      </p>
-                      <p style="margin:0 0 20px;font-size:13px;text-transform:uppercase;line-height:1.8;color:#555555;letter-spacing:1px;">
-                        Great news! All verification documents for <strong style="color:#1A1A1A;">[${safeBusinessName}]</strong> have been reviewed and approved by our admin team.
-                      </p>
-                      
-                      <!-- Approval Box -->
-                      <table width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0;border:4px solid #1A1A1A;background:#F9F9F7;">
-                        <tr>
-                          <td style="padding:20px 24px;">
-                            <p style="margin:0 0 4px;font-size:9px;text-transform:uppercase;letter-spacing:3px;color:#999;">What_You_Can_Do_Now</p>
-                            <ul style="margin:12px 0 0;padding-left:18px;font-size:11px;text-transform:uppercase;line-height:2.2;color:#1A1A1A;letter-spacing:1px;">
-                              <li>✅ Set up your shop profile & logo</li>
-                              <li>✅ Add your products and services</li>
-                              <li>✅ Set your operating hours & location</li>
-                              <li>✅ Start receiving customer orders</li>
-                              <li>✅ Manage orders through your dashboard</li>
-                            </ul>
-                          </td>
-                        </tr>
-                      </table>
-
-                      <p style="margin:0 0 28px;font-size:13px;text-transform:uppercase;line-height:1.8;color:#555555;letter-spacing:1px;">
-                        Head over to your owner dashboard to get started right away.
-                      </p>
-
-                      <!-- CTA Button -->
-                      <table cellpadding="0" cellspacing="0">
-                        <tr>
-                          <td style="background:#1A1A1A;border:4px solid #1A1A1A;box-shadow:6px 6px 0 #EC008C;">
-                            <a href="${dashboardUrl}"
-                               style="display:inline-block;padding:16px 32px;color:#ffffff;text-decoration:none;font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:3px;">
-                              Open_My_Dashboard →
-                            </a>
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-
-                  <!-- Footer -->
-                  <tr>
-                    <td style="padding:20px 32px;border-top:4px solid #1A1A1A;background:#F4F4F1;">
-                      <p style="margin:0;font-size:8px;text-transform:uppercase;letter-spacing:2px;color:#999;line-height:2;">
-                        © 2026 Press &amp; Present · This is an automated message · Do not reply
-                      </p>
-                    </td>
-                  </tr>
-
-                </table>
-              </td>
-            </tr>
-          </table>
-        </body>
-        </html>
-      `,
+    const notification = await sendBusinessApprovalEmail({
+      ownerEmail: normalizedOwnerEmail,
+      ownerName,
+      businessName: cleanBusinessName,
     });
 
-    if (error) {
-      console.error("ADMIN_APPROVAL_EMAIL_SEND_FAILED");
+    if (!notification.sent) {
+      console.error("ADMIN_APPROVAL_EMAIL_SEND_FAILED", notification.code || "EMAIL_SEND_FAILED");
       return NextResponse.json({
-        error: error.code === "RESEND_RATE_LIMITED"
+        error: notification.code === "RESEND_RATE_LIMITED"
           ? "Email service rate limit reached. Please try again shortly."
           : "The approval was completed, but the email could not be sent. Please try again.",
-      }, { status: error.status === 429 ? 429 : 502 });
+      }, { status: notification.status === 429 ? 429 : 502 });
     }
 
-    return NextResponse.json({ success: true, id: data?.id });
+    return NextResponse.json({ success: true, id: notification.id });
   } catch {
     console.error("ADMIN_APPROVAL_EMAIL_UNAVAILABLE");
     return NextResponse.json({ error: "The approval was completed, but the email could not be sent. Please try again." }, { status: 503 });

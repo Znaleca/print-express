@@ -9,10 +9,11 @@ import {
   toStorageRef,
 } from "@/lib/imageUpload";
 import {
-  FileText, CheckCircle, XCircle, Clock, Eye, AlertCircle, Loader2, X, Upload, ShieldCheck, File, Info, Image as ImageIcon,
+  FileText, CheckCircle, XCircle, Clock, Eye, AlertCircle, Loader2, X, Upload, ShieldCheck, File, Info, Image as ImageIcon, Save,
   LockKeyhole, Send, MessageSquare, Trash2
 } from "lucide-react";
 import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
+import { formatProductServiceSummary, parseProductServiceSummary, PRODUCT_SERVICE_OPTIONS } from "@/lib/productServiceOptions";
 const REQUIRED_DOCS = ["DTI", "MAYORS_PERMIT", "BIR", "VALID_ID"];
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_FILE_TYPES = {
@@ -36,16 +37,26 @@ export default function OwnerDocuments() {
   const [businessId, setBusinessId] = useState(null);
   const [businessStatus, setBusinessStatus] = useState("PENDING");
   const [userId, setUserId] = useState(null);
-  const [businessProfile, setBusinessProfile] = useState({ description: "", products_summary: "" });
+  const [businessProfile, setBusinessProfile] = useState({
+    name: "",
+    description: "",
+    products_summary: "",
+    description_review_status: "PENDING",
+    products_review_status: "PENDING",
+    description_admin_comment: "",
+    products_admin_comment: "",
+  });
   const [profileRequests, setProfileRequests] = useState([]);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
-  const [profileDraft, setProfileDraft] = useState({ description: "", products_summary: "", reason: "" });
+  const [profileDraft, setProfileDraft] = useState({ change_scope: "BOTH", description: "", selected_services: [], other_service: "", reason: "" });
   const [profileRequestLoading, setProfileRequestLoading] = useState(false);
   const [profileRequestError, setProfileRequestError] = useState(null);
+  const [profileEditLoading, setProfileEditLoading] = useState(false);
+  const [profileEditError, setProfileEditError] = useState(null);
   const [previewDocUrl, setPreviewDocUrl] = useState(null);
   const [reuploadFiles, setReuploadFiles] = useState({});
   const [reuploadPreviews, setReuploadPreviews] = useState({});
-  const [globalLoading, setGlobalLoading] = useState(false);
+  const [uploadLoading, setUploadLoading] = useState({});
   const [deleteLoading, setDeleteLoading] = useState({});
   const [previewDocIsImage, setPreviewDocIsImage] = useState(false);
   const [reuploadError, setReuploadError] = useState(null);
@@ -106,7 +117,7 @@ export default function OwnerDocuments() {
         setUserId(user.id);
         const { data: business, error: businessError } = await supabase
           .from("businesses")
-          .select("id, name, description, products_summary, status, lifecycle_state")
+          .select("id, name, description, products_summary, status, lifecycle_state, description_review_status, products_review_status, description_admin_comment, products_admin_comment")
           .eq("owner_id", user.id)
           .order("created_at", { ascending: false })
           .limit(1)
@@ -117,14 +128,19 @@ export default function OwnerDocuments() {
           setBusinessId(business.id);
           setBusinessStatus(String(business.status || "PENDING").toUpperCase());
           setBusinessProfile({
+            name: business.name || "",
             description: business.description || "",
             products_summary: business.products_summary || "",
+            description_review_status: business.description_review_status || "PENDING",
+            products_review_status: business.products_review_status || "PENDING",
+            description_admin_comment: business.description_admin_comment || "",
+            products_admin_comment: business.products_admin_comment || "",
           });
           const docs = await loadDocs(business.id);
           setDocStatuses(docs);
           const { data: requests } = await supabase
             .from("business_profile_change_requests")
-            .select("id, requested_description, requested_products_summary, reason, status, admin_comment, created_at, reviewed_at")
+            .select("id, change_scope, requested_description, requested_products_summary, description_review_status, products_review_status, reason, status, admin_comment, created_at, reviewed_at")
             .eq("business_id", business.id)
             .order("created_at", { ascending: false });
           setProfileRequests(requests || []);
@@ -148,20 +164,36 @@ export default function OwnerDocuments() {
     let active = true;
     const refreshVerification = async () => {
       try {
-        const [{ data: business }, docs] = await Promise.all([
+        const [{ data: business }, docs, { data: requests }] = await Promise.all([
           supabase
             .from("businesses")
-            .select("name, status")
+            .select("name, status, description, products_summary, description_review_status, products_review_status, description_admin_comment, products_admin_comment")
             .eq("id", businessId)
             .maybeSingle(),
           loadDocs(businessId),
+          supabase
+            .from("business_profile_change_requests")
+            .select("id, change_scope, requested_description, requested_products_summary, description_review_status, products_review_status, reason, status, admin_comment, created_at, reviewed_at")
+            .eq("business_id", businessId)
+            .order("created_at", { ascending: false }),
         ]);
         if (!active) return;
         if (business) {
           setBusinessName(business.name || "");
           setBusinessStatus(String(business.status || "PENDING").toUpperCase());
+          setBusinessProfile((current) => ({
+            ...current,
+            name: business.name || "",
+            description: business.description || current.description,
+            products_summary: business.products_summary || current.products_summary,
+            description_review_status: business.description_review_status || current.description_review_status,
+            products_review_status: business.products_review_status || current.products_review_status,
+            description_admin_comment: business.description_admin_comment || "",
+            products_admin_comment: business.products_admin_comment || "",
+          }));
         }
         setDocStatuses(docs);
+        setProfileRequests(requests || []);
       } catch {
         // Keep the last known document state if a realtime refresh is
         // temporarily unavailable; the next event or a manual reload retries.
@@ -182,6 +214,12 @@ export default function OwnerDocuments() {
         table: "businesses",
         filter: `id=eq.${businessId}`,
       }, () => { void refreshVerification(); })
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "business_profile_change_requests",
+        filter: `business_id=eq.${businessId}`,
+      }, () => { void refreshVerification(); })
       .subscribe();
 
     return () => {
@@ -193,9 +231,12 @@ export default function OwnerDocuments() {
   const openProfileRequest = () => {
     const pendingRequest = profileRequests.find((request) => request.status === "PENDING");
     if (pendingRequest) return;
+    const parsedServices = parseProductServiceSummary(businessProfile.products_summary);
     setProfileDraft({
+      change_scope: "BOTH",
       description: businessProfile.description,
-      products_summary: businessProfile.products_summary,
+      selected_services: parsedServices.selectedServices,
+      other_service: parsedServices.otherService,
       reason: "",
     });
     setProfileRequestError(null);
@@ -206,15 +247,25 @@ export default function OwnerDocuments() {
     event.preventDefault();
     if (!businessId || profileRequestLoading) return;
 
+    const requestsDescription = ["BACKGROUND", "BOTH"].includes(profileDraft.change_scope);
+    const requestsProducts = ["PRODUCTS", "BOTH"].includes(profileDraft.change_scope);
     const description = profileDraft.description.trim();
-    const productsSummary = profileDraft.products_summary.trim();
+    const productsSummary = formatProductServiceSummary(profileDraft.selected_services, profileDraft.other_service);
     const reason = profileDraft.reason.trim();
 
-    if (description.length < 20 || description.length > 800) {
+    if (requestsDescription && (description.length < 20 || description.length > 800)) {
       setProfileRequestError("Business background must be between 20 and 800 characters.");
       return;
     }
-    if (productsSummary.length < 10 || productsSummary.length > 500) {
+    if (requestsProducts && profileDraft.selected_services.length === 0) {
+      setProfileRequestError("Select at least one product or service.");
+      return;
+    }
+    if (requestsProducts && profileDraft.selected_services.includes("Other") && !profileDraft.other_service.trim()) {
+      setProfileRequestError("Describe the other product or service you selected.");
+      return;
+    }
+    if (requestsProducts && (productsSummary.length < 10 || productsSummary.length > 500)) {
       setProfileRequestError("Products and services offered must be between 10 and 500 characters.");
       return;
     }
@@ -229,11 +280,12 @@ export default function OwnerDocuments() {
       .from("business_profile_change_requests")
       .insert({
         business_id: businessId,
-        requested_description: description,
-        requested_products_summary: productsSummary,
+        change_scope: profileDraft.change_scope,
+        requested_description: requestsDescription ? description : null,
+        requested_products_summary: requestsProducts ? productsSummary : null,
         reason,
       })
-      .select("id, requested_description, requested_products_summary, reason, status, admin_comment, created_at, reviewed_at")
+      .select("id, change_scope, requested_description, requested_products_summary, description_review_status, products_review_status, reason, status, admin_comment, created_at, reviewed_at")
       .single();
 
     if (error) {
@@ -244,6 +296,47 @@ export default function OwnerDocuments() {
     }
     setProfileRequestLoading(false);
   };
+
+  const toggleRequestedService = (service) => {
+    setProfileDraft((current) => ({
+      ...current,
+      selected_services: current.selected_services.includes(service)
+        ? current.selected_services.filter((item) => item !== service)
+        : [...current.selected_services, service],
+    }));
+    setProfileRequestError(null);
+  };
+
+  const savePreApprovalProfile = async (event) => {
+    event.preventDefault();
+    if (!businessId || businessStatus === "APPROVED" || profileEditLoading) return;
+    const description = businessProfile.description.trim();
+    const productsSummary = businessProfile.products_summary.trim();
+    if (description.length < 20 || description.length > 800) {
+      setProfileEditError("Business background must be between 20 and 800 characters.");
+      return;
+    }
+    if (productsSummary.length < 10 || productsSummary.length > 500) {
+      setProfileEditError("Products and services must be between 10 and 500 characters.");
+      return;
+    }
+
+    setProfileEditLoading(true);
+    setProfileEditError(null);
+    const { data, error } = await supabase
+      .from("businesses")
+      .update({ description, products_summary: productsSummary })
+      .eq("id", businessId)
+      .select("description, products_summary, description_review_status, products_review_status, description_admin_comment, products_admin_comment")
+      .single();
+    if (error) {
+      setProfileEditError(error.message || "Could not save your business profile.");
+    } else {
+      setBusinessProfile((current) => ({ ...current, ...data }));
+    }
+    setProfileEditLoading(false);
+  };
+
   const handlePreviewFile = (docType, file) => {
     const currentDoc = docStatuses.find((document) => getDocType(document) === docType);
     if (currentDoc?.status === "APPROVED") {
@@ -319,7 +412,7 @@ export default function OwnerDocuments() {
   };
   const handleUploadDocument = async (docType) => {
     const file = reuploadFiles[docType];
-    if (!file || !businessId || !userId) return;
+    if (!file || !businessId || !userId || uploadLoading[docType]) return;
     const existingDoc = docStatuses.find((document) => getDocType(document) === docType);
     if (existingDoc?.status === "APPROVED") {
       setReuploadError(`${DOC_META[docType]?.label || "This document"} is approved and locked. Replacements are only available after an admin requests action.`);
@@ -329,7 +422,7 @@ export default function OwnerDocuments() {
       setReuploadError("This document is already under review. Wait for the admin decision before submitting a replacement.");
       return;
     }
-    setGlobalLoading(true);
+    setUploadLoading((current) => ({ ...current, [docType]: true }));
     setReuploadError(null);
     try {
       const uploadFile = file.type?.startsWith("image/") ? await optimizeImageForUpload(file) : file;
@@ -392,7 +485,11 @@ export default function OwnerDocuments() {
     } catch (err) {
       setReuploadError(err.message || "Failed to upload document.");
     } finally {
-      setGlobalLoading(false);
+      setUploadLoading((current) => {
+        const next = { ...current };
+        delete next[docType];
+        return next;
+      });
     }
   };
   if (loading) {
@@ -458,7 +555,7 @@ export default function OwnerDocuments() {
       )}
       {profileModalOpen && (
         <div className="dialog-overlay" role="dialog" aria-modal="true" onClick={() => setProfileModalOpen(false)}>
-          <div className="dialog-surface max-w-2xl w-full p-6 sm:p-8" onClick={(event) => event.stopPropagation()}>
+          <div className="dialog-surface max-h-[92vh] max-w-2xl w-full overflow-y-auto p-6 sm:p-8" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
               <div>
                 <p className="font-mono text-[10px] font-black uppercase tracking-[0.18em] text-[#009FA0]">Admin review required</p>
@@ -471,7 +568,23 @@ export default function OwnerDocuments() {
             </div>
 
             <form onSubmit={handleProfileRequest} className="mt-5 space-y-4">
-              <div>
+              <fieldset>
+                <legend className="mb-2 text-xs font-bold text-slate-800">What do you want to update?</legend>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  {[
+                    ["BACKGROUND", "Business background"],
+                    ["PRODUCTS", "Products & services"],
+                    ["BOTH", "Both"],
+                  ].map(([value, label]) => (
+                    <label key={value} className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-3 text-xs font-bold transition-colors ${profileDraft.change_scope === value ? "border-[#00A5A5] bg-cyan-50 text-slate-900" : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300"}`}>
+                      <input type="radio" name="profile-change-scope" value={value} checked={profileDraft.change_scope === value} onChange={(event) => setProfileDraft((current) => ({ ...current, change_scope: event.target.value }))} className="h-4 w-4 accent-[#00A5A5]" />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              {["BACKGROUND", "BOTH"].includes(profileDraft.change_scope) && <div>
                 <label className="mb-1 block text-xs font-bold text-slate-800">Requested business background</label>
                 <textarea
                   value={profileDraft.description}
@@ -483,20 +596,29 @@ export default function OwnerDocuments() {
                   className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs outline-none focus:border-[#00C7C7] focus:ring-2 focus:ring-[#00C7C7]/20"
                 />
                 <p className="mt-1 text-right text-[10px] text-slate-400">{profileDraft.description.length}/800</p>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-bold text-slate-800">Requested products &amp; services</label>
-                <textarea
-                  value={profileDraft.products_summary}
-                  onChange={(event) => setProfileDraft((current) => ({ ...current, products_summary: event.target.value }))}
-                  maxLength={500}
-                  minLength={10}
-                  rows={3}
-                  required
-                  className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs outline-none focus:border-[#00C7C7] focus:ring-2 focus:ring-[#00C7C7]/20"
-                />
-                <p className="mt-1 text-right text-[10px] text-slate-400">{profileDraft.products_summary.length}/500</p>
-              </div>
+              </div>}
+
+              {["PRODUCTS", "BOTH"].includes(profileDraft.change_scope) && <div>
+                <p className="mb-1 text-xs font-bold text-slate-800">Requested products &amp; services</p>
+                <p className="mb-2 text-[11px] leading-relaxed text-slate-500">Select every product or service that should appear on your updated profile.</p>
+                <fieldset className="rounded-xl border border-slate-200 bg-white p-3">
+                  <legend className="sr-only">Requested products and services</legend>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {PRODUCT_SERVICE_OPTIONS.map((service) => {
+                      const selected = profileDraft.selected_services.includes(service);
+                      const inputId = `requested-service-${service.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+                      return <label key={service} htmlFor={inputId} className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2.5 text-xs font-semibold transition-colors ${selected ? "border-[#00A5A5] bg-cyan-50 text-slate-900" : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300"}`}>
+                        <input id={inputId} type="checkbox" checked={selected} onChange={() => toggleRequestedService(service)} className="mt-0.5 h-4 w-4 shrink-0 accent-[#00A5A5]" />
+                        <span>{service}</span>
+                      </label>;
+                    })}
+                  </div>
+                  {profileDraft.selected_services.includes("Other") && <div className="mt-3 border-t border-slate-100 pt-3">
+                    <label htmlFor="requested-other-service" className="mb-1 block text-[11px] font-bold text-slate-700">Describe your other product or service</label>
+                    <input id="requested-other-service" value={profileDraft.other_service} onChange={(event) => setProfileDraft((current) => ({ ...current, other_service: event.target.value.slice(0, 160) }))} maxLength={160} required className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs outline-none focus:border-[#00C7C7]" placeholder="e.g. Custom rubber stamps" />
+                  </div>}
+                </fieldset>
+              </div>}
               <div>
                 <label className="mb-1 block text-xs font-bold text-slate-800">Why are you requesting this change?</label>
                 <textarea
@@ -573,9 +695,9 @@ export default function OwnerDocuments() {
                   <LockKeyhole size={17} className="text-[#EC008C]" />
                   <h2 className="text-lg font-black text-slate-900">Business profile details</h2>
                 </div>
-                <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">These details are read-only while your shop is verified. Request an admin review before changing customer-facing information.</p>
+                <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">Preview your approved shop identity here. Business background and products &amp; services require Admin review after the shop is approved.</p>
               </div>
-              <button
+              {businessStatus === "APPROVED" && <button
                 type="button"
                 onClick={openProfileRequest}
                 disabled={profileRequests.some((request) => request.status === "PENDING")}
@@ -583,8 +705,22 @@ export default function OwnerDocuments() {
               >
                 <MessageSquare size={14} />
                 {profileRequests.some((request) => request.status === "PENDING") ? "Request pending" : "Request profile change"}
-              </button>
+              </button>}
             </div>
+
+            <div className="mt-4 rounded-2xl border border-[#00C7C7]/30 bg-[#F4FFFF] p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-[#007C7D]">Business name</p>
+              <p className="mt-2 text-sm font-black text-slate-900">{businessProfile.name || "Business name not available"}</p>
+              <p className="mt-1 text-[11px] text-slate-500">Preview only on this page. Manage general shop details from the Shop Profile page when available.</p>
+            </div>
+
+            {businessStatus !== "APPROVED" && <form onSubmit={savePreApprovalProfile} className="mt-4 space-y-4 rounded-2xl border border-[#00C7C7]/30 bg-[#F4FFFF] p-4">
+              <div><p className="text-[10px] font-black uppercase tracking-[0.14em] text-[#007C7D]">Edit before approval</p><p className="mt-1 text-xs leading-relaxed text-slate-600">You may correct the background and products or services while Admin review is still in progress.</p></div>
+              <label className="block"><span className="mb-1 block text-xs font-bold text-slate-800">Business background</span><textarea value={businessProfile.description} onChange={(event) => setBusinessProfile((current) => ({ ...current, description: event.target.value }))} minLength={20} maxLength={800} rows={4} required className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs outline-none focus:border-[#00C7C7]" /><span className="mt-1 block text-right text-[10px] text-slate-400">{businessProfile.description.length}/800</span></label>
+              <label className="block"><span className="mb-1 block text-xs font-bold text-slate-800">Products &amp; services</span><textarea value={businessProfile.products_summary} onChange={(event) => setBusinessProfile((current) => ({ ...current, products_summary: event.target.value }))} minLength={10} maxLength={500} rows={3} required className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs outline-none focus:border-[#00C7C7]" /><span className="mt-1 block text-right text-[10px] text-slate-400">{businessProfile.products_summary.length}/500</span></label>
+              {profileEditError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700" role="alert">{profileEditError}</p>}
+               <button type="submit" disabled={profileEditLoading} className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-xs font-black text-white hover:bg-[#00A878] disabled:cursor-wait disabled:opacity-50">{profileEditLoading ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save profile for review</button>
+             </form>}
 
             <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -696,7 +832,7 @@ export default function OwnerDocuments() {
                       <button
                         type="button"
                         onClick={() => clearSelectedFile(docType)}
-                        disabled={globalLoading}
+                        disabled={uploadLoading[docType]}
                         className="w-full rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <span className="inline-flex items-center justify-center gap-1.5"><Trash2 size={14} /> Remove replacement file</span>
@@ -716,7 +852,7 @@ export default function OwnerDocuments() {
                     <button
                       type="button"
                       onClick={() => handleDeleteDocument(docType, doc)}
-                      disabled={deleteLoading[docType] || globalLoading}
+                      disabled={deleteLoading[docType] || uploadLoading[docType]}
                       className="w-full rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <span className="inline-flex items-center justify-center gap-1.5">
@@ -762,10 +898,10 @@ export default function OwnerDocuments() {
                         <button
                           type="button"
                           onClick={() => handleUploadDocument(docType)}
-                          disabled={globalLoading}
+                          disabled={uploadLoading[docType]}
                           className="w-full rounded-xl bg-slate-900 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-[#EC008C] disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          {globalLoading ? "Uploading..." : "Submit file for admin review"}
+                          {uploadLoading[docType] ? "Uploading..." : "Submit file for admin review"}
                         </button>
                       )}
                     </div>

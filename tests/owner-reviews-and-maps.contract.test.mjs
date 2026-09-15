@@ -84,9 +84,14 @@ test("all map consumers normalize coordinates and keep Leaflet client-only", asy
   assert.match(picker, /normalizeCoordinates/);
   assert.match(picker, /markerRef\.current\?\.remove\(\)/);
   assert.match(picker, /resizeObserver\?\.disconnect\(\)/);
+  assert.match(picker, /draggable: !readOnly/);
   assert.match(browse, /ssr: false/);
   assert.match(browse, /normalizeCoordinates\(pos\.coords\.latitude, pos\.coords\.longitude\)/);
   assert.match(checkout, /Pin your delivery location on the map before placing your order/);
   assert.match(checkout, /delivery_coordinates:/);
   assert.match(ownerShop, /normalizeCoordinates\(form\.lat, form\.lng\)/);
+  assert.match(ownerShop, /nominatim\.openstreetmap\.org\/reverse/);
+  assert.match(ownerShop, /Address filled from the map pin\. You can still edit it\./);
+  assert.match(ownerShop, /addressEditVersionRef\.current \+= 1/);
+  assert.match(ownerShop, /addressLookupControllerRef\.current\?\.abort\(\)/);
 });

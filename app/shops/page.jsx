@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { Search, Star, Loader2, Store, ChevronRight, MapPin, ArrowRight } from "lucide-react";
@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { getRatingStats, ratingLabel } from "@/lib/rating";
 import { withTimeout } from "@/lib/withTimeout";
 import { normalizeCoordinates } from "@/lib/coordinates";
+import { getShopSearchResult } from "@/lib/shopSearch";
 
 export default function ShopsPage() {
   const router = useRouter();
@@ -29,8 +30,8 @@ export default function ShopsPage() {
           (signal) => supabase
             .from("businesses")
             .select(`
-              id, name, address, lat, lng, logo_url, is_open,
-              services ( name, category, available )
+              id, name, address, description, products_summary, lat, lng, logo_url, is_open,
+              services ( name, category, description, item_type, available )
             `)
             .eq("status", "APPROVED")
             .eq("lifecycle_state", "ACTIVE")
@@ -81,9 +82,8 @@ export default function ShopsPage() {
         }, {});
 
         const formatted = (bizData || []).map((b) => {
-          const availableServices = (b.services || [])
-            .filter(s => s.available)
-            .map(s => s.name);
+          const catalog = (b.services || []).filter((service) => service?.available !== false);
+          const availableServices = catalog.map((service) => service.name).filter(Boolean);
 
           const reviews = reviewsByBusiness[b.id] || [];
           const ratingStats = getRatingStats(reviews);
@@ -99,7 +99,10 @@ export default function ShopsPage() {
             is_open: openStateByBusiness[b.id] ?? b.is_open ?? true,
             rating: ratingStats.average,
             reviewCount: ratingStats.count,
-            services: availableServices.slice(0, 5)
+            services: availableServices.slice(0, 5),
+            catalog,
+            description: b.description || "",
+            products_summary: b.products_summary || "",
           };
         });
 
@@ -136,13 +139,14 @@ export default function ShopsPage() {
     };
   }, []);
 
-  const filtered = businesses.filter(
-    (b) =>
-      (
-        b.name.toLowerCase().includes(search.toLowerCase()) ||
-        b.services.some((s) => s.toLowerCase().includes(search.toLowerCase())) ||
-        b.address.toLowerCase().includes(search.toLowerCase())
-      )
+  const filtered = useMemo(
+    () => businesses
+      .map((business) => ({
+        ...business,
+        ...getShopSearchResult(business, search),
+      }))
+      .filter((business) => business.matched),
+    [businesses, search]
   );
 
   return (
@@ -168,10 +172,20 @@ export default function ShopsPage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search shop, service, or area..."
-              aria-label="Search verified print shops"
-              className="shops-search h-14 w-full rounded-full border border-white/25 bg-white/10 pl-12 pr-5 text-sm font-semibold text-white outline-none transition-all placeholder:text-white/45 focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/20 sm:text-base"
+              placeholder="Search printing shops, products, services, or area..."
+              aria-label="Search printing shops, products, services, or area"
+              className="shops-search h-14 w-full rounded-full border border-white/25 bg-white/10 pl-12 pr-12 text-sm font-semibold text-white outline-none transition-all placeholder:text-white/45 focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/20 sm:text-base"
             />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="absolute right-3 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+                aria-label="Clear shop search"
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            )}
           </div>
         </div>
       </section>
@@ -203,9 +217,11 @@ export default function ShopsPage() {
         ) : filtered.length === 0 ? (
           <div className="mx-auto max-w-lg rounded-3xl border border-dashed border-[#D8D6CE] bg-white/60 p-12 text-center">
             <MapPin className="mx-auto mb-4 text-[#EC008C]" size={30} />
-            <h3 className="text-lg font-black">No verified shops found</h3>
+            <h3 className="text-lg font-black">{search.trim() ? "No approved shops match this search" : "No verified shops found"}</h3>
             <p className="mt-2 text-sm leading-relaxed text-[#676762]">
-              Try another search. Shops can still be opened while their map location is being completed.
+              {search.trim()
+                ? "Try a shop name, product, service, category, or area."
+                : "Shops can still be opened while their map location is being completed."}
             </p>
           </div>
         ) : (
@@ -261,7 +277,7 @@ export default function ShopsPage() {
                 </div>
 
                 <div className="mt-3 min-h-0">
-                  <p className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-[#676762]">Available services</p>
+                  <p className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-[#676762]">Available products &amp; services</p>
                   <div className="flex flex-wrap gap-1.5">
                     {b.services.length > 0 ? b.services.map((service, index) => (
                       <span key={index} className="rounded-full border border-[#D8D6CE] bg-[#F6F6F2] px-2.5 py-1 text-[10px] font-bold text-[#4E4E49]">
@@ -271,6 +287,7 @@ export default function ShopsPage() {
                       <span className="text-xs text-[#676762]">Services available on request</span>
                     )}
                   </div>
+                  {b.matchReason && <p className="mt-2 text-[10px] font-semibold text-[#008F91]">{b.matchReason}</p>}
                 </div>
 
                 <div className="mt-auto flex items-center justify-between border-t border-[#ECECE8] pt-3 text-xs font-black transition-colors group-hover:text-[#EC008C]">

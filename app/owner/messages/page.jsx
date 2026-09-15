@@ -28,8 +28,8 @@ import ProfileAvatar from "@/components/ProfileAvatar";
 import OwnerConversationList from "@/components/messages/OwnerConversationList";
 import VideoCallModal from "@/components/VideoCallModal";
 import MeetingBookingModal from "@/components/MeetingBookingModal";
-import { getVideoCallWindow, videoCallAction } from "@/lib/videoCalls";
-import { formatMeetingDateTime } from "@/lib/meetingScheduling";
+import { getVideoCallWindow, videoCallAction, videoCallQuery } from "@/lib/videoCalls";
+import { findUpcomingMeetingWithin, formatMeetingCountdown, formatMeetingDateTime } from "@/lib/meetingScheduling";
 
 const DESIGN_FILE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,image/svg+xml,.ai,.psd,.eps,.tif,.tiff";
 const DESIGN_MAX_BYTES = 10 * 1024 * 1024;
@@ -69,9 +69,8 @@ export default function OwnerMessagesPage() {
   const [editingText, setEditingText] = useState("");
   const [unreadByConv, setUnreadByConv] = useState({});
   const [menuMessageId, setMenuMessageId] = useState(null);
-  const [showSchedule, setShowSchedule] = useState(false);
-  const [scheduleCallId, setScheduleCallId] = useState(null);
-  const [scheduleTime, setScheduleTime] = useState("");
+  const [showMeetingActions, setShowMeetingActions] = useState(false);
+  const [meetingActionMode, setMeetingActionMode] = useState("manage");
   const [showQuote, setShowQuote] = useState(false);
   const [quoteAmount, setQuoteAmount] = useState("");
   const [quoteTax, setQuoteTax] = useState("");
@@ -155,12 +154,12 @@ export default function OwnerMessagesPage() {
 
     const { data: meetingRequestRows } = await supabase
       .from("video_calls")
-      .select("id, conversation_id, business_id, customer_id, status, created_at, scheduled_at, requested_slot_at, reschedule_count")
+      .select("id, conversation_id, business_id, customer_id, status, confirmation_required_by, created_at, scheduled_at, requested_slot_at, reschedule_count")
       .in("business_id", bizIds)
       .eq("status", "REQUESTED")
       .neq("customer_id", user.id)
       .order("created_at", { ascending: false });
-    setPendingVideoRequests((meetingRequestRows || []).filter((call) => !(Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at)));
+    setPendingVideoRequests((meetingRequestRows || []).filter((call) => call.confirmation_required_by !== "CUSTOMER" && !(Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at)));
 
     // Step 1: get conversations for any of these businesses
     const { data: convs, error: convErr } = await supabase
@@ -492,32 +491,70 @@ export default function OwnerMessagesPage() {
     }
   };
 
-  const sendVideoCallInvite = async () => {
-    if (!scheduleTime || !scheduleCallId || !activeConv || !user) return;
+  const sendSchedulingInvite = async () => {
+    if (!activeConv || !user || sending) return;
     setSending(true);
     try {
-      const result = await videoCallAction("schedule", {
-        callId: scheduleCallId,
-        scheduledAt: new Date(scheduleTime).toISOString(),
-      });
+      const result = await videoCallAction("invite_to_schedule", { conversationId: activeConv.id });
       if (result.call) {
         setVideoCalls((current) => [result.call, ...current.filter((call) => call.id !== result.call.id)]);
         setPendingVideoRequests((current) => current.filter((call) => call.id !== result.call.id));
       }
+      setShowMeetingActions(false);
+      if (result.warning) window.alert(result.warning);
     } catch (error) {
-      window.alert(error.message || "Could not send the video call invite.");
+      window.alert(error.message || "Could not invite the customer to choose a time.");
+    } finally {
       setSending(false);
-      return;
     }
-    setSending(false);
-    setShowSchedule(false);
-    setScheduleTime("");
-    setScheduleCallId(null);
   };
 
-  const openScheduleForCall = (callId) => {
-    setScheduleCallId(callId);
-    setShowSchedule(true);
+  const openScheduleForCall = () => {
+    setMeetingActionMode("manage");
+    setShowMeetingBooking(true);
+  };
+
+  const openMeetingProposal = () => {
+    setMeetingActionMode("propose");
+    setShowMeetingActions(false);
+    setShowMeetingBooking(true);
+  };
+
+  const startVideoCallNow = async () => {
+    if (!activeConv || !user || sending) return;
+    setSending(true);
+    try {
+      const now = new Date();
+      let confirmationMessage = "Start a secure call now? The current meeting duration will be reserved and the customer will receive the call link by email.";
+      try {
+        const ownerCalendar = await videoCallQuery({ view: "owner" });
+        const upcomingMeeting = findUpcomingMeetingWithin(ownerCalendar.calls || [], { now, withinMinutes: 60 });
+        if (upcomingMeeting) {
+          const timeZone = upcomingMeeting.timezone || upcomingMeeting.booking_timezone || "Asia/Manila";
+          const meetingTime = formatMeetingDateTime(upcomingMeeting.scheduled_at, timeZone, { dateStyle: undefined, timeStyle: "short" });
+          const countdown = formatMeetingCountdown(upcomingMeeting.scheduled_at, now);
+          const customerName = upcomingMeeting.customer?.full_name || "another customer";
+          confirmationMessage = `You have a scheduled meeting with ${customerName} at ${meetingTime} (in ${countdown}). Starting a call now may overlap that meeting. Are you sure you want to call now?`;
+        }
+      } catch (calendarError) {
+        console.warn("[Messages] Could not check the upcoming meeting warning:", calendarError?.message || "Unknown error");
+      }
+
+      if (!window.confirm(confirmationMessage)) return;
+      const started = await videoCallAction("start_now", { conversationId: activeConv.id });
+      if (!started.call?.id) throw new Error("The call could not be started.");
+      setVideoCalls((current) => [started.call, ...current.filter((call) => call.id !== started.call.id)]);
+      setShowMeetingActions(false);
+      const joined = await videoCallAction("join", { callId: started.call.id });
+      if (!joined.call?.room_name) throw new Error("The secure call room is unavailable.");
+      setVideoCalls((current) => [joined.call, ...current.filter((call) => call.id !== joined.call.id)]);
+      setVideoCallSession({ callId: joined.call.id, roomName: joined.call.room_name });
+      if (started.warning) window.alert(started.warning);
+    } catch (error) {
+      window.alert(error.message || "Could not start the video call.");
+    } finally {
+      setSending(false);
+    }
   };
 
   const joinVideoCall = async (callId) => {
@@ -925,6 +962,12 @@ export default function OwnerMessagesPage() {
     return <OwnerPageSkeleton rows={2} />;
   }
 
+  const ownerMeetingDraft = videoCalls.find((call) => call.status === "REQUESTED" && !call.requested_slot_at && !call.rescheduled_from_at && Number(call.reschedule_count || 0) === 0) || null;
+  const ownerBlockingMeeting = videoCalls.find((call) => {
+    if (!["REQUESTED", "SCHEDULED", "LIVE"].includes(call.status) || call.id === ownerMeetingDraft?.id) return false;
+    return !(call.status === "SCHEDULED" && getVideoCallWindow(call).expired);
+  }) || null;
+
   return (
     <div data-tour="owner-messages" className="owner-messages-page flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 md:h-[100dvh]">
       <div className="relative shrink-0 border-b border-slate-200 bg-white px-4 pb-6 pt-8 sm:px-8 sm:pb-7">
@@ -1029,7 +1072,7 @@ export default function OwnerMessagesPage() {
                             window.alert("The customer request is no longer active. Ask them to request another call.");
                             return;
                           }
-                           setShowMeetingBooking(true);
+                          openScheduleForCall();
                           setShowQuote(false);
                           setShowDesign(false);
                         }}
@@ -1170,18 +1213,20 @@ export default function OwnerMessagesPage() {
                               const isRescheduleRequested = Boolean(call && call.status === "REQUESTED" && Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at);
                               const isPendingOwnerConfirmation = Boolean(call && call.status === "REQUESTED" && call.requested_slot_at && (call.confirmation_required_by === "BUSINESS_OWNER" || (!call.confirmation_required_by && Number(call.reschedule_count || 0) > 0)));
                               const isPendingCustomerConfirmation = Boolean(call && call.status === "REQUESTED" && call.requested_slot_at && call.confirmation_required_by === "CUSTOMER");
+                              const isSchedulingInvite = Boolean(call && call.status === "REQUESTED" && !call.requested_slot_at && meta.event === "scheduling_invite");
                               const isMissed = Boolean(call && (call.status === "EXPIRED" || (call.status === "SCHEDULED" && callWindow.expired)));
                               return (
                                 <div className="flex w-64 flex-col items-center rounded-xl border border-slate-200 border-t-4 border-t-[#00aeb5] bg-white p-4 text-center text-slate-900 shadow-sm">
                                   <Video size={28} className={`mb-2 ${isScheduled ? "text-[#00aeb5]" : "text-[#EC008C]"}`} />
-                                    <p className="text-xs font-black uppercase">{isScheduled ? "Video Call Scheduled" : isPendingCustomerConfirmation ? "Awaiting customer confirmation" : isPendingOwnerConfirmation ? "Confirm the customer's new time" : isRescheduleRequested || meta.event === "reschedule_requested" ? "Waiting for customer to choose a new time" : meta.event === "cancelled" ? "Video Call Cancelled" : "Online Meeting Requested"}</p>
+                                    <p className="text-xs font-black uppercase">{isScheduled ? "Video Call Scheduled" : isSchedulingInvite ? "Customer invited to schedule" : isPendingCustomerConfirmation ? "Awaiting customer confirmation" : isPendingOwnerConfirmation ? "Confirm the customer's new time" : isRescheduleRequested || meta.event === "reschedule_requested" ? "Waiting for customer to choose a new time" : meta.event === "cancelled" ? "Video Call Cancelled" : "Online Meeting Requested"}</p>
+                                  {isSchedulingInvite && <p className="mt-1 font-mono text-[9px] uppercase text-slate-500">Waiting for the customer to choose an open time.</p>}
                                   {isRescheduleRequested && <p className="mt-1 font-mono text-[9px] uppercase text-slate-500">The customer will choose the replacement time.</p>}
                                   {isPendingCustomerConfirmation && call?.requested_slot_at && <p className="mt-1 text-[10px] font-semibold text-slate-600">Proposed for {formatMeetingDateTime(call.requested_slot_at, call.booking_timezone || "Asia/Manila")}</p>}
                                   {isPendingOwnerConfirmation && call?.requested_slot_at && <p className="mt-1 text-[10px] font-semibold text-slate-600">Customer requested {formatMeetingDateTime(call.requested_slot_at, call.booking_timezone || "Asia/Manila")}</p>}
                                   {isScheduled && call?.scheduled_at && <p className="mt-1 text-[10px] font-bold text-slate-600">{formatMeetingDateTime(call.scheduled_at, call.booking_timezone || "Asia/Manila")}</p>}
                                   {!isScheduled && !isPendingCustomerConfirmation && meta.event !== "cancelled" && !isMine && (
                                     <div className="mt-3 flex w-full gap-2">
-                                      <button type="button" onClick={() => call && openScheduleForCall(call.id)} disabled={!call} className="flex-1 bg-[#EC008C] px-3 py-2 font-black uppercase text-[10px] text-white transition-all hover:bg-[#00FFFF] hover:text-[#1A1A1A] disabled:opacity-40">Schedule / accept</button>
+                                      <button type="button" onClick={() => call && openScheduleForCall()} disabled={!call} className="flex-1 bg-[#EC008C] px-3 py-2 font-black uppercase text-[10px] text-white transition-all hover:bg-[#00FFFF] hover:text-[#1A1A1A] disabled:opacity-40">Schedule / accept</button>
                                       <button type="button" onClick={() => call && cancelVideoCall(call.id)} disabled={!call} className="rounded border border-rose-300 bg-white px-3 py-2 text-[10px] font-black uppercase text-rose-700 transition-all hover:bg-rose-50 disabled:opacity-40">Decline</button>
                                     </div>
                                   )}
@@ -1190,7 +1235,7 @@ export default function OwnerMessagesPage() {
                                       <button type="button" onClick={() => joinVideoCall(call.id)} disabled={!callWindow.joinable} className="w-full rounded-lg bg-[#EC008C] px-4 py-2.5 text-[10px] font-black uppercase text-white transition-all hover:bg-[#FFF200] hover:text-[#1A1A1A] disabled:cursor-not-allowed disabled:border disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-500 disabled:opacity-100">
                                         {callWindow.expired ? "Call ended" : callWindow.joinable ? "Join secure call" : "Not yet available"}
                                       </button>
-                                      {!callWindow.expired && <div className="flex gap-2">{isMine && <button type="button" onClick={() => setShowMeetingBooking(true)} className="flex-1 rounded border border-cyan-500 px-2 py-1.5 text-[9px] font-bold uppercase text-cyan-700 hover:bg-cyan-50">Reschedule</button>}<button type="button" onClick={() => cancelVideoCall(call.id)} className="flex-1 rounded border border-rose-300 px-2 py-1.5 text-[9px] font-bold uppercase text-rose-700 hover:bg-rose-50">Cancel</button></div>}
+                                      {!callWindow.expired && <div className="flex gap-2">{isMine && <button type="button" onClick={openScheduleForCall} className="flex-1 rounded border border-cyan-500 px-2 py-1.5 text-[9px] font-bold uppercase text-cyan-700 hover:bg-cyan-50">Reschedule</button>}<button type="button" onClick={() => cancelVideoCall(call.id)} className="flex-1 rounded border border-rose-300 px-2 py-1.5 text-[9px] font-bold uppercase text-rose-700 hover:bg-rose-50">Cancel</button></div>}
                                       {isMissed && <button type="button" onClick={() => requestVideoCallReschedule(call.id)} className="w-full rounded border border-cyan-500 px-2 py-1.5 text-[9px] font-bold uppercase text-cyan-700 hover:bg-cyan-50">Ask customer to choose a new time</button>}
                                     </div>
                                   )}
@@ -1487,7 +1532,7 @@ export default function OwnerMessagesPage() {
                     )}
                     <button
                       type="button"
-                      onClick={() => { setShowDesign(!showDesign); setShowSchedule(false); setShowQuote(false); }}
+                      onClick={() => { setShowDesign(!showDesign); setShowMeetingActions(false); setShowQuote(false); }}
                       disabled={sending}
                       className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#FFF200] transition-all disabled:opacity-40"
                       title="Upload Design Version"
@@ -1569,7 +1614,7 @@ export default function OwnerMessagesPage() {
                     )}
                     <button
                       type="button"
-                      onClick={() => { setShowQuote(!showQuote); setShowSchedule(false); setShowDesign(false); }}
+                      onClick={() => { setShowQuote(!showQuote); setShowMeetingActions(false); setShowDesign(false); }}
                       disabled={sending}
                       className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#00FFFF] transition-all disabled:opacity-40"
                       title="Send Quote"
@@ -1578,58 +1623,28 @@ export default function OwnerMessagesPage() {
                     </button>
                   </div>
                   <div className="relative flex shrink-0">
-                  {showSchedule && (
-                    <div className="absolute bottom-16 right-0 bg-white border-2 border-[#1A1A1A] p-4 shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] flex flex-col gap-3 z-50 w-72">
-                      <p className="font-black uppercase italic text-sm border-b-2 border-[#1A1A1A] pb-2">Schedule Video Call</p>
-                      <p className="font-mono text-[9px] uppercase leading-relaxed opacity-60">
-                        Includes camera, microphone, screen share, chat, raise hand, tile view, video quality controls, and whiteboard.
-                      </p>
-                      <label className="flex flex-col gap-1">
-                        <span className="font-mono text-[9px] uppercase font-black opacity-60">Select Time (Local)</span>
-                        <input
-                          type="datetime-local"
-                          value={scheduleTime}
-                          onChange={(e) => setScheduleTime(e.target.value)}
-                          className="border-2 border-[#1A1A1A] px-2 py-2 text-sm font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
-                        />
-                      </label>
-                      <div className="flex gap-2 mt-1">
-                        <button
-                          type="button"
-                          onClick={() => setShowSchedule(false)}
-                          className="flex-1 bg-white border-2 border-[#1A1A1A] font-black uppercase text-[10px] py-2 hover:bg-[#1A1A1A] hover:text-white transition-all text-center"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          onClick={sendVideoCallInvite}
-                          disabled={!scheduleTime || sending}
-                          className="flex-1 bg-[#00FFFF] border-2 border-[#1A1A1A] font-black uppercase text-[10px] py-2 hover:bg-[#EC008C] hover:text-white transition-all text-center disabled:opacity-40"
-                        >
-                          {sending ? "Sending..." : "Send Invite"}
-                        </button>
+                  {showMeetingActions && (
+                    <div className="absolute bottom-16 right-0 z-50 w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                      <div className="border-b border-slate-200 px-4 py-3"><p className="text-sm font-black text-slate-900">Online meeting</p><p className="mt-1 text-[10px] text-slate-500">Choose how you want to meet with this customer.</p></div>
+                      <div className="space-y-2 p-3">
+                        <button type="button" onClick={startVideoCallNow} disabled={sending || Boolean(ownerBlockingMeeting)} className="flex w-full items-start gap-3 rounded-xl border border-slate-200 p-3 text-left hover:border-[#EC008C] hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#EC008C] text-white"><Video size={17} /></span><span><strong className="block text-xs text-slate-900">Call now</strong><small className="mt-1 block text-[10px] leading-relaxed text-slate-500">Start immediately and reserve the current meeting time on your calendar.</small></span></button>
+                        <button type="button" onClick={sendSchedulingInvite} disabled={sending || Boolean(ownerBlockingMeeting)} className="flex w-full items-start gap-3 rounded-xl border border-slate-200 p-3 text-left hover:border-[#00aeb5] hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-40"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#00aeb5] text-white"><Calendar size={17} /></span><span><strong className="block text-xs text-slate-900">Let customer choose</strong><small className="mt-1 block text-[10px] leading-relaxed text-slate-500">Email your scheduling link so the customer can book an open time.</small></span></button>
+                        <button type="button" onClick={openMeetingProposal} disabled={sending || Boolean(ownerBlockingMeeting)} className="flex w-full items-start gap-3 rounded-xl border border-slate-200 p-3 text-left hover:border-[#FFF200] hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-40"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-[#FFF200]"><Check size={17} /></span><span><strong className="block text-xs text-slate-900">Propose a time</strong><small className="mt-1 block text-[10px] leading-relaxed text-slate-500">Choose an open time. Email details and the call link after the customer accepts.</small></span></button>
+                        {ownerBlockingMeeting && <p className="rounded-lg bg-amber-50 px-3 py-2 text-[10px] font-semibold text-amber-800">This conversation already has an active meeting. Use its meeting card to reschedule or cancel it.</p>}
                       </div>
                     </div>
                   )}
                   <button
                     type="button"
                     onClick={() => {
-                          const pendingCall = videoCalls.find((call) => call.status === "REQUESTED" && call.confirmation_required_by !== "CUSTOMER" && !(Number(call.reschedule_count || 0) > 0 && !call.requested_slot_at));
-                      if (!pendingCall) {
-                        window.alert("A customer must request a video call before you schedule one.");
-                        return;
-                      }
-                      if (showSchedule) {
-                        setShowSchedule(false);
-                        setScheduleCallId(null);
-                      } else {
-                        openScheduleForCall(pendingCall.id);
-                      }
+                      setShowMeetingActions((visible) => !visible);
+                      setShowQuote(false);
+                      setShowDesign(false);
                     }}
                     disabled={sending}
                     className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#00FFFF] transition-all disabled:opacity-40"
-                    title="Schedule Video Call"
+                    title="Meeting options"
+                    aria-label="Open meeting options"
                   >
                     <Video size={20} />
                   </button>
@@ -1776,12 +1791,14 @@ export default function OwnerMessagesPage() {
           conversationId={activeConv.id}
           existingCall={videoCalls.find((call) => ["REQUESTED", "SCHEDULED", "LIVE"].includes(call.status)) || null}
           isOwner
-          onClose={() => setShowMeetingBooking(false)}
+          ownerAction={meetingActionMode}
+          onClose={() => { setShowMeetingBooking(false); setMeetingActionMode("manage"); }}
           onBooked={(call) => {
             if (call) {
               setVideoCalls((current) => [call, ...current.filter((item) => item.id !== call.id)]);
               setPendingVideoRequests((current) => current.filter((item) => item.id !== call.id));
             }
+            setMeetingActionMode("manage");
             setShowMeetingBooking(false);
           }}
         />

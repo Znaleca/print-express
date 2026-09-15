@@ -15,17 +15,43 @@ test("meeting scheduling keeps timezone, notice, duration, and overlap rules in 
   assert.match(helper, /meeting_max_days_ahead/);
   assert.match(helper, /busyIntervals/);
   assert.match(helper, /REQUESTED.*SCHEDULED.*LIVE/s);
-  assert.match(helper, /MINIMUM_MEETING_NOTICE_MINUTES = 30/);
+  assert.match(helper, /MINIMUM_MEETING_NOTICE_MINUTES = 5/);
   assert.match(helper, /isMeetingStartBookable/);
 });
 
-test("meeting booking accepts exactly 30 minutes, accepts later slots, and blocks earlier slots", async () => {
+test("meeting booking uses a customizable 20-minute default notice", async () => {
   const { isMeetingStartBookable } = await import("../lib/meetingScheduling.js");
   const now = "2026-09-13T01:00:00.000Z";
-  assert.equal(isMeetingStartBookable("2026-09-13T01:30:00.000Z", { now }), true);
+  assert.equal(isMeetingStartBookable("2026-09-13T01:20:00.000Z", { now, minimumNoticeMinutes: 20 }), true);
   assert.equal(isMeetingStartBookable("2026-09-13T01:35:00.000Z", { now }), true);
-  assert.equal(isMeetingStartBookable("2026-09-13T01:29:59.000Z", { now }), false);
+  assert.equal(isMeetingStartBookable("2026-09-13T01:19:59.000Z", { now, minimumNoticeMinutes: 20 }), false);
   assert.equal(isMeetingStartBookable("2026-09-13T01:35:00.000Z", { now, minimumNoticeMinutes: 60 }), false);
+});
+
+test("date overrides can block a day or publish custom minute-based slots", async () => {
+  const { buildMeetingSlots } = await import("../lib/meetingScheduling.js");
+  const settings = {
+    meeting_enabled: true,
+    meeting_duration_minutes: 30,
+    meeting_buffer_minutes: 0,
+    meeting_min_notice_minutes: 20,
+    meeting_max_days_ahead: 3,
+    meeting_slot_interval_minutes: 10,
+  };
+  const hours = [
+    { day_of_week: 1, opens_at: "09:00:00", closes_at: "17:00:00", is_closed: false },
+    { day_of_week: 2, opens_at: "09:00:00", closes_at: "17:00:00", is_closed: false },
+  ];
+  const dateOverrides = [
+    { available_date: "2026-09-14", is_available: true, opens_at: "14:20:00", closes_at: "16:30:00" },
+    { available_date: "2026-09-15", is_available: false, opens_at: null, closes_at: null },
+  ];
+
+  const dates = buildMeetingSlots({ timeZone: "Asia/Manila", hours, dateOverrides, settings, now: new Date("2026-09-13T23:00:00.000Z") });
+  const customMonday = dates.find((date) => date.dateKey === "2026-09-14");
+  assert.equal(customMonday.slots[0].time, "14:20");
+  assert.equal(customMonday.slots.at(-1).time, "16:00");
+  assert.equal(dates.some((date) => date.dateKey === "2026-09-15"), false);
 });
 
 test("an active booking removes its occupied time and buffer from public availability", async () => {
@@ -59,11 +85,27 @@ test("an active booking removes its occupied time and buffer from public availab
 });
 
 test("meeting countdown uses readable minute, hour, and day labels", async () => {
-  const { formatMeetingCountdown } = await import("../lib/meetingScheduling.js");
+  const { findUpcomingMeetingWithin, formatMeetingCountdown } = await import("../lib/meetingScheduling.js");
   const now = "2026-09-14T01:00:00.000Z";
+  const calls = [
+    { id: "later", status: "SCHEDULED", scheduled_at: "2026-09-14T01:45:00.000Z" },
+    { id: "nearest", status: "SCHEDULED", scheduled_at: "2026-09-14T01:01:00.000Z" },
+    { id: "ended", status: "ENDED", scheduled_at: "2026-09-14T01:00:30.000Z" },
+  ];
   assert.equal(formatMeetingCountdown("2026-09-14T04:00:00.000Z", now), "3 hours");
   assert.equal(formatMeetingCountdown("2026-09-14T04:15:00.000Z", now), "3 hours, 15 minutes");
   assert.equal(formatMeetingCountdown("2026-09-15T03:00:00.000Z", now), "1 day, 2 hours");
+  assert.equal(findUpcomingMeetingWithin(calls, { now, withinMinutes: 60 })?.id, "nearest");
+  assert.equal(findUpcomingMeetingWithin(calls, { now, withinMinutes: 0 }), null);
+});
+
+test("owner call-now checks the next hour and warns with the exact meeting countdown", () => {
+  const ownerMessages = source("app/owner/messages/page.jsx");
+  assert.match(ownerMessages, /videoCallQuery\(\{ view: "owner" \}\)/);
+  assert.match(ownerMessages, /findUpcomingMeetingWithin\(ownerCalendar\.calls \|\| \[\], \{ now, withinMinutes: 60 \}\)/);
+  assert.match(ownerMessages, /formatMeetingCountdown\(upcomingMeeting\.scheduled_at, now\)/);
+  assert.match(ownerMessages, /You have a scheduled meeting with/);
+  assert.match(ownerMessages, /Are you sure you want to call now\?/);
 });
 
 test("database booking is transactional and prevents duplicate business slots", () => {
@@ -88,6 +130,84 @@ test("customer booking migration converts an empty request into a reserved meeti
   assert.match(migration, /scheduled_at = case when next_status = 'SCHEDULED'/i);
   assert.match(migration, /available_from_at = case when next_status = 'SCHEDULED'/i);
   assert.match(migration, /already have an active meeting\. Reschedule it instead/i);
+});
+
+test("customer selection directly schedules an owner-published open slot", () => {
+  const migration = source("supabase/migrations/20260915160000_customer_direct_meeting_booking.sql");
+  const route = source("app/api/video-calls/route.js");
+  const modal = source("components/MeetingBookingModal.jsx");
+  const customer = source("app/messages/page.jsx");
+  const ownerCalendar = source("app/owner/calendar/page.jsx");
+
+  assert.match(migration, /set meeting_requires_approval = false/i);
+  assert.match(migration, /create or replace function public\.video_call_book/i);
+  assert.match(migration, /status = 'SCHEDULED'/i);
+  assert.match(migration, /confirmation_required_by = null/i);
+  assert.match(migration, /perform public\.validate_video_call_slot/i);
+  assert.match(migration, /status in \('SCHEDULED', 'LIVE'\)[\s\S]*expires_at < now\(\)/i);
+  assert.doesNotMatch(migration, /next_status := case when business_row\.meeting_requires_approval/i);
+  assert.match(route, /book: "BOOKED"/);
+  assert.match(modal, /This open time will be booked immediately/);
+  assert.match(modal, /You and the shop will both receive an email/);
+  assert.doesNotMatch(ownerCalendar, /Require owner confirmation/);
+  assert.match(ownerCalendar, /Customer choices book immediately/i);
+  assert.match(customer, /meetingButtonLabel/);
+  assert.match(customer, /Meeting scheduled/);
+  assert.match(customer, /getVideoCallWindow\(call\)\.expired/);
+});
+
+test("flexible availability is enforced in both the API and database", () => {
+  const migration = source("supabase/migrations/20260915170000_flexible_meeting_availability.sql");
+  const route = source("app/api/video-calls/route.js");
+
+  assert.match(migration, /create table if not exists public\.business_meeting_date_overrides/i);
+  assert.match(migration, /meeting_min_notice_minutes between 5 and 10080/i);
+  assert.match(migration, /meeting_slot_interval_minutes between 5 and 120/i);
+  assert.match(migration, /create policy "Owners can create meeting date overrides"/i);
+  assert.match(migration, /create or replace function public\.validate_video_call_slot/i);
+  assert.match(migration, /The shop blocked this date/i);
+  assert.match(migration, /mod\(target_minutes - override_open_minutes, business_row\.meeting_slot_interval_minutes\)/i);
+  assert.match(route, /business_meeting_date_overrides/);
+  assert.match(route, /dateOverrides/);
+  assert.match(route, /buildMeetingSlots\(\{ timeZone, hours, dateOverrides/);
+});
+
+test("owners have three secure meeting choices in messages", () => {
+  const migration = source("supabase/migrations/20260915180000_owner_meeting_choices.sql");
+  const route = source("app/api/video-calls/route.js");
+  const owner = source("app/owner/messages/page.jsx");
+  const modal = source("components/MeetingBookingModal.jsx");
+
+  assert.match(owner, /Call now/);
+  assert.match(owner, /Let customer choose/);
+  assert.match(owner, /Propose a time/);
+  assert.match(owner, /videoCallAction\("start_now"/);
+  assert.match(owner, /videoCallAction\("invite_to_schedule"/);
+  assert.match(modal, /ownerAction === "propose"/);
+  assert.match(route, /video_call_owner_start_now/);
+  assert.match(route, /video_call_owner_invite/);
+  assert.match(route, /video_call_owner_propose/);
+  assert.match(migration, /Only this shop owner can start the call/i);
+  assert.match(migration, /The shop already has a meeting during this time/i);
+  assert.match(migration, /confirmation_required_by = 'CUSTOMER'/i);
+});
+
+test("customer scheduling invites and accepted proposals use the correct email timing", () => {
+  const migration = source("supabase/migrations/20260915180000_owner_meeting_choices.sql");
+  const route = source("app/api/video-calls/route.js");
+  const email = source("lib/meetingEmail.js");
+  const customer = source("app/messages/page.jsx");
+
+  assert.match(route, /invite_to_schedule: "SCHEDULING_INVITE"/);
+  assert.doesNotMatch(route, /propose: "CONFIRMED"/);
+  assert.match(email, /eventType === "SCHEDULING_INVITE"/);
+  assert.match(email, /schedule=1/);
+  assert.match(email, /Choose a meeting time/);
+  assert.match(customer, /openScheduleFromLink/);
+  assert.match(customer, /The shop invited you to choose any open time/);
+  assert.match(migration, /source', 'accepted_owner_proposal'/i);
+  assert.match(migration, /status = 'SCHEDULED'/i);
+  assert.match(route, /confirm: "CONFIRMED"/);
 });
 
 test("customer reschedules require owner confirmation before sending the reschedule email", () => {
@@ -256,6 +376,11 @@ test("owner calendar preserves owner actions, availability settings, and convers
   const ownerMessages = source("app/owner/messages/page.jsx");
   assert.match(calendar, /view: "owner"/);
   assert.match(calendar, /meeting_duration_minutes/);
+  assert.match(calendar, /Minimum notice \(minutes\)/);
+  assert.match(calendar, /Slot spacing \(minutes\)/);
+  assert.match(calendar, /Date availability/);
+  assert.match(calendar, /business_meeting_date_overrides/);
+  assert.match(calendar, /Blocked/);
   assert.match(calendar, /business_hours/);
   assert.ok(calendar.includes("owner/messages?conversation"));
   assert.match(calendar, /videoCallAction\("join"/);

@@ -13,7 +13,7 @@ const SMS_STATUS_LABELS = {
   CANCELLED: "CANCELLED",
 };
 
-export const buildSmsMessage = ({ statusLabel, order, business }) => {
+const buildSmsMessage = ({ statusLabel, order, business }) => {
   const orderCode = order.id.split("-")[0].toUpperCase();
   const shopName = business?.name || "your print shop";
 

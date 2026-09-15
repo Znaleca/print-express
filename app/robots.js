@@ -4,7 +4,7 @@ export default function robots() {
   return {
     rules: {
       userAgent: "*",
-      allow: ["/", "/about", "/browse", "/shops", "/business/"],
+      allow: ["/", "/about", "/privacy", "/terms", "/browse", "/shops", "/business/"],
       disallow: ["/admin/", "/owner/", "/account-settings", "/api/", "/auth/", "/checkout/", "/messages", "/reset-password", "/track"],
     },
     host: getConfiguredAppUrl(),

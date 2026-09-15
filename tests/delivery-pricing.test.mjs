@@ -53,6 +53,9 @@ test("delivery settings and checkout keep fee calculation server-authoritative",
   assert.match(ownerShop, /Delivery pricing/);
   assert.match(ownerShop, /delivery_base_fee/);
   assert.match(ownerShop, /delivery_included_distance_km/);
+  assert.match(ownerShop, /step="any"[^>]*name="delivery_included_distance_km"/);
+  assert.match(ownerShop, /numericValue\.toFixed\(1\)/);
+  assert.match(ownerShop, /onBlur=\{\(\) => formatDistanceInput\("delivery_included_distance_km"\)\}/);
   assert.match(ownerShop, /delivery_max_distance_km/);
   assert.equal((ownerShop.match(/<LocationPicker/g) || []).length, 1, "owner shop should render one shared location map");
   assert.match(ownerShop, /includedRadiusKm={form\.delivery_enabled/);

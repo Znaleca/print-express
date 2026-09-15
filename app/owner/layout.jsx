@@ -29,6 +29,35 @@ function hasAllRequiredDocumentsApproved(documents = []) {
   ));
 }
 
+function OwnerGateUI({ icon: Icon, title, message, badge, type, action }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center overflow-x-hidden bg-white p-6 font-sans text-[#1A1A1A]">
+      <div className="relative w-full max-w-md overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-8 shadow-[0_18px_45px_rgba(26,26,26,0.08)]">
+        <div className="cmyk-bar absolute left-0 right-0 top-0" />
+        <div className="relative z-10">
+          <div className="mb-6 flex items-start justify-between">
+            <div className={`flex h-14 w-14 items-center justify-center rounded-2xl ${type === "error" ? "bg-[#EC008C] text-white" : "bg-[#00FFFF] text-[#1A1A1A]"}`}>
+              <Icon size={26} />
+            </div>
+            {badge && <span className="rounded-full bg-[#F6F6F2] px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-[#676762]">{badge}</span>}
+          </div>
+          <h1 className="mb-3 text-3xl font-black tracking-tight">{title || "Loading your workspace"}</h1>
+          <p className="mb-8 text-sm leading-relaxed text-[#676762]">{message}</p>
+          {action && (
+            <button onClick={action.onClick}
+              className="w-full rounded-full bg-[#1A1A1A] py-3.5 text-sm font-black text-white transition-colors hover:bg-[#EC008C]">
+              {action.label}
+            </button>
+          )}
+          <div className="mt-8 border-t border-[#ECECE8] pt-4 text-xs text-[#676762]">
+            {type === "loading" ? "This usually takes a moment." : "Please check your account access or contact support."}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OwnerLayout({ children }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -440,34 +469,6 @@ export default function OwnerLayout({ children }) {
     }
   };
 
-  /* ── STATIC GATE ── */
-  const GateUI = ({ icon: Icon, title, message, badge, type, action }) => (
-    <div className="flex min-h-screen items-center justify-center overflow-x-hidden bg-white p-6 font-sans text-[#1A1A1A]">
-      <div className="relative w-full max-w-md overflow-hidden rounded-3xl border border-[#D8D6CE] bg-white p-8 shadow-[0_18px_45px_rgba(26,26,26,0.08)]">
-        <div className="cmyk-bar absolute left-0 right-0 top-0" />
-        <div className="relative z-10">
-          <div className="mb-6 flex items-start justify-between">
-            <div className={`flex h-14 w-14 items-center justify-center rounded-2xl ${type === "error" ? "bg-[#EC008C] text-white" : "bg-[#00FFFF] text-[#1A1A1A]"}`}>
-              <Icon size={26} />
-            </div>
-            {badge && <span className="rounded-full bg-[#F6F6F2] px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-[#676762]">{badge}</span>}
-          </div>
-          <h1 className="mb-3 text-3xl font-black tracking-tight">{title || "Loading your workspace"}</h1>
-          <p className="mb-8 text-sm leading-relaxed text-[#676762]">{message}</p>
-          {action && (
-            <button onClick={action.onClick}
-              className="w-full rounded-full bg-[#1A1A1A] py-3.5 text-sm font-black text-white transition-colors hover:bg-[#EC008C]">
-              {action.label}
-            </button>
-          )}
-          <div className="mt-8 border-t border-[#ECECE8] pt-4 text-xs text-[#676762]">
-            {type === "loading" ? "This usually takes a moment." : "Please check your account access or contact support."}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
   /* ── DOC REVIEW GATE (pending or action_required) ── */
   const DocReviewGate = () => {
     const hasRejected = docStatuses.some((d) => ["REJECTED", "NEEDS_CHANGES", "ACTION_REQUIRED"].includes(d.status));
@@ -830,13 +831,13 @@ export default function OwnerLayout({ children }) {
 
   /* ── STATE ROUTING ── */
   if (state === "checking") return (
-    <GateUI icon={Activity} title="Loading your shop workspace"
+    <OwnerGateUI icon={Activity} title="Loading your shop workspace"
       message="We’re checking your account and preparing your owner dashboard."
       badge="PLEASE WAIT" type="loading" />
   );
 
   if (state === "unauthorized") return (
-    <GateUI icon={ShieldAlert} title="Access Denied"
+    <OwnerGateUI icon={ShieldAlert} title="Access Denied"
       message="This area is available only to approved shop owner accounts."
       badge="NOT AVAILABLE" type="error"
       action={{ label: "Go to Browse", onClick: () => router.push("/browse") }} />

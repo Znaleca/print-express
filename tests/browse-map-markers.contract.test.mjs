@@ -29,6 +29,8 @@ test("browse map uses a person marker for the customer and pins for shops", asyn
   assert.match(map, /safeUserLocation && \(/);
   assert.doesNotMatch(map, /LocateFixed/);
   assert.doesNotMatch(browse, /LocateFixed/);
+  assert.match(browse, /Search printing shops or an area/);
+  assert.match(browse, /placeholder="Search printing shops or area\.\.\."/);
 });
 
 test("browse location permission states never create a fake customer marker", async () => {
@@ -47,4 +49,3 @@ test("browse location permission states never create a fake customer marker", as
   assert.match(map, /routePoints = safeUserLocation && routeTarget/);
   assert.match(map, /safeUserLocation\.lat, safeUserLocation\.lng/);
 });
-

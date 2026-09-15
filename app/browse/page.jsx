@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { getRatingStats, ratingLabel } from "@/lib/rating";
 import { withTimeout } from "@/lib/withTimeout";
 import { normalizeCoordinates } from "@/lib/coordinates";
+import { getShopSearchResult } from "@/lib/shopSearch";
 
 const estimateTravelMinutes = (distanceKm) => (
   distanceKm == null ? null : Math.max(1, Math.round(Number(distanceKm) * 2.5))
@@ -42,6 +43,7 @@ export default function BrowsePage() {
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationStatus, setLocationStatus] = useState("idle");
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
   const mapSectionRef = useRef(null);
 
   const requestLocation = () => {
@@ -101,8 +103,8 @@ export default function BrowsePage() {
           (signal) => supabase
             .from("businesses")
             .select(`
-              id, name, address, lat, lng, logo_url, is_open,
-              services ( name, category, available )
+              id, name, address, description, products_summary, lat, lng, logo_url, is_open,
+              services ( name, category, description, item_type, available )
             `)
             .eq("status", "APPROVED")
             .eq("lifecycle_state", "ACTIVE")
@@ -157,9 +159,8 @@ export default function BrowsePage() {
         }, {});
 
         const formatted = (bizData || []).map((b) => {
-          const availableServices = (b.services || [])
-            .filter(s => s.available)
-            .map(s => s.name);
+          const catalog = (b.services || []).filter((service) => service?.available !== false);
+          const availableServices = catalog.map((service) => service.name).filter(Boolean);
 
           const reviews = reviewsByBusiness[b.id] || [];
           const ratingStats = getRatingStats(reviews);
@@ -176,7 +177,10 @@ export default function BrowsePage() {
             rating: ratingStats.average,
             reviewCount: ratingStats.count,
             serviceCount: availableServices.length,
-            services: availableServices.slice(0, 3)
+            services: availableServices.slice(0, 3),
+            catalog,
+            description: b.description || "",
+            products_summary: b.products_summary || "",
           };
         });
 
@@ -215,18 +219,20 @@ export default function BrowsePage() {
 
   const filtered = useMemo(
     () =>
-      businesses.filter(
-        (b) =>
-          Number.isFinite(b.lat) &&
-          Number.isFinite(b.lng) &&
-          (
-            b.name.toLowerCase().includes(search.toLowerCase()) ||
-            b.services.some((s) => s.toLowerCase().includes(search.toLowerCase())) ||
-            b.address.toLowerCase().includes(search.toLowerCase())
-          )
-      ),
+      businesses
+        .map((business) => ({
+          ...business,
+          ...getShopSearchResult(business, search),
+        }))
+        .filter((business) => business.matched),
     [businesses, search]
   );
+
+  useEffect(() => {
+    if (selectedId && !filtered.some((business) => business.id === selectedId)) {
+      setSelectedId(null);
+    }
+  }, [filtered, selectedId]);
 
   const recommended = useMemo(() => {
     if (filtered.length === 0) return [];
@@ -298,6 +304,16 @@ export default function BrowsePage() {
     return recommended.slice(0, 7);
   }, [recommended, search]);
 
+  const selectSuggestion = (shop) => {
+    setSearch(shop.name);
+    setSelectedId(shop.id);
+    setShowSuggestions(false);
+    setActiveSuggestionIndex(-1);
+    requestAnimationFrame(() => {
+      mapSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  };
+
   const nearestBusiness = useMemo(() => {
     const distanceReady = recommended.filter((b) => b.distanceKm != null);
     if (distanceReady.length === 0) return null;
@@ -317,7 +333,7 @@ export default function BrowsePage() {
             Find print <span className="text-[#00FFFF]">shops.</span>
           </h1>
           <p className="mx-auto mt-3 max-w-xl text-xs leading-relaxed text-white/65 sm:text-sm">
-            Search by shop name, service, or area. Select a result to focus its pin on the map.
+            Search printing shops or an area. Select a result to focus its pin on the map.
           </p>
 
           <div className="relative mx-auto mt-4 max-w-3xl text-left">
@@ -329,14 +345,34 @@ export default function BrowsePage() {
                 onChange={(event) => {
                   setSearch(event.target.value);
                   setShowSuggestions(Boolean(event.target.value.trim()));
+                  setActiveSuggestionIndex(-1);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setShowSuggestions(false);
+                    setActiveSuggestionIndex(-1);
+                    return;
+                  }
+                  if (!showSuggestions || suggestions.length === 0) return;
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setActiveSuggestionIndex((current) => (current + 1) % suggestions.length);
+                  } else if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setActiveSuggestionIndex((current) => (current <= 0 ? suggestions.length - 1 : current - 1));
+                  } else if (event.key === "Enter" && activeSuggestionIndex >= 0) {
+                    event.preventDefault();
+                    selectSuggestion(suggestions[activeSuggestionIndex]);
+                  }
                 }}
                 className="browse-search h-14 w-full rounded-full border border-white/25 bg-white/10 pl-12 pr-12 text-sm font-semibold text-white placeholder:text-white/45 focus:border-[#00FFFF] focus:ring-2 focus:ring-[#00FFFF]/20 sm:text-base"
-                placeholder="Search shop, service, or area..."
-                aria-label="Search print shops"
+                placeholder="Search printing shops or area..."
+                aria-label="Search printing shops or area"
                 data-tour="browse-search"
                 role="combobox"
                 aria-expanded={showSuggestions && Boolean(search.trim())}
                 aria-controls="shop-suggestions"
+                aria-activedescendant={activeSuggestionIndex >= 0 ? `shop-suggestion-${suggestions[activeSuggestionIndex]?.id}` : undefined}
               />
               {search && (
                 <button
@@ -345,6 +381,7 @@ export default function BrowsePage() {
                     setSearch("");
                     setSelectedId(null);
                     setShowSuggestions(false);
+                    setActiveSuggestionIndex(-1);
                   }}
                   className="absolute right-3 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
                   aria-label="Clear shop search"
@@ -370,16 +407,10 @@ export default function BrowsePage() {
                         key={shop.id}
                         type="button"
                         role="option"
+                        id={`shop-suggestion-${shop.id}`}
                         aria-selected={selectedId === shop.id}
-                        onClick={() => {
-                          setSearch(shop.name);
-                          setSelectedId(shop.id);
-                          setShowSuggestions(false);
-                          requestAnimationFrame(() => {
-                            mapSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-                          });
-                        }}
-                        className="group flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition-colors hover:bg-white"
+                        onClick={() => selectSuggestion(shop)}
+                        className={`group flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition-colors hover:bg-white ${activeSuggestionIndex === suggestions.indexOf(shop) ? "bg-white" : ""}`}
                       >
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#1A1A1A] text-[#00FFFF]">
                           <MapPin size={17} />
@@ -392,6 +423,7 @@ export default function BrowsePage() {
                             </span>
                           </div>
                           <p className="mt-0.5 truncate text-xs text-slate-500">{shop.address}</p>
+                          {shop.matchReason && <p className="mt-1 truncate text-[10px] font-semibold text-[#008F91]">{shop.matchReason}</p>}
                         </div>
                         <div className="flex shrink-0 items-center gap-1 text-xs font-black text-[#1A1A1A]">
                           <Star size={13} className="fill-[#FFF200] text-[#D6C900]" /> {ratingLabel(shop.rating)}
@@ -470,6 +502,7 @@ export default function BrowsePage() {
           selectedBusinessId={selectedId}
           userLocation={userLocation}
           nearestBusinessId={nearestBusinessId}
+          emptyMessage={search.trim() && filtered.length === 0 ? "No approved shops match this search." : null}
         />
       </section>
     </main>

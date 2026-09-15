@@ -218,6 +218,10 @@ export async function POST(request) {
     if (!payment.isAvailable || !payment.balance || payment.balance <= 0) {
       return jsonError("This order has no remaining balance", 409);
     }
+    const selectedMethod = normalizeMethod(context.order.payment_method);
+    if (!selectedMethod || method !== selectedMethod) {
+      return jsonError("Use the remaining payment method selected at checkout", 409);
+    }
 
     const previousProofPath = getProofPath(context.order.remaining_payment_proof_url);
     let proofReference = null;

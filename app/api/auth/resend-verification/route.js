@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabaseAdmin";
-import { getSupabasePublicServerClient } from "@/lib/supabasePublicServer";
 import { isValidEmail, normalizeEmail } from "@/lib/auth";
 import { getAuthRedirectUrl } from "@/lib/appUrl";
 import { getRequestDevice, getRequestIp, hashRateLimitScope } from "@/lib/otpSecurity";
+import { sendAuthVerificationEmail } from "@/lib/authVerificationEmail";
 
 export const dynamic = "force-dynamic";
 
@@ -50,21 +50,40 @@ export async function POST(request) {
       return NextResponse.json({ error: "Authentication is temporarily unavailable. Please try again." }, { status: 503 });
     }
 
-    const publicClient = getSupabasePublicServerClient();
-    const { error } = await publicClient.auth.resend({
-      type: "signup",
-      email,
-      options: { emailRedirectTo },
+    const { data: accountRows, error: accountError } = await admin.rpc("get_auth_user_status_by_email", {
+      lookup_email: email,
     });
+    if (accountError) throw accountError;
 
-    if (error) {
-      const message = String(error.message || "").toLowerCase();
-      const status = message.includes("rate limit") || message.includes("too many") ? 429 : 502;
+    const account = Array.isArray(accountRows) ? accountRows[0] : accountRows;
+    // Keep the response generic when the account is missing or already
+    // verified. In particular, never generate a magic login link for a
+    // confirmed account from this public endpoint.
+    if (!account || account.email_confirmed_at || account.deleted_at || account.banned_until) {
       return NextResponse.json({
-        error: status === 429
-          ? "Please wait a moment before requesting another verification email."
-          : "We could not resend the verification email. Please try again.",
-      }, { status });
+        success: true,
+        message: "If this address still needs verification, a new email will be sent shortly.",
+      });
+    }
+
+    const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
+      type: "magiclink",
+      email,
+      options: { redirectTo: emailRedirectTo },
+    });
+    if (linkError || !linkData?.properties?.action_link) {
+      console.error("AUTH_RESEND_VERIFICATION_LINK_FAILED", String(linkError?.code || "unknown"));
+      return NextResponse.json({ error: "We could not resend the verification email. Please try again." }, { status: 502 });
+    }
+
+    const { error: emailError } = await sendAuthVerificationEmail({
+      email,
+      actionLink: linkData.properties.action_link,
+      isResend: true,
+    });
+    if (emailError) {
+      console.error("AUTH_RESEND_VERIFICATION_EMAIL_FAILED", emailError.code || "unknown");
+      return NextResponse.json({ error: "We could not resend the verification email. Please try again." }, { status: 502 });
     }
 
     return NextResponse.json({

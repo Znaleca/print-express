@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { sendBusinessApprovalEmail } from "@/lib/businessApprovalEmail";
+import { sendBusinessProfileUpdatedEmail } from "@/lib/businessProfileUpdateEmail";
 import { requireAdmin } from "@/lib/serverAuth";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +21,35 @@ const SHOP_PAGE_SIZE = 15;
 const VALID_FILTERS = new Set(["ALL", "PENDING", "PARTIALLY_REVIEWED", "APPROVED", "REJECTED"]);
 const ACTION_STATUSES = new Set(["APPROVED", "REJECTED"]);
 const PROFILE_STATUSES = new Set(["PENDING", "APPROVED", "REJECTED"]);
+const PROFILE_FIELDS = {
+  description: {
+    valueColumn: "description",
+    statusColumn: "description_review_status",
+    commentColumn: "description_admin_comment",
+    minLength: 20,
+    maxLength: 800,
+  },
+  products_summary: {
+    valueColumn: "products_summary",
+    statusColumn: "products_review_status",
+    commentColumn: "products_admin_comment",
+    minLength: 10,
+    maxLength: 500,
+  },
+};
+const PROFILE_REQUEST_FIELDS = {
+  description: {
+    requestColumn: "requested_description",
+    reviewColumn: "description_review_status",
+    label: "Business background",
+  },
+  products_summary: {
+    requestColumn: "requested_products_summary",
+    reviewColumn: "products_review_status",
+    label: "Products and services",
+  },
+};
+const PROFILE_REQUEST_SELECT = "id, business_id, change_scope, requested_description, requested_products_summary, description_review_status, products_review_status, reason, status, admin_comment, created_at, reviewed_at";
 
 function clampPage(value) {
   const parsed = Number.parseInt(value, 10);
@@ -55,16 +86,25 @@ function formatDate(value) {
   return value || null;
 }
 
-function getVerificationState(businessStatus, documents) {
-  if (documents.some((document) => document.status === "REJECTED")) return "REJECTED";
+function areProfileFieldsApproved(business) {
+  return Object.values(PROFILE_FIELDS).every((field) => business?.[field.statusColumn] === "APPROVED");
+}
+
+function hasRejectedProfileField(business) {
+  return Object.values(PROFILE_FIELDS).some((field) => business?.[field.statusColumn] === "REJECTED");
+}
+
+function getVerificationState(business, documents) {
+  if (documents.some((document) => document.status === "REJECTED") || hasRejectedProfileField(business)) return "REJECTED";
 
   const acceptedCount = documents.filter((document) => document.status === "APPROVED").length;
   const hasSubmittedDocument = documents.some((document) => document.id || document.status === "APPROVED");
   const allDocumentsApproved = REQUIRED_DOC_TYPES.every((type) => documents.some(
     (document) => document.doc_type === type && document.status === "APPROVED",
   ));
-  if (allDocumentsApproved && businessStatus === "APPROVED") return "APPROVED";
-  if (allDocumentsApproved) return "READY_FOR_APPROVAL";
+  const profileFieldsApproved = areProfileFieldsApproved(business);
+  if (allDocumentsApproved && profileFieldsApproved && business?.status === "APPROVED") return "APPROVED";
+  if (allDocumentsApproved && profileFieldsApproved) return "READY_FOR_APPROVAL";
   if (acceptedCount > 0 || hasSubmittedDocument) return "IN_PROGRESS";
   return "NOT_STARTED";
 }
@@ -120,7 +160,7 @@ function buildShop(business, owner, rawDocuments, profileRequests) {
   const acceptedDocumentCount = documents.filter((document) => document.status === "APPROVED").length;
   const rejectedDocumentCount = documents.filter((document) => document.status === "REJECTED").length;
   const uploadedDocumentCount = documents.filter((document) => document.id).length;
-  const verificationState = getVerificationState(business.status, documents);
+  const verificationState = getVerificationState(business, documents);
   const latestDocumentDate = documents
     .map((document) => document.updated_at || document.created_at)
     .filter(Boolean)
@@ -147,6 +187,10 @@ function buildShop(business, owner, rawDocuments, profileRequests) {
       id: business.id,
       name: business.name || "Unnamed shop",
       status: String(business.status || "PENDING").toUpperCase(),
+      description_review_status: normalizeStatus(business.description_review_status),
+      products_review_status: normalizeStatus(business.products_review_status),
+      description_admin_comment: business.description_admin_comment || null,
+      products_admin_comment: business.products_admin_comment || null,
       lifecycle_state: business.lifecycle_state || "ACTIVE",
       description: business.description || null,
       products_summary: business.products_summary || null,
@@ -166,6 +210,7 @@ function buildShop(business, owner, rawDocuments, profileRequests) {
     pendingProfileChangeCount: pendingProfileRequests.length,
     latestPendingProfileChange: latestPendingProfileChange ? {
       id: latestPendingProfileChange.id,
+      change_scope: latestPendingProfileChange.change_scope || "BOTH",
       requested_description: latestPendingProfileChange.requested_description || "",
       requested_products_summary: latestPendingProfileChange.requested_products_summary || "",
       reason: latestPendingProfileChange.reason || "",
@@ -194,7 +239,7 @@ export async function GET(request) {
     const businesses = await readRows(
       auth.supabase
         .from("businesses")
-        .select("id, name, description, products_summary, status, created_at, owner_id, email, phone, address, lifecycle_state, last_activity_at, locked_at, lock_reason, archived_at")
+        .select("id, name, description, products_summary, status, description_review_status, products_review_status, description_admin_comment, products_admin_comment, created_at, owner_id, email, phone, address, lifecycle_state, last_activity_at, locked_at, lock_reason, archived_at")
         .order("created_at", { ascending: false })
         .range(0, MAX_BUSINESS_ROWS - 1),
     );
@@ -208,7 +253,7 @@ export async function GET(request) {
         ? readRows(auth.supabase.from("profiles").select("id, full_name, email").in("id", ownerIds).range(0, MAX_BUSINESS_ROWS - 1))
         : [],
       businessIds.length > 0
-        ? readRows(auth.supabase.from("business_profile_change_requests").select("id, business_id, requested_description, requested_products_summary, reason, status, admin_comment, created_at, reviewed_at").in("business_id", businessIds).order("created_at", { ascending: false }).range(0, MAX_PROFILE_REQUEST_ROWS - 1))
+        ? readRows(auth.supabase.from("business_profile_change_requests").select(PROFILE_REQUEST_SELECT).in("business_id", businessIds).order("created_at", { ascending: false }).range(0, MAX_PROFILE_REQUEST_ROWS - 1))
         : [],
     ]);
 
@@ -318,6 +363,8 @@ export async function PATCH(request) {
         return NextResponse.json({ success: true, business: result });
       }
 
+      let approvalEmailContext = null;
+
       if (shopAction === "APPROVED") {
         const { data: requiredDocuments, error: documentsError } = await auth.supabase
           .from("business_documents")
@@ -330,6 +377,27 @@ export async function PATCH(request) {
         if (!allApproved) {
           return NextResponse.json({ error: "ALL_REQUIRED_DOCUMENTS_MUST_BE_APPROVED" }, { status: 409 });
         }
+
+        const { data: businessProfile, error: profileError } = await auth.supabase
+          .from("businesses")
+          .select("status, name, email, owner_id, description, products_summary, description_review_status, products_review_status")
+          .eq("id", businessId)
+          .maybeSingle();
+        if (profileError) throw profileError;
+        const allProfileFieldsApproved = businessProfile
+          && Object.values(PROFILE_FIELDS).every((field) => businessProfile[field.statusColumn] === "APPROVED")
+          && Object.values(PROFILE_FIELDS).every((field) => {
+            const value = String(businessProfile[field.valueColumn] || "").trim();
+            return value.length >= field.minLength && value.length <= field.maxLength;
+          });
+        if (!allProfileFieldsApproved) {
+          return NextResponse.json({ error: "BUSINESS_PROFILE_CONTENT_MUST_BE_APPROVED" }, { status: 409 });
+        }
+
+        approvalEmailContext = {
+          shouldSend: String(businessProfile.status || "").toUpperCase() !== "APPROVED",
+          businessProfile,
+        };
       }
 
       const { data: result, error } = await auth.supabase.rpc("admin_set_business_status", {
@@ -338,7 +406,177 @@ export async function PATCH(request) {
         p_requester_id: auth.user.id,
       });
       if (error) throw error;
-      return NextResponse.json({ success: true, business: result });
+
+      let notification = null;
+      if (approvalEmailContext?.shouldSend) {
+        let ownerProfile = null;
+        if (approvalEmailContext.businessProfile.owner_id) {
+          const { data, error: ownerError } = await auth.supabase
+            .from("profiles")
+            .select("full_name, email")
+            .eq("id", approvalEmailContext.businessProfile.owner_id)
+            .maybeSingle();
+          if (ownerError) {
+            console.error("ADMIN_APPROVAL_OWNER_LOOKUP_FAILED", ownerError.code || "UnknownError");
+          } else {
+            ownerProfile = data;
+          }
+        }
+
+        notification = await sendBusinessApprovalEmail({
+          ownerEmail: ownerProfile?.email || approvalEmailContext.businessProfile.email,
+          ownerName: ownerProfile?.full_name || "Business Owner",
+          businessName: approvalEmailContext.businessProfile.name,
+        });
+        if (!notification.sent) {
+          console.error("ADMIN_APPROVAL_EMAIL_SEND_FAILED", notification.code || "EMAIL_SEND_FAILED");
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        business: result,
+        notification: notification
+          ? { sent: notification.sent, id: notification.id || null, code: notification.sent ? null : notification.code || "EMAIL_SEND_FAILED" }
+          : null,
+      });
+    }
+
+    if (action === "PROFILE_FIELD") {
+      const field = String(body.field || "").trim();
+      const fieldConfig = PROFILE_FIELDS[field];
+      const status = String(body.status || "").toUpperCase();
+      const adminComment = String(body.adminComment || "").trim().slice(0, 500);
+      if (!fieldConfig || !ACTION_STATUSES.has(status)) {
+        return NextResponse.json({ error: "INVALID_PROFILE_FIELD_ACTION" }, { status: 400 });
+      }
+      if (status === "REJECTED" && adminComment.length < 5) {
+        return NextResponse.json({ error: "PROFILE_FIELD_REJECTION_REASON_REQUIRED" }, { status: 400 });
+      }
+
+      const { data: currentBusiness, error: businessError } = await auth.supabase
+        .from("businesses")
+        .select(`status, ${fieldConfig.valueColumn}, ${fieldConfig.statusColumn}`)
+        .eq("id", businessId)
+        .maybeSingle();
+      if (businessError) throw businessError;
+      if (!currentBusiness) return NextResponse.json({ error: "BUSINESS_NOT_FOUND" }, { status: 404 });
+      if (String(currentBusiness.status || "").toUpperCase() === "APPROVED") {
+        return NextResponse.json({ error: "APPROVED_PROFILE_REQUIRES_CHANGE_REQUEST" }, { status: 409 });
+      }
+      if (status === "APPROVED") {
+        const value = String(currentBusiness[fieldConfig.valueColumn] || "").trim();
+        if (value.length < fieldConfig.minLength || value.length > fieldConfig.maxLength) {
+          return NextResponse.json({ error: "PROFILE_FIELD_VALUE_INVALID" }, { status: 409 });
+        }
+      }
+
+      const { data: business, error: updateError } = await auth.supabase
+        .from("businesses")
+        .update({
+          [fieldConfig.statusColumn]: status,
+          [fieldConfig.commentColumn]: adminComment || null,
+        })
+        .eq("id", businessId)
+        .select(`id, name, description, products_summary, status, ${fieldConfig.statusColumn}, ${fieldConfig.commentColumn}`)
+        .maybeSingle();
+      if (updateError) throw updateError;
+      if (!business) return NextResponse.json({ error: "BUSINESS_NOT_FOUND" }, { status: 404 });
+      return NextResponse.json({ business, field, status });
+    }
+
+    if (action === "PROFILE_REQUEST_FIELD") {
+      const requestId = String(body.requestId || "").trim();
+      const field = String(body.field || "").trim();
+      const fieldConfig = PROFILE_REQUEST_FIELDS[field];
+      const status = String(body.status || "").toUpperCase();
+      const adminComment = String(body.adminComment || "").trim().slice(0, 500);
+      if (!requestId || !fieldConfig || !ACTION_STATUSES.has(status)) {
+        return NextResponse.json({ error: "INVALID_PROFILE_REQUEST_FIELD_ACTION" }, { status: 400 });
+      }
+      if (status === "REJECTED" && adminComment.length < 5) {
+        return NextResponse.json({ error: "PROFILE_REQUEST_REJECTION_REASON_REQUIRED" }, { status: 400 });
+      }
+
+      const { data: profileRequest, error: requestError } = await auth.supabase
+        .from("business_profile_change_requests")
+        .select(PROFILE_REQUEST_SELECT)
+        .eq("id", requestId)
+        .eq("business_id", businessId)
+        .maybeSingle();
+      if (requestError) throw requestError;
+      if (!profileRequest) return NextResponse.json({ error: "PROFILE_REQUEST_NOT_FOUND" }, { status: 404 });
+      if (profileRequest.status !== "PENDING") {
+        return NextResponse.json({ error: "PROFILE_REQUEST_NO_LONGER_PENDING" }, { status: 409 });
+      }
+      if (!profileRequest[fieldConfig.requestColumn]) {
+        return NextResponse.json({ error: "PROFILE_FIELD_NOT_REQUESTED" }, { status: 409 });
+      }
+
+      const updates = {
+        [fieldConfig.reviewColumn]: status,
+        admin_comment: adminComment || profileRequest.admin_comment || null,
+        ...(status === "REJECTED" ? { status: "REJECTED", reviewed_at: new Date().toISOString() } : {}),
+      };
+      const { data: updatedRequest, error: updateError } = await auth.supabase
+        .from("business_profile_change_requests")
+        .update(updates)
+        .eq("id", requestId)
+        .eq("business_id", businessId)
+        .eq("status", "PENDING")
+        .select(PROFILE_REQUEST_SELECT)
+        .maybeSingle();
+      if (updateError) throw updateError;
+      if (!updatedRequest) return NextResponse.json({ error: "PROFILE_REQUEST_NO_LONGER_PENDING" }, { status: 409 });
+      return NextResponse.json({ request: updatedRequest, field, status });
+    }
+
+    if (action === "PROFILE_APPLY") {
+      const requestId = String(body.requestId || "").trim();
+      if (!requestId) return NextResponse.json({ error: "INVALID_PROFILE_REQUEST_ACTION" }, { status: 400 });
+
+      const { data: result, error: applyError } = await auth.supabase.rpc("admin_apply_business_profile_change", {
+        p_request_id: requestId,
+        p_business_id: businessId,
+        p_requester_id: auth.user.id,
+      });
+      if (applyError) {
+        console.error("ADMIN_PROFILE_APPLY_FAILED", applyError.code || "UnknownError");
+        return NextResponse.json({ error: "PROFILE_REQUEST_COULD_NOT_BE_APPLIED" }, { status: 409 });
+      }
+
+      const appliedRequest = result?.request || null;
+      const updatedBusiness = result?.business || null;
+      let ownerProfile = null;
+      if (updatedBusiness?.owner_id) {
+        const { data, error: ownerError } = await auth.supabase
+          .from("profiles")
+          .select("full_name, email")
+          .eq("id", updatedBusiness.owner_id)
+          .maybeSingle();
+        if (ownerError) console.error("ADMIN_PROFILE_UPDATE_OWNER_LOOKUP_FAILED", ownerError.code || "UnknownError");
+        else ownerProfile = data;
+      }
+
+      const changedFields = [
+        ...(appliedRequest?.requested_description ? [PROFILE_REQUEST_FIELDS.description.label] : []),
+        ...(appliedRequest?.requested_products_summary ? [PROFILE_REQUEST_FIELDS.products_summary.label] : []),
+      ];
+      const notification = await sendBusinessProfileUpdatedEmail({
+        ownerEmail: ownerProfile?.email || updatedBusiness?.email,
+        ownerName: ownerProfile?.full_name || "Business Owner",
+        businessName: updatedBusiness?.name,
+        changedFields,
+      });
+      if (!notification.sent) {
+        console.error("ADMIN_PROFILE_UPDATE_EMAIL_SEND_FAILED", notification.code || "EMAIL_SEND_FAILED");
+      }
+
+      return NextResponse.json({
+        request: appliedRequest,
+        business: updatedBusiness,
+        notification: { sent: notification.sent, id: notification.id || null, code: notification.sent ? null : notification.code || "EMAIL_SEND_FAILED" },
+      });
     }
 
     if (action === "PROFILE") {
@@ -351,7 +589,7 @@ export async function PATCH(request) {
 
       const { data: profileRequest, error: requestError } = await auth.supabase
         .from("business_profile_change_requests")
-        .select("id, business_id, requested_description, requested_products_summary, reason, status, admin_comment, created_at, reviewed_at")
+        .select(PROFILE_REQUEST_SELECT)
         .eq("id", requestId)
         .eq("business_id", businessId)
         .maybeSingle();
@@ -359,20 +597,20 @@ export async function PATCH(request) {
       if (!profileRequest) return NextResponse.json({ error: "PROFILE_REQUEST_NOT_FOUND" }, { status: 404 });
 
       if (status === "APPROVED") {
-        const { error: businessError } = await auth.supabase
-          .from("businesses")
-          .update({ description: profileRequest.requested_description, products_summary: profileRequest.requested_products_summary })
-          .eq("id", businessId);
-        if (businessError) throw businessError;
+        return NextResponse.json({ error: "PROFILE_FIELDS_MUST_BE_ACCEPTED_BEFORE_APPLY" }, { status: 409 });
       }
 
       const reviewedAt = status === "PENDING" ? null : new Date().toISOString();
+      const reviewReset = status === "PENDING" ? {
+        description_review_status: profileRequest.requested_description ? "PENDING" : "NOT_REQUESTED",
+        products_review_status: profileRequest.requested_products_summary ? "PENDING" : "NOT_REQUESTED",
+      } : {};
       const { data: updatedRequest, error: updateError } = await auth.supabase
         .from("business_profile_change_requests")
-        .update({ status, admin_comment: adminComment || null, reviewed_at: reviewedAt })
+        .update({ status, admin_comment: adminComment || null, reviewed_at: reviewedAt, ...reviewReset })
         .eq("id", requestId)
         .eq("business_id", businessId)
-        .select("id, business_id, requested_description, requested_products_summary, reason, status, admin_comment, created_at, reviewed_at")
+        .select(PROFILE_REQUEST_SELECT)
         .maybeSingle();
       if (updateError) throw updateError;
       if (!updatedRequest) return NextResponse.json({ error: "PROFILE_REQUEST_NOT_FOUND" }, { status: 404 });
@@ -391,7 +629,7 @@ export async function PATCH(request) {
         .update({ admin_comment: adminComment || null })
         .eq("id", requestId)
         .eq("business_id", businessId)
-        .select("id, business_id, requested_description, requested_products_summary, reason, status, admin_comment, created_at, reviewed_at")
+        .select(PROFILE_REQUEST_SELECT)
         .maybeSingle();
       if (updateError) throw updateError;
       if (!updatedRequest) return NextResponse.json({ error: "PROFILE_REQUEST_NOT_FOUND" }, { status: 404 });
@@ -400,7 +638,11 @@ export async function PATCH(request) {
 
     return NextResponse.json({ error: "INVALID_VERIFICATION_ACTION" }, { status: 400 });
   } catch (error) {
-    console.error("ADMIN_VERIFICATION_UPDATE_ERROR:", error instanceof Error ? error.name : "UnknownError");
+    console.error("ADMIN_VERIFICATION_UPDATE_ERROR:", {
+      name: error instanceof Error ? error.name : "UnknownError",
+      code: error?.code || null,
+      message: error instanceof Error ? error.message : String(error || "Unknown error"),
+    });
     if (error?.code === "23505") {
       return NextResponse.json({ error: "PROFILE_REQUEST_ALREADY_PENDING" }, { status: 409 });
     }

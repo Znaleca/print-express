@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { normalizePhilippinePhone } from "@/lib/phone";
 import { getPasswordRequirements, isValidEmail, normalizeEmail, validatePassword } from "@/lib/auth";
+import { PRODUCT_SERVICE_OPTIONS } from "@/lib/productServiceOptions";
 import BrandMark from "@/components/BrandMark";
 
 const Requirement = ({ label, met }) => (
@@ -38,15 +39,22 @@ export default function SignUpPage() {
   const [phoneTouched, setPhoneTouched] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [selectedProductServices, setSelectedProductServices] = useState([]);
+  const [otherProductService, setOtherProductService] = useState("");
 
   const [verificationState, setVerificationState] = useState(null);
-  const [existingAccount, setExistingAccount] = useState(null);
   const [resendLoading, setResendLoading] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
   const [resendMessage, setResendMessage] = useState(null);
 
   const passwordRequirements = getPasswordRequirements(formData.password);
   const passwordsMatch    = formData.password === formData.confirmPassword && formData.confirmPassword !== "";
+  const productsSummary = [
+    ...selectedProductServices.filter((service) => service !== "Other"),
+    ...(selectedProductServices.includes("Other") && otherProductService.trim()
+      ? [`Other: ${otherProductService.trim()}`]
+      : []),
+  ].join(", ");
 
   useEffect(() => {
     if (resendCooldown <= 0) return undefined;
@@ -63,7 +71,6 @@ export default function SignUpPage() {
       [name]: name === "phone" ? value.replace(/\D/g, "").slice(0, 10) : value,
     }));
     if (name === "email") {
-      setExistingAccount(null);
       setResendMessage(null);
     }
     if (name === "phone") setPhoneTouched(true);
@@ -73,7 +80,15 @@ export default function SignUpPage() {
     setRole(nextRole);
     setOwnerStep(1);
     setError(null);
-    setExistingAccount(null);
+  };
+
+  const toggleProductService = (service) => {
+    setSelectedProductServices((current) => (
+      current.includes(service)
+        ? current.filter((item) => item !== service)
+        : [...current, service]
+    ));
+    setError(null);
   };
 
   const handleResendVerification = async (email) => {
@@ -106,7 +121,7 @@ export default function SignUpPage() {
     if (role === "BUSINESS_OWNER" && ownerStep === 1) {
       const businessName = formData.businessName.trim();
       const businessBackground = formData.businessBackground.trim();
-      const productsSummary = formData.productsSummary.trim();
+      const productsSummaryText = productsSummary.trim();
       if (businessName.length < 2 || businessName.length > 120) {
         setError("Business name must be between 2 and 120 characters.");
         return;
@@ -115,8 +130,16 @@ export default function SignUpPage() {
         setError("Business background must be between 20 and 800 characters.");
         return;
       }
-      if (productsSummary.length < 10 || productsSummary.length > 500) {
-        setError("Products and services summary must be between 10 and 500 characters.");
+      if (!selectedProductServices.length) {
+        setError("Select at least one product or service your shop currently offers.");
+        return;
+      }
+      if (selectedProductServices.includes("Other") && !otherProductService.trim()) {
+        setError("Describe the other product or service you offer.");
+        return;
+      }
+      if (productsSummaryText.length < 10 || productsSummaryText.length > 500) {
+        setError("Keep your products and services summary between 10 and 500 characters.");
         return;
       }
       setError(null);
@@ -170,22 +193,16 @@ export default function SignUpPage() {
           phone: normalizedPhone,
           businessName: formData.businessName.trim(),
           businessBackground: formData.businessBackground.trim(),
-          productsSummary: formData.productsSummary.trim(),
+          productsSummary: productsSummary.trim(),
         })
       });
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        if (["EMAIL_EXISTS_VERIFIED", "EMAIL_EXISTS_UNVERIFIED"].includes(data.code)) {
-          setExistingAccount({ email, unverified: data.code === "EMAIL_EXISTS_UNVERIFIED" });
-          setResendMessage(null);
-          return;
-        }
         throw new Error(data.error || "We could not create your account right now.");
       }
 
       setVerificationState({ email, role });
-      setExistingAccount(null);
       setFormData((previous) => ({ ...previous, password: "", confirmPassword: "" }));
     } catch (err) {
       setError(err.message || "We could not create your account right now.");
@@ -335,7 +352,7 @@ export default function SignUpPage() {
                   <div>
                     <p className="text-xs font-black uppercase tracking-[0.14em] text-amber-800">Tell customers about your shop</p>
                     <p className="mt-1 text-[11px] leading-relaxed text-slate-600">
-                      This information appears on your public shop profile after verification. Keep it clear and customer-friendly.
+                      These details form part of your business verification record and may appear on your public shop profile. Provide accurate, current information that customers can rely on.
                     </p>
                   </div>
 
@@ -371,28 +388,60 @@ export default function SignUpPage() {
                       className="w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none transition-all focus:border-slate-400 focus:ring-2 focus:ring-[#FFF200]"
                       placeholder="Briefly tell customers when you started, what you specialize in, and what makes your shop reliable."
                     />
-                    <p className="mt-1 text-[11px] text-slate-500">20–800 characters · Avoid private contact details or payment information.</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-slate-500">20–800 characters · Describe your real business history and capabilities. Do not include private contact details or payment information.</p>
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold text-slate-800 mb-1">
                       Products &amp; services offered <span className="text-rose-500">*</span>
                     </label>
-                    <textarea
-                      name="productsSummary"
-                      required
-                      minLength={10}
-                      maxLength={500}
-                      rows={2}
-                      value={formData.productsSummary}
-                      onChange={handleChange}
-                      className="w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none transition-all focus:border-slate-400 focus:ring-2 focus:ring-[#FFF200]"
-                      placeholder="e.g. Business cards, flyers, posters, tarpaulins, stickers, photo printing, and rush orders."
-                    />
-                    <p className="mt-1 text-[11px] text-slate-500">10–500 characters · You can add detailed items and prices later in your catalog.</p>
+                    <p className="mb-2 text-[11px] leading-relaxed text-slate-500">Select every service you currently offer. Only choose services you can genuinely fulfill; this information is reviewed and used to build customer trust.</p>
+                    <fieldset className="rounded-xl border border-slate-200 bg-white p-3">
+                      <legend className="sr-only">Products and services offered</legend>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {PRODUCT_SERVICE_OPTIONS.map((service) => {
+                          const selected = selectedProductServices.includes(service);
+                          const inputId = `product-service-${service.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+                          return (
+                            <label
+                              key={service}
+                              htmlFor={inputId}
+                              className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2.5 text-xs font-semibold transition-colors ${selected ? "border-[#00A5A5] bg-cyan-50 text-slate-900" : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300"}`}
+                            >
+                              <input
+                                id={inputId}
+                                type="checkbox"
+                                checked={selected}
+                                onChange={() => toggleProductService(service)}
+                                className="mt-0.5 h-4 w-4 shrink-0 accent-[#00A5A5]"
+                              />
+                              <span>{service}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {selectedProductServices.includes("Other") && (
+                        <div className="mt-3 border-t border-slate-100 pt-3">
+                          <label htmlFor="other-product-service" className="mb-1 block text-[11px] font-bold text-slate-700">Describe your other product or service</label>
+                          <input
+                            id="other-product-service"
+                            type="text"
+                            value={otherProductService}
+                            onChange={(event) => { setOtherProductService(event.target.value.slice(0, 160)); setError(null); }}
+                            maxLength={160}
+                            required
+                            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs outline-none transition-all focus:border-slate-400 focus:ring-2 focus:ring-[#FFF200]"
+                            placeholder="e.g. Custom rubber stamps"
+                          />
+                        </div>
+                      )}
+                    </fieldset>
+                    <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Your selections are saved as your initial business profile. Detailed items and prices can be added later in your catalog. Business background and products &amp; services are reviewed before approval.</p>
                   </div>
 
-                  <p className="text-[11px] text-slate-500">After email verification, upload DTI, Mayor&apos;s Permit, BIR, and valid ID documents. Admin approval is required before seller tools unlock.</p>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-[11px] leading-relaxed text-amber-900" role="note">
+                    <strong>Important:</strong> By continuing, you confirm that this business information is accurate and current. After account creation and verification, these customer-facing details are not freely editable; changes require a formal Admin review and approval. You must also submit the required DTI, Mayor&apos;s Permit, BIR, and valid ID documents before seller tools can unlock.
+                  </div>
                 </div>
               )}
 
@@ -482,7 +531,6 @@ export default function SignUpPage() {
                     placeholder="name@example.com" 
                   />
                 </div>
-                <p className="mt-1 text-[11px] text-slate-500">We&apos;ll verify this address before creating the account.</p>
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -547,33 +595,7 @@ export default function SignUpPage() {
                 </>
               )}
 
-              {existingAccount && (
-                <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900" role="alert" aria-live="assertive">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-                    <p className="font-medium">
-                      {existingAccount.unverified
-                        ? "This email is already registered but not verified. Check your inbox or resend the verification email."
-                        : "An account with this email already exists. Please log in instead or reset your password."}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-4 pl-6 font-bold">
-                    <Link href="/login" className="text-[#C40075] underline hover:text-[#EC008C]">Go to Login</Link>
-                    {existingAccount.unverified && (
-                      <button
-                        type="button"
-                        onClick={() => handleResendVerification(existingAccount.email)}
-                        disabled={resendLoading || resendCooldown > 0}
-                        className="text-left text-[#008F8F] underline hover:text-[#00A5A5] disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {resendLoading ? "Sending…" : resendCooldown > 0 ? `Resend available in ${resendCooldown}s` : "Resend verification email"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {error && !existingAccount && (
+              {error && (
                 <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2" role="alert" aria-live="assertive">
                   <AlertCircle size={16} /> {error}
                 </div>

@@ -102,11 +102,11 @@ begin
     lower(trim(new.email)),
     nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''),
     nullif(trim(new.raw_user_meta_data ->> 'phone'), ''),
-    case
+    (case
       when new.raw_user_meta_data ->> 'role' in ('CUSTOMER', 'BUSINESS_OWNER')
         then new.raw_user_meta_data ->> 'role'
       else 'CUSTOMER'
-    end,
+    end)::public.app_role,
     now()
   )
   on conflict (id) do nothing;

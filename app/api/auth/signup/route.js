@@ -1,46 +1,27 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient } from "@/lib/supabaseAdmin";
-import { getSupabasePublicServerClient } from "@/lib/supabasePublicServer";
 import { isValidEmail, normalizeEmail, SIGNUP_ROLES, validatePassword } from "@/lib/auth";
 import { normalizePhilippinePhone } from "@/lib/phone";
 import { getAuthRedirectUrl } from "@/lib/appUrl";
+import { sendAuthVerificationEmail } from "@/lib/authVerificationEmail";
 
 export const dynamic = "force-dynamic";
 
-const DUPLICATE_MESSAGES = {
-  verified: "An account with this email already exists. Please log in instead or reset your password.",
-  unverified: "This email is already registered but not verified. Check your inbox or resend the verification email.",
-};
-
-function duplicateResponse(account) {
-  const isVerified = Boolean(account?.email_confirmed_at);
-  return NextResponse.json({
-    error: isVerified ? DUPLICATE_MESSAGES.verified : DUPLICATE_MESSAGES.unverified,
-    code: isVerified ? "EMAIL_EXISTS_VERIFIED" : "EMAIL_EXISTS_UNVERIFIED",
-    canResend: !isVerified,
-  }, { status: 409 });
-}
+const SIGNUP_FAILURE_MESSAGE = "We could not create your account. This email may already be taken—try signing in or resetting your password.";
+const SIGNUP_PROVIDER_FAILURE_MESSAGE = "We could not complete signup right now. Please try again.";
 
 function cleanText(value) {
   return String(value || "").trim();
 }
 
-async function findAuthAccount(supabase, email) {
-  const { data, error } = await supabase.rpc("get_auth_user_status_by_email", {
-    lookup_email: email,
-  });
-
-  if (error) return { account: null, error };
-  return { account: Array.isArray(data) ? data[0] || null : data || null, error: null };
+function getSignupErrorCode(error) {
+  const code = String(error?.code || "").trim().toLowerCase();
+  if (code) return code.slice(0, 80).replace(/[^a-z0-9_.-]/g, "_");
+  return "unknown";
 }
 
-async function recheckDuplicate(supabase, email) {
-  const { account, error } = await findAuthAccount(supabase, email);
-  if (error) {
-    console.error("AUTH_SIGNUP_DUPLICATE_RECHECK_FAILED");
-    return NextResponse.json({ error: "Authentication is temporarily unavailable. Please try again." }, { status: 503 });
-  }
-  return account ? duplicateResponse(account) : null;
+function isDuplicateSignupError(errorCode) {
+  return errorCode === "email_exists" || errorCode === "user_already_exists";
 }
 
 export async function POST(request) {
@@ -93,26 +74,19 @@ export async function POST(request) {
       }
     }
 
-    const admin = getSupabaseAdminClient();
-    const { account, error: lookupError } = await findAuthAccount(admin, email);
-    if (lookupError) {
-      console.error("AUTH_SIGNUP_LOOKUP_FAILED");
-      return NextResponse.json({ error: "Authentication is temporarily unavailable. Please try again." }, { status: 503 });
-    }
-    if (account) return duplicateResponse(account);
-
     const emailRedirectTo = getAuthRedirectUrl();
     if (!emailRedirectTo) {
       console.error("AUTH_SIGNUP_APP_URL_MISSING");
       return NextResponse.json({ error: "Authentication is temporarily unavailable. Please try again." }, { status: 503 });
     }
 
-    const publicClient = getSupabasePublicServerClient();
-    const { data, error: signupError } = await publicClient.auth.signUp({
+    const admin = getSupabaseAdminClient();
+    const { data, error: signupError } = await admin.auth.admin.generateLink({
+      type: "signup",
       email,
       password,
       options: {
-        emailRedirectTo,
+        redirectTo: emailRedirectTo,
         data: {
           full_name: `${firstName} ${lastName}`.trim(),
           phone,
@@ -127,28 +101,32 @@ export async function POST(request) {
     });
 
     if (signupError) {
-      const duplicate = await recheckDuplicate(admin, email);
-      if (duplicate) return duplicate;
-
-      console.error("AUTH_SIGNUP_FAILED");
-      return NextResponse.json({ error: "We could not create your account right now. Please try again." }, { status: 503 });
+      const errorCode = getSignupErrorCode(signupError);
+      console.error(isDuplicateSignupError(errorCode) ? "AUTH_SIGNUP_EMAIL_MAY_BE_TAKEN" : "AUTH_SIGNUP_PROVIDER_ERROR", errorCode);
+      return NextResponse.json({
+        error: isDuplicateSignupError(errorCode) ? SIGNUP_FAILURE_MESSAGE : SIGNUP_PROVIDER_FAILURE_MESSAGE,
+      }, { status: 503 });
     }
 
-    // With email confirmation enabled, Supabase returns a user with no session.
-    // If the auth project is configured differently, the identities check still
-    // catches the duplicate-user response that Supabase intentionally obscures.
-    if (!data?.user || data.user.identities?.length === 0) {
-      const duplicate = await recheckDuplicate(admin, email);
-      if (duplicate) return duplicate;
-      console.error("AUTH_SIGNUP_MISSING_USER");
-      return NextResponse.json({ error: "We could not create your account right now. Please try again." }, { status: 503 });
+    if (!data?.user || !data?.properties?.action_link) {
+      console.error("AUTH_SIGNUP_NO_USER_RESPONSE");
+      return NextResponse.json({ error: SIGNUP_PROVIDER_FAILURE_MESSAGE }, { status: 503 });
+    }
+
+    const { error: emailError } = await sendAuthVerificationEmail({
+      email,
+      actionLink: data.properties.action_link,
+    });
+    if (emailError) {
+      console.error("AUTH_SIGNUP_EMAIL_DELIVERY_FAILED", emailError.code || "unknown");
+      return NextResponse.json({ error: "We could not send the verification email. Please try again." }, { status: 502 });
     }
 
     return NextResponse.json({
       success: true,
       email,
       role,
-      verificationRequired: !data.user.email_confirmed_at,
+      verificationRequired: true,
       message: "Account created. Check your email and verify your account before logging in.",
     }, { status: 201 });
   } catch {

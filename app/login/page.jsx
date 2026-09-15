@@ -59,31 +59,6 @@ export default function LoginPage() {
     return "We could not sign you in. Please check your details and try again.";
   };
 
-  const resolveLoginError = async (err, email) => {
-    const message = err?.message?.toLowerCase() || "";
-    if (!message.includes("invalid login credentials")) return getReadableError(err);
-
-    try {
-      const statusResponse = await fetch("/api/auth/account-status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-      const statusData = await statusResponse.json().catch(() => ({}));
-      // This lookup only enriches Supabase's safe invalid-credentials error.
-      // If it is unavailable, do not mislabel a bad login as an auth outage.
-      if (statusResponse.status === 503) return "Invalid email or password. Please check your credentials.";
-      if (statusData.status === "not_found") return "This email does not exist. Please check your email address or create an account.";
-      if (statusData.status === "unverified") return "Your email is not verified yet. Check your inbox or resend the verification email.";
-      if (statusData.status === "disabled") return "This account is disabled or unauthorized. Please contact support.";
-      if (statusData.status === "active") return "Incorrect password. Please try again or reset your password.";
-    } catch {
-      // Keep the provider's safe invalid-credentials message if the status
-      // lookup is unavailable.
-    }
-    return "Invalid email or password. Please check your credentials.";
-  };
-
   const handleResendVerification = async () => {
     if (!verificationEmail || resendLoading || resendCooldown > 0) return;
     setResendLoading(true);
@@ -232,7 +207,7 @@ export default function LoginPage() {
       if (String(err?.message || "").toLowerCase().includes("email not confirmed")) {
         setVerificationEmail(email);
       }
-      const readableError = await resolveLoginError(err, email);
+      const readableError = getReadableError(err);
       if (readableError.toLowerCase().includes("not verified")) setVerificationEmail(email);
       setError(readableError);
     } finally {

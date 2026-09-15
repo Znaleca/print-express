@@ -25,6 +25,23 @@ const toPosition = (lat, lng) => {
   return normalizeCoordinates(lat, lng);
 };
 
+const createMarker = (map, nextPosition, readOnly, onPositionChange) => {
+  const marker = L.marker([nextPosition.lat, nextPosition.lng], {
+    icon: customIcon,
+    draggable: !readOnly,
+  }).addTo(map);
+
+  if (!readOnly) {
+    marker.on("dragend", (event) => {
+      const markerPosition = event.target.getLatLng();
+      const normalizedPosition = toPosition(markerPosition.lat, markerPosition.lng);
+      if (normalizedPosition) onPositionChange(normalizedPosition);
+    });
+  }
+
+  return marker;
+};
+
 export default function LocationPicker({ lat, lng, onChange, readOnly = false, includedRadiusKm = null, maxRadiusKm = null }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -33,6 +50,11 @@ export default function LocationPicker({ lat, lng, onChange, readOnly = false, i
   const maxCircleRef = useRef(null);
   const onChangeRef = useRef(onChange);
   const [position, setPosition] = useState(() => toPosition(lat, lng));
+
+  const notifyPositionChange = (nextPosition) => {
+    setPosition(nextPosition);
+    onChangeRef.current?.(nextPosition.lat, nextPosition.lng);
+  };
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -65,7 +87,7 @@ export default function LocationPicker({ lat, lng, onChange, readOnly = false, i
       if (markerRef.current) {
         markerRef.current.setLatLng([nextPosition.lat, nextPosition.lng]);
       } else {
-        markerRef.current = L.marker([nextPosition.lat, nextPosition.lng], { icon: customIcon }).addTo(map);
+        markerRef.current = createMarker(map, nextPosition, readOnly, notifyPositionChange);
       }
       map.setView([nextPosition.lat, nextPosition.lng], map.getZoom(), { animate: false });
       if (notifyParent) onChangeRef.current?.(nextPosition.lat, nextPosition.lng);
@@ -80,7 +102,7 @@ export default function LocationPicker({ lat, lng, onChange, readOnly = false, i
     if (!readOnly) map.on("click", handleMapClick);
 
     if (toPosition(lat, lng)) {
-      markerRef.current = L.marker([initialPosition.lat, initialPosition.lng], { icon: customIcon }).addTo(map);
+      markerRef.current = createMarker(map, initialPosition, readOnly, notifyPositionChange);
     }
 
     // The map can be mounted inside a responsive grid. Recalculate after its
@@ -108,6 +130,9 @@ export default function LocationPicker({ lat, lng, onChange, readOnly = false, i
       if (mapRef.current === map) mapRef.current = null;
       map.remove();
     };
+    // Leaflet owns this DOM node for the component lifetime. Prop changes are
+    // synchronized by the focused effects below instead of recreating the map.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -124,11 +149,11 @@ export default function LocationPicker({ lat, lng, onChange, readOnly = false, i
     if (markerRef.current) {
       markerRef.current.setLatLng([position.lat, position.lng]);
     } else {
-      markerRef.current = L.marker([position.lat, position.lng], { icon: customIcon }).addTo(map);
+      markerRef.current = createMarker(map, position, readOnly, notifyPositionChange);
     }
     map.setView([position.lat, position.lng], map.getZoom(), { animate: false });
     map.invalidateSize({ animate: false });
-  }, [position]);
+  }, [position, readOnly]);
 
   useEffect(() => {
     const map = mapRef.current;

@@ -25,6 +25,9 @@ function getUserScopedClient(token) {
 const RPC_BY_ACTION = {
   request: { name: "video_call_request", args: (body) => ({ p_conversation_id: body.conversationId }) },
   book: { name: "video_call_book", args: (body) => ({ p_conversation_id: body.conversationId, p_scheduled_at: body.scheduledAt, p_customer_note: body.customerNote || null, p_timezone: body.timezone || null }) },
+  invite_to_schedule: { name: "video_call_owner_invite", args: (body) => ({ p_conversation_id: body.conversationId }) },
+  propose: { name: "video_call_owner_propose", args: (body) => ({ p_conversation_id: body.conversationId, p_scheduled_at: body.scheduledAt }) },
+  start_now: { name: "video_call_owner_start_now", args: (body) => ({ p_conversation_id: body.conversationId }) },
   confirm: { name: "video_call_confirm", args: (body) => ({ p_call_id: body.callId }) },
   schedule: { name: "video_call_schedule", args: (body) => ({ p_call_id: body.callId, p_scheduled_at: body.scheduledAt }) },
   reschedule: { name: "video_call_reschedule", args: (body) => ({ p_call_id: body.callId, p_scheduled_at: body.scheduledAt, p_customer_note: body.customerNote || null, p_confirm: false }) },
@@ -73,20 +76,23 @@ async function loadAvailability(auth, searchParams) {
     if (!conversation || conversation.customer_id !== auth.user.id || conversation.business_id !== businessId) return { error: NextResponse.json({ error: "You are not authorized to view this availability." }, { status: 403 }) };
   }
 
-  const [hoursResult, bookedCallsResult] = await Promise.all([
+  const [hoursResult, bookedCallsResult, dateOverridesResult] = await Promise.all([
     auth.admin.from("business_hours").select("day_of_week, opens_at, closes_at, is_closed").eq("business_id", businessId).order("day_of_week"),
     auth.admin.from("video_calls").select("id, conversation_id, business_id, customer_id, owner_id, status, requested_slot_at, scheduled_at, duration_minutes, buffer_minutes").eq("business_id", businessId).in("status", ["REQUESTED", "SCHEDULED", "LIVE"]),
+    auth.admin.from("business_meeting_date_overrides").select("available_date, is_available, opens_at, closes_at").eq("business_id", businessId).order("available_date").range(0, 199),
   ]);
-  if (hoursResult.error || bookedCallsResult.error) {
+  if (hoursResult.error || bookedCallsResult.error || dateOverridesResult.error) {
     console.error("VIDEO_CALL_AVAILABILITY_QUERY_FAILED", {
       hours: hoursResult.error?.code || null,
       calls: bookedCallsResult.error?.code || null,
+      dateOverrides: dateOverridesResult.error?.code || null,
     });
     return { error: NextResponse.json({ error: "Meeting availability is temporarily unavailable." }, { status: 503 }) };
   }
 
   const hours = hoursResult.data || [];
   const bookedCalls = bookedCallsResult.data || [];
+  const dateOverrides = dateOverridesResult.data || [];
   const requestedExcludeCallId = String(searchParams.get("excludeCallId") || "").trim();
   let excludeCallId = null;
   if (requestedExcludeCallId) {
@@ -104,14 +110,15 @@ async function loadAvailability(auth, searchParams) {
 
   const settings = normalizeMeetingSettings(business);
   const timeZone = business.timezone || "Asia/Manila";
-  const dates = buildMeetingSlots({ timeZone, hours, settings, bookedCalls, excludeCallId, includeBlockedSlots: true });
+  const dates = buildMeetingSlots({ timeZone, hours, dateOverrides, settings, bookedCalls, excludeCallId, includeBlockedSlots: true });
   return {
     data: {
       business: { id: business.id, name: business.name, timezone: timeZone },
       settings,
       hours,
+      dateOverrides,
       dates,
-      hasPublishedHours: Boolean(hours.length),
+      hasPublishedHours: Boolean(hours.length || dateOverrides.some((row) => row.is_available)),
     },
   };
 }
@@ -158,17 +165,20 @@ async function loadOwnerCalendar(auth) {
     .order("requested_slot_at", { ascending: true, nullsFirst: false });
   if (callError) return { error: NextResponse.json({ error: "Calendar data is unavailable." }, { status: 503 }) };
   const customerIds = [...new Set((calls || []).map((call) => call.customer_id).filter(Boolean))];
-  const [{ data: profiles }, { data: hours }] = await Promise.all([
+  const [{ data: profiles }, { data: hours }, { data: dateOverrides }] = await Promise.all([
     customerIds.length ? auth.admin.from("profiles").select("id, full_name, email, avatar_url").in("id", customerIds) : Promise.resolve({ data: [] }),
     auth.admin.from("business_hours").select("business_id, day_of_week, opens_at, closes_at, is_closed").in("business_id", businessIds).order("day_of_week"),
+    auth.admin.from("business_meeting_date_overrides").select("id, business_id, available_date, is_available, opens_at, closes_at, updated_at").in("business_id", businessIds).order("available_date").range(0, 1999),
   ]);
   const profileById = new Map((profiles || []).map((profile) => [profile.id, profile]));
   const businessById = new Map((businesses || []).map((business) => [business.id, business]));
   const hoursByBusinessId = new Map();
   for (const hour of hours || []) hoursByBusinessId.set(hour.business_id, [...(hoursByBusinessId.get(hour.business_id) || []), hour]);
+  const overridesByBusinessId = new Map();
+  for (const override of dateOverrides || []) overridesByBusinessId.set(override.business_id, [...(overridesByBusinessId.get(override.business_id) || []), override]);
   return {
     data: {
-      businesses: (businesses || []).map((business) => ({ ...business, settings: normalizeMeetingSettings(business), hours: hoursByBusinessId.get(business.id) || [] })),
+      businesses: (businesses || []).map((business) => ({ ...business, settings: normalizeMeetingSettings(business), hours: hoursByBusinessId.get(business.id) || [], dateOverrides: overridesByBusinessId.get(business.id) || [] })),
       calls: (calls || []).map((call) => ({
         ...safeCall(call),
         business_name: businessById.get(call.business_id)?.name || "Print shop",
@@ -206,9 +216,10 @@ export async function POST(request) {
     const action = String(body?.action || "").trim().toLowerCase();
     const rpc = RPC_BY_ACTION[action];
     if (!rpc) return NextResponse.json({ error: "Unsupported video call action." }, { status: 400 });
-    if (["request", "book"].includes(action) && !body.conversationId) return NextResponse.json({ error: "A conversation ID is required." }, { status: 400 });
-    if (!["request", "book"].includes(action) && !body.callId) return NextResponse.json({ error: "A video call ID is required." }, { status: 400 });
-    if (["book", "schedule", "reschedule"].includes(action)) {
+    const conversationActions = ["request", "book", "invite_to_schedule", "propose", "start_now"];
+    if (conversationActions.includes(action) && !body.conversationId) return NextResponse.json({ error: "A conversation ID is required." }, { status: 400 });
+    if (!conversationActions.includes(action) && !body.callId) return NextResponse.json({ error: "A video call ID is required." }, { status: 400 });
+    if (["book", "schedule", "reschedule", "propose"].includes(action)) {
       const scheduledAt = new Date(body.scheduledAt || "");
       if (Number.isNaN(scheduledAt.getTime())) return NextResponse.json({ error: "Choose a valid meeting time." }, { status: 400 });
       if (body.customerNote && String(body.customerNote).length > 500) return NextResponse.json({ error: "Meeting notes must be 500 characters or fewer." }, { status: 400 });
@@ -230,9 +241,9 @@ export async function POST(request) {
     const call = Array.isArray(data) ? data[0] : data;
     if (!call) return NextResponse.json({ error: "The meeting was not saved. Please choose the time again." }, { status: 500 });
     let notification = null;
-    let notificationType = { book: "BOOKED", confirm: "CONFIRMED", schedule: "CONFIRMED", reschedule: "RESCHEDULED", request_reschedule: "RESCHEDULE_REQUESTED", cancel: "CANCELLED" }[action];
+    let notificationType = { book: "BOOKED", start_now: "BOOKED", invite_to_schedule: "SCHEDULING_INVITE", confirm: "CONFIRMED", schedule: "CONFIRMED", reschedule: "RESCHEDULED", request_reschedule: "RESCHEDULE_REQUESTED", cancel: "CANCELLED" }[action];
     if (action === "reschedule" && call.status === "REQUESTED") notificationType = null;
-    if (["schedule", "confirm"].includes(action) && (previousCall?.confirmation_required_by || previousCall?.rescheduled_from_at || Number(previousCall?.reschedule_count || 0) > 0)) notificationType = "RESCHEDULED";
+    if (["schedule", "confirm"].includes(action) && (previousCall?.rescheduled_from_at || Number(previousCall?.reschedule_count || 0) > 0)) notificationType = "RESCHEDULED";
     if (call && notificationType) notification = await sendMeetingNotification({ admin: auth.admin, call, eventType: notificationType });
     return NextResponse.json({
       success: true,
