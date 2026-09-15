@@ -106,7 +106,9 @@ function createGroup(business, profileMap) {
       phone: business.phone || "",
       email: business.email || "",
       is_open: business.is_open,
-      website: business.website || "",
+      facebook_url: business.facebook_url || "",
+      instagram_url: business.instagram_url || "",
+      tiktok_url: business.tiktok_url || "",
       logo_url: business.logo_url || null,
       created_at: business.created_at,
       updated_at: business.updated_at,
@@ -274,7 +276,7 @@ export async function GET(request) {
     const selectedShopId = String(params.get("shopId") || "").trim() || null;
 
     const [businesses, reviewRows, categoryRows, serviceRows, pricingRows] = await Promise.all([
-      readRows(auth.supabase.from("businesses").select("id, name, status, owner_id, description, products_summary, address, phone, email, website, logo_url, is_open, created_at, updated_at, lifecycle_state, last_activity_at, locked_at, lock_reason, archived_at").order("name", { ascending: true }).range(0, MAX_SHOP_ROWS - 1)),
+      readRows(auth.supabase.from("businesses").select("id, name, status, owner_id, description, products_summary, address, phone, email, facebook_url, instagram_url, tiktok_url, logo_url, is_open, created_at, updated_at, lifecycle_state, last_activity_at, locked_at, lock_reason, archived_at").order("name", { ascending: true }).range(0, MAX_SHOP_ROWS - 1)),
       readRows(auth.supabase.from("orders").select("id, business_id, customer_id, status, rating, feedback, feedback_hidden, feedback_hidden_at, feedback_hidden_by, created_at, items").in("status", COMPLETED_STATUSES).not("rating", "is", null).order("created_at", { ascending: false }).range(0, MAX_REVIEW_ROWS - 1)),
       readRows(auth.supabase.from("category_approval_requests").select("id, business_id, category_name, reason, status, created_at").order("created_at", { ascending: false }).range(0, MAX_CATEGORY_ROWS - 1)),
       readRows(auth.supabase.from("services").select("id, business_id, name, category, description, price, price_max, item_type, available, is_customizable, stock_qty, low_stock_threshold, specs_json, image_url, created_at, updated_at").order("created_at", { ascending: false }).range(0, MAX_SERVICE_ROWS - 1)),

@@ -9,9 +9,10 @@ import { normalizePhilippinePhone, toPhilippinePhoneInput } from "@/lib/phone";
 import { normalizeCoordinates } from "@/lib/coordinates";
 import { calculateDeliveryFeeFromDistance, DEFAULT_DELIVERY_SETTINGS, DELIVERY_ROUNDING_RULES, formatDeliveryDistance, normalizeDeliverySettings, validateDeliverySettings } from "@/lib/delivery";
 import { formatPesoAmount } from "@/lib/paymentSummary";
+import { startMinuteAlignedRefresh } from "@/lib/openStateRefresh";
 import {
   Store, Save, Loader2, UploadCloud, QrCode, Power, MapPin, MapPinned, Truck,
-  CheckCircle2, ShieldCheck, Phone, Mail, Globe2, ExternalLink, Info, Clock, RotateCcw
+  CheckCircle2, ShieldCheck, Phone, Mail, ExternalLink, Info, Clock, RotateCcw
 } from "lucide-react";
 
 const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker"), { ssr: false });
@@ -20,11 +21,31 @@ const BUCKET = "shop-logos";
 const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const DEFAULT_DAY = (day_of_week) => ({ day_of_week, configured: false, is_closed: false, opens_at: "09:00", closes_at: "17:00" });
+const SOCIAL_URL_FIELDS = [
+  { key: "facebook_url", label: "Facebook", placeholder: "https://facebook.com/yourshop" },
+  { key: "instagram_url", label: "Instagram", placeholder: "https://instagram.com/yourshop" },
+  { key: "tiktok_url", label: "TikTok", placeholder: "https://tiktok.com/@yourshop" },
+];
+
+async function getEffectiveOpenState(targetBusinessId, fallback = false) {
+  const { data, error } = await supabase.rpc("is_business_open_now", { p_business_id: targetBusinessId });
+  return error ? fallback : Boolean(data);
+}
+
+function isValidOptionalSocialUrl(value) {
+  if (!value?.trim()) return true;
+  try {
+    const url = new URL(value.trim());
+    return ["http:", "https:"].includes(url.protocol) && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
 
 export default function ShopProfilePage() {
   const [form, setForm] = useState({
     name: "", description: "", products_summary: "", address: "",
-    phone: "", email: "", website: "", logo_url: "", qr_url: "",
+    phone: "", email: "", facebook_url: "", instagram_url: "", tiktok_url: "", logo_url: "", qr_url: "",
     lat: null, lng: null,
     min_downpayment_percent: 30,
     delivery_enabled: DEFAULT_DELIVERY_SETTINGS.delivery_enabled,
@@ -84,7 +105,7 @@ export default function ShopProfilePage() {
 
       const { data: biz, error: businessError } = await supabase
         .from("businesses")
-        .select("id, name, description, products_summary, status, address, phone, email, website, logo_url, qr_url, lat, lng, min_downpayment_percent, delivery_enabled, delivery_base_fee, delivery_included_distance_km, delivery_fee_per_extra_km, delivery_max_distance_km, delivery_distance_rounding, is_open, timezone, manual_open_override")
+        .select("id, name, description, products_summary, status, address, phone, email, facebook_url, instagram_url, tiktok_url, logo_url, qr_url, lat, lng, min_downpayment_percent, delivery_enabled, delivery_base_fee, delivery_included_distance_km, delivery_fee_per_extra_km, delivery_max_distance_km, delivery_distance_rounding, is_open, timezone, manual_open_override")
         .eq("owner_id", user.id)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -103,7 +124,9 @@ export default function ShopProfilePage() {
           address: biz.address || "",
           phone: toPhilippinePhoneInput(biz.phone || ""),
           email: biz.email || "",
-          website: biz.website || "",
+          facebook_url: biz.facebook_url || "",
+          instagram_url: biz.instagram_url || "",
+          tiktok_url: biz.tiktok_url || "",
           logo_url: biz.logo_url || "",
           qr_url: biz.qr_url || "",
           lat: coordinates?.lat ?? null,
@@ -120,11 +143,12 @@ export default function ShopProfilePage() {
         setInitialForm(loadedForm);
         if (biz.logo_url) setLogoPreview(biz.logo_url);
         if (biz.qr_url) setQrPreview(biz.qr_url);
-        setIsOpen(biz.is_open ?? true);
+        setIsOpen(await getEffectiveOpenState(biz.id, biz.is_open ?? true));
         setTimezone(biz.timezone || "Asia/Manila");
         setInitialTimezone(biz.timezone || "Asia/Manila");
-        setManualOverride(biz.manual_open_override ?? null);
-        setInitialManualOverride(biz.manual_open_override ?? null);
+        const loadedManualClose = biz.manual_open_override === false ? false : null;
+        setManualOverride(loadedManualClose);
+        setInitialManualOverride(loadedManualClose);
 
         const { data: savedHours } = await supabase
           .from("business_hours")
@@ -147,24 +171,40 @@ export default function ShopProfilePage() {
 
   useEffect(() => () => addressLookupControllerRef.current?.abort(), []);
 
+  useEffect(() => {
+    if (!businessId || manualOverride !== null) return undefined;
+
+    return startMinuteAlignedRefresh(async () => {
+      setIsOpen(await getEffectiveOpenState(businessId, false));
+    });
+  }, [businessId, manualOverride]);
+
   const handleToggleOpen = async () => {
     if (!businessId || togglingOpen) return;
-    const next = !isOpen;
     setTogglingOpen(true);
 
+    const reopening = !isOpen;
     const { error: err } = await supabase
       .from("businesses")
-      .update({ is_open: next, manual_open_override: next, manual_override_until: null })
+      .update(reopening
+        ? { is_open: true, manual_open_override: null, manual_override_until: null }
+        : { is_open: false, manual_open_override: false, manual_override_until: null })
       .eq("id", businessId);
 
-    setTogglingOpen(false);
     if (err) {
       alert("Failed to update status: " + err.message);
     } else {
-      setIsOpen(next);
-      setManualOverride(next);
-      setInitialManualOverride(next);
+      const effectiveOpen = reopening
+        ? await getEffectiveOpenState(businessId, false)
+        : false;
+      setIsOpen(effectiveOpen);
+      setManualOverride(reopening ? null : false);
+      setInitialManualOverride(reopening ? null : false);
+      showToast(reopening
+        ? (effectiveOpen ? "Manual close removed. Your shop is now following its schedule." : "Manual close removed. Your shop will open at its next scheduled time.")
+        : "Shop closed until you turn it back on.");
     }
+    setTogglingOpen(false);
   };
 
   const handleResumeSchedule = async () => {
@@ -176,10 +216,11 @@ export default function ShopProfilePage() {
       .eq("id", businessId);
 
     if (!err) {
-      const { data: effectiveOpen } = await supabase.rpc("is_business_open_now", { p_business_id: businessId });
-      setIsOpen(Boolean(effectiveOpen));
+      const effectiveOpen = await getEffectiveOpenState(businessId, false);
+      setIsOpen(effectiveOpen);
       setManualOverride(null);
       setInitialManualOverride(null);
+      showToast(effectiveOpen ? "Your shop is following its schedule and is currently open." : "Your shop is following its schedule and is currently closed.");
     }
     setTogglingOpen(false);
     if (err) alert("Failed to resume schedule: " + err.message);
@@ -231,6 +272,9 @@ export default function ShopProfilePage() {
 
       setInitialHours(hours);
       setInitialTimezone(timezone);
+      if (manualOverride === null) {
+        setIsOpen(await getEffectiveOpenState(businessId, false));
+      }
       showToast("Operating hours saved.");
     } catch (error) {
       showToast(error.message || "Could not save operating hours.", "error");
@@ -480,12 +524,10 @@ export default function ShopProfilePage() {
         validationMessage = "Place the map pin at your shop entrance before saving.";
       } else if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
         validationMessage = "Enter a valid business email or leave the field blank.";
-      } else if (form.website) {
-        try {
-          const website = new URL(form.website.trim());
-          if (!['http:', 'https:'].includes(website.protocol)) throw new Error();
-        } catch {
-          validationMessage = "Website URL must start with https:// (or leave it blank).";
+      } else {
+        const invalidSocial = SOCIAL_URL_FIELDS.find(({ key }) => !isValidOptionalSocialUrl(form[key]));
+        if (invalidSocial) {
+          validationMessage = `${invalidSocial.label} URL must start with https:// (or leave it blank).`;
         }
       }
       const deliveryValidation = form.delivery_enabled
@@ -530,7 +572,9 @@ export default function ShopProfilePage() {
         address: trimmedAddress,
         phone: normalizedPhone,
         email: form.email.trim(),
-        website: form.website.trim(),
+        facebook_url: form.facebook_url.trim(),
+        instagram_url: form.instagram_url.trim(),
+        tiktok_url: form.tiktok_url.trim(),
         logo_url: finalLogoUrl,
         qr_url: finalQrUrl,
         lat: coordinates.lat,
@@ -556,7 +600,9 @@ export default function ShopProfilePage() {
         name: trimmedName,
         address: trimmedAddress,
         email: form.email.trim(),
-        website: form.website.trim(),
+        facebook_url: form.facebook_url.trim(),
+        instagram_url: form.instagram_url.trim(),
+        tiktok_url: form.tiktok_url.trim(),
         phone: toPhilippinePhoneInput(normalizedPhone),
         logo_url: finalLogoUrl,
         qr_url: finalQrUrl,
@@ -703,7 +749,7 @@ export default function ShopProfilePage() {
                   <div>
                     <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">Store hours</p>
                     <h2 className="mt-1 text-xl font-black text-slate-900">When customers can order</h2>
-                    <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">Set a weekly schedule or leave a day unconfigured to follow your manual shop status.</p>
+                    <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">Set a weekly schedule. Unconfigured days stay closed.</p>
                   </div>
                   <Clock size={20} className="text-[#00AFC0]" />
                 </div>
@@ -774,7 +820,7 @@ export default function ShopProfilePage() {
                   </label>
                   <div className="text-left sm:text-right">
                     <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Manual status</p>
-                    <p className="mt-1 text-xs font-bold text-slate-800">{manualOverride === null ? "Following schedule" : manualOverride ? "Forced open" : "Forced closed"}</p>
+                    <p className="mt-1 text-xs font-bold text-slate-800">{manualOverride === null ? "Following schedule" : "Closed until reopened"}</p>
                     {manualOverride !== null && (
                       <button type="button" onClick={handleResumeSchedule} disabled={togglingOpen} className="mt-2 inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-[#C40075] hover:underline disabled:opacity-50">
                         <RotateCcw size={12} /> Resume schedule
@@ -792,12 +838,12 @@ export default function ShopProfilePage() {
                   <h2 className="mt-1 text-xl font-black text-slate-900">Make your shop recognizable</h2>
                   <p className="mt-1 text-xs leading-relaxed text-slate-500">This name and logo are used across your storefront, orders, and customer messages.</p>
                 </div>
-                <div className="grid gap-6 p-5 sm:p-7 lg:grid-cols-[190px_minmax(0,1fr)] lg:items-center">
+                <div className="grid gap-6 p-5 sm:p-7 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-center">
                   <div className="flex flex-col items-center gap-3">
                     {logoPreview ? (
-                      <img src={logoPreview} alt="Shop logo preview" className="h-36 w-36 rounded-2xl border border-[#D8D6CE] bg-white object-contain p-2 shadow-sm" />
+                      <img src={logoPreview} alt="Shop logo preview" className="h-32 w-full max-w-[260px] rounded-2xl border border-[#D8D6CE] bg-white object-contain p-2 shadow-sm" />
                     ) : (
-                      <div className="flex h-36 w-36 items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-[#F6F6F2] text-slate-400">
+                      <div className="flex h-32 w-full max-w-[260px] items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-[#F6F6F2] text-slate-400">
                         <Store size={38} />
                       </div>
                     )}
@@ -934,13 +980,15 @@ export default function ShopProfilePage() {
                       <input type="email" name="email" value={form.email} onChange={handleChange} placeholder="contact@yourshop.com" className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] py-3.5 pl-10 pr-4 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
                     </span>
                   </label>
-                  <label className="block md:col-span-2">
-                    <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Website URL <span className="font-medium normal-case tracking-normal text-slate-400">(optional)</span></span>
-                    <span className="relative mt-2 block">
-                      <Globe2 size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#EC008C]" />
-                      <input type="url" name="website" value={form.website} onChange={handleChange} placeholder="https://yourshop.com" className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] py-3.5 pl-10 pr-4 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
-                    </span>
-                  </label>
+                  {SOCIAL_URL_FIELDS.map(({ key, label, placeholder }) => (
+                    <label key={key} className="block">
+                      <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">{label} <span className="font-medium normal-case tracking-normal text-slate-400">(optional)</span></span>
+                      <span className="relative mt-2 block">
+                        <ExternalLink size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#EC008C]" />
+                        <input type="url" name={key} value={form[key]} onChange={handleChange} placeholder={placeholder} aria-label={`${label} URL`} className="w-full rounded-2xl border border-slate-200 bg-[#F6F6F2] py-3.5 pl-10 pr-4 text-sm outline-none transition-colors focus:border-[#00AFC0] focus:bg-white focus:ring-2 focus:ring-[#00FFFF]/40" />
+                      </span>
+                    </label>
+                  ))}
                 </div>
               </section>
 

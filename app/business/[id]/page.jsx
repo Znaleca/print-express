@@ -15,14 +15,24 @@ import {
 import {
   UploadCloud, CheckCircle2, CreditCard,
   FileText, Star, MapPin, Loader2, ArrowRight,
-  ChevronRight, Info, AlertTriangle, MessageSquare, Package, Minus, Plus, Clock, X, Power, ShieldCheck
+  ChevronRight, Info, AlertTriangle, MessageSquare, Package, Minus, Plus, Clock, X, Power, ShieldCheck, ExternalLink
 } from "lucide-react";
 import { getRatingStats, getRatingSummary, ratingLabel } from "@/lib/rating";
 import { getCategoryOptionConfig, normalizeConfiguredOptions } from "@/lib/serviceOptions";
+import { startMinuteAlignedRefresh } from "@/lib/openStateRefresh";
 
 const MAX_DESIGN_FILES = 5;
 const MAX_DESIGN_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_DESIGN_IMAGE_BYTES = 5 * 1024 * 1024;
+
+function getSafeExternalUrl(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    return ["http:", "https:"].includes(url.protocol) ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
 
 function getDesignFiles(item) {
   if (Array.isArray(item?.designFiles) && item.designFiles.length > 0) return item.designFiles;
@@ -259,7 +269,7 @@ export default function BusinessDetailsPage({ params }) {
         const { data, error } = await supabase
           .from("businesses")
           .select(`
-            id, name, address, description, products_summary, min_downpayment_percent, qr_url, is_open,
+            id, name, address, description, products_summary, facebook_url, instagram_url, tiktok_url, min_downpayment_percent, qr_url, is_open,
             services ( id, name, price, price_max, item_type, description, category, available, image_url, stock_qty, is_customizable, specs_json )
           `)
           .eq("id", id)
@@ -383,6 +393,16 @@ export default function BusinessDetailsPage({ params }) {
     }
     init();
   }, [id, checkoutServiceId, quoteId, designUrl, designVersion]);
+
+  useEffect(() => {
+    if (!id) return undefined;
+
+    return startMinuteAlignedRefresh(async () => {
+      const { data: openStateRows, error } = await supabase.rpc("get_business_open_states", { p_business_ids: [id] });
+      if (error || !openStateRows?.[0]) return;
+      setBusiness((current) => current ? { ...current, is_open: openStateRows[0].is_open } : current);
+    });
+  }, [id]);
 
   // Reviews live on orders, so listen to that source and refresh the filtered
   // public view when a customer rates an order or an owner/admin moderates it.
@@ -732,6 +752,13 @@ export default function BusinessDetailsPage({ params }) {
   }
 
   const isClosed = business.is_open === false;
+  const socialLinks = [
+    ["Facebook", business.facebook_url],
+    ["Instagram", business.instagram_url],
+    ["TikTok", business.tiktok_url],
+  ]
+    .map(([label, value]) => ({ label, url: getSafeExternalUrl(value) }))
+    .filter((link) => link.url);
 
   return (
     <main className="business-page min-h-screen bg-[#F6F6F2] pb-24 font-sans">
@@ -789,6 +816,24 @@ export default function BusinessDetailsPage({ params }) {
               </Link>
             )}
           </div>
+
+          {socialLinks.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-t border-white/10 pt-4 text-xs">
+              <span className="mr-1 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-white/45">Follow this shop</span>
+              {socialLinks.map((link) => (
+                <a
+                  key={link.label}
+                  href={link.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 font-semibold text-white/75 transition-colors hover:border-[#00FFFF] hover:text-[#00FFFF]"
+                >
+                  <ExternalLink size={12} />
+                  {link.label}
+                </a>
+              ))}
+            </div>
+          )}
 
           {(business.description || business.products_summary) && (
             <div className="grid max-w-5xl grid-cols-1 gap-4 border-t border-white/10 pt-4 md:grid-cols-2">

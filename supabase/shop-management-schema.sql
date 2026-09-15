@@ -12,6 +12,9 @@ alter table public.businesses
   add column if not exists email         text,
   add column if not exists logo_url      text,
   add column if not exists website       text,
+  add column if not exists facebook_url  text,
+  add column if not exists instagram_url text,
+  add column if not exists tiktok_url    text,
   add column if not exists updated_at    timestamptz default now();
 
 -- 2) Create services table

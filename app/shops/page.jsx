@@ -9,6 +9,7 @@ import { getRatingStats, ratingLabel } from "@/lib/rating";
 import { withTimeout } from "@/lib/withTimeout";
 import { normalizeCoordinates } from "@/lib/coordinates";
 import { getShopSearchResult } from "@/lib/shopSearch";
+import { startMinuteAlignedRefresh } from "@/lib/openStateRefresh";
 
 export default function ShopsPage() {
   const router = useRouter();
@@ -16,6 +17,7 @@ export default function ShopsPage() {
   const [businesses, setBusinesses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  const businessIdsKey = useMemo(() => businesses.map((business) => business.id).join(","), [businesses]);
 
   useEffect(() => {
     let active = true;
@@ -138,6 +140,21 @@ export default function ShopsPage() {
       if (subscription) supabase.removeChannel(subscription);
     };
   }, []);
+
+  useEffect(() => {
+    const businessIds = businessIdsKey ? businessIdsKey.split(",") : [];
+    if (businessIds.length === 0) return undefined;
+
+    return startMinuteAlignedRefresh(async () => {
+      const { data: openStateRows, error } = await supabase.rpc("get_business_open_states", { p_business_ids: businessIds });
+      if (error || !openStateRows) return;
+      const openStateByBusiness = Object.fromEntries(openStateRows.map((row) => [row.business_id, row.is_open]));
+      setBusinesses((current) => current.map((business) => ({
+        ...business,
+        is_open: openStateByBusiness[business.id] ?? business.is_open,
+      })));
+    });
+  }, [businessIdsKey]);
 
   const filtered = useMemo(
     () => businesses

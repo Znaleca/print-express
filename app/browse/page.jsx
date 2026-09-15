@@ -9,6 +9,7 @@ import { getRatingStats, ratingLabel } from "@/lib/rating";
 import { withTimeout } from "@/lib/withTimeout";
 import { normalizeCoordinates } from "@/lib/coordinates";
 import { getShopSearchResult } from "@/lib/shopSearch";
+import { startMinuteAlignedRefresh } from "@/lib/openStateRefresh";
 
 const estimateTravelMinutes = (distanceKm) => (
   distanceKm == null ? null : Math.max(1, Math.round(Number(distanceKm) * 2.5))
@@ -227,6 +228,23 @@ export default function BrowsePage() {
         .filter((business) => business.matched),
     [businesses, search]
   );
+
+  const businessIdsKey = useMemo(() => businesses.map((business) => business.id).join(","), [businesses]);
+
+  useEffect(() => {
+    const businessIds = businessIdsKey ? businessIdsKey.split(",") : [];
+    if (businessIds.length === 0) return undefined;
+
+    return startMinuteAlignedRefresh(async () => {
+      const { data: openStateRows, error } = await supabase.rpc("get_business_open_states", { p_business_ids: businessIds });
+      if (error || !openStateRows) return;
+      const openStateByBusiness = Object.fromEntries(openStateRows.map((row) => [row.business_id, row.is_open]));
+      setBusinesses((current) => current.map((business) => ({
+        ...business,
+        is_open: openStateByBusiness[business.id] ?? business.is_open,
+      })));
+    });
+  }, [businessIdsKey]);
 
   useEffect(() => {
     if (selectedId && !filtered.some((business) => business.id === selectedId)) {
