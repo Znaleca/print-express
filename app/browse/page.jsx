@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { Suspense, useState, useEffect, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Search, Star, Loader2, Map as MapIcon, ChevronRight, MapPin, SlidersHorizontal, UserRound, X } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { getRatingStats, ratingLabel } from "@/lib/rating";
 import { withTimeout } from "@/lib/withTimeout";
 import { normalizeCoordinates } from "@/lib/coordinates";
 import { getShopSearchResult } from "@/lib/shopSearch";
+import { normalizeServiceCategory } from "@/lib/serviceCategories";
 import { startMinuteAlignedRefresh } from "@/lib/openStateRefresh";
 
 const estimateTravelMinutes = (distanceKm) => (
@@ -32,8 +33,11 @@ const MapComponent = dynamic(() => import("@/components/MapComponent"), {
   ),
 });
 
-export default function BrowsePage() {
+function BrowsePageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const categoryParam = searchParams.get("category") || "";
+  const categoryFilter = categoryParam ? normalizeServiceCategory(categoryParam, categoryParam) : "";
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState("recommended");
   const [selectedId, setSelectedId] = useState(null);
@@ -56,6 +60,7 @@ export default function BrowsePage() {
 
     setLocationLoading(true);
     setLocationStatus("loading");
+    setSelectedId(null);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const coordinates = normalizeCoordinates(pos.coords.latitude, pos.coords.longitude);
@@ -66,7 +71,6 @@ export default function BrowsePage() {
           return;
         }
         setUserLocation(coordinates);
-        setSelectedId(null);
         setSortMode("nearest");
         setLocationLoading(false);
         setLocationStatus("granted");
@@ -165,7 +169,12 @@ export default function BrowsePage() {
         }, {});
 
         const formatted = (bizData || []).map((b) => {
-          const catalog = (b.services || []).filter((service) => service?.available !== false);
+          const catalog = (b.services || [])
+            .filter((service) => service?.available !== false)
+            .map((service) => ({
+              ...service,
+              category: normalizeServiceCategory(service.category, `${service.name || ""} ${service.description || ""}`),
+            }));
           const availableServices = catalog.map((service) => service.name).filter(Boolean);
 
           const reviews = reviewsByBusiness[b.id] || [];
@@ -230,8 +239,9 @@ export default function BrowsePage() {
           ...business,
           ...getShopSearchResult(business, search),
         }))
-        .filter((business) => business.matched),
-    [businesses, search]
+        .filter((business) => business.matched)
+        .filter((business) => !categoryFilter || business.catalog.some((service) => service.category === categoryFilter)),
+    [businesses, categoryFilter, search]
   );
 
   const businessIdsKey = useMemo(() => businesses.map((business) => business.id).join(","), [businesses]);
@@ -358,6 +368,12 @@ export default function BrowsePage() {
           <p className="mx-auto mt-3 max-w-xl text-xs leading-relaxed text-white/65 sm:text-sm">
             Search printing shops or an area. Select a result to focus its pin on the map.
           </p>
+          {categoryFilter && (
+            <div className="mx-auto mt-3 inline-flex items-center gap-2 rounded-full border border-[#00FFFF]/35 bg-[#00FFFF]/10 px-3 py-1.5 text-[11px] font-bold text-[#00FFFF]">
+              <span>Showing {categoryFilter}</span>
+              <button type="button" onClick={() => router.push("/browse")} className="rounded-full px-1.5 text-white/70 hover:bg-white/10 hover:text-white" aria-label="Clear printing category filter"><X size={13} /></button>
+            </div>
+          )}
 
           <div className="relative mx-auto mt-4 max-w-3xl text-left">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/55" size={20} />
@@ -529,5 +545,13 @@ export default function BrowsePage() {
         />
       </section>
     </main>
+  );
+}
+
+export default function BrowsePage() {
+  return (
+    <Suspense fallback={<main className="flex min-h-[calc(100vh-88px)] items-center justify-center bg-[#D9D9D2] text-xs font-bold text-slate-500">Loading print shops...</main>}>
+      <BrowsePageContent />
+    </Suspense>
   );
 }

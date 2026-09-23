@@ -5,26 +5,7 @@ import { X, Save, Loader2, ImagePlus, ImageOff, Layers, Sparkles, Plus, Trash2, 
 import { supabase } from "@/lib/supabaseClient";
 import { getUploadExtension, IMAGE_BUCKET, optimizeImageForUpload } from "@/lib/imageUpload";
 import { getCategoryOptionConfig, getKnownOptionNames, normalizeConfiguredOptions } from "@/lib/serviceOptions";
-
-const CATEGORY_GROUPS = {
-  "Core Printing Categories": [
-    "Digital Printing", "Offset Printing", "Large Format Printing", "Screen Printing", "UV Printing"
-  ],
-  "Specialty Printing": [
-    "Sublimation Printing", "3D Printing", "Textile / Fabric Printing", "Packaging Printing"
-  ],
-  "Finishing & Post-Press": [
-    "Cutting", "Binding", "Lamination", "Folding", "Embossing / Debossing", "Foil Stamping"
-  ],
-  "Marketing & Business Materials": [
-    "Business Cards", "Flyers & Brochures", "Posters", "Banners", "Stickers & Labels"
-  ],
-  "Custom & Promotional": [
-    "T-Shirt Printing", "Mug Printing", "ID Cards", "Giveaways / Souvenirs"
-  ]
-};
-
-const FLAT_CATEGORIES = Object.values(CATEGORY_GROUPS).flat();
+import { SERVICE_CATEGORIES, SERVICE_CATEGORY_NAMES, normalizeServiceCategory } from "@/lib/serviceCategories";
 
 const SIZE_PRESET_GROUPS = [
   {
@@ -79,58 +60,69 @@ const CATEGORY_SIZE_PRESETS = [
   {
     key: "paper",
     label: "Paper sizes",
-    categories: ["Digital Printing", "Offset Printing", "Flyers & Brochures"],
+    categories: ["Digital Printing", "Laser Printing"],
     options: ["A4 (8.27\" x 11.69\")", "A3 (11.69\" x 16.54\")", "Letter (8.5\" x 11\")", "Legal (8.5\" x 14\")", "Long Bond (8.5\" x 13\")"],
   },
   {
     key: "business-card",
     label: "Business card sizes",
-    categories: ["Business Cards"],
+    categories: ["Digital Printing", "Laser Printing"],
     options: ["Standard Business Card (3.5\" x 2\")"],
   },
   {
     key: "poster",
     label: "Poster sizes",
-    categories: ["Posters"],
+    categories: ["Digital Printing", "Inkjet Printing", "Large Format Printing"],
     options: ["A4 Poster (8.27\" x 11.69\")", "A3 Poster (11.69\" x 16.54\")", "A2 Poster (16.54\" x 23.39\")", "A1 Poster (23.39\" x 33.11\")", "A0 Poster (33.11\" x 46.81\")"],
   },
   {
     key: "apparel",
     label: "Clothing sizes",
-    categories: ["Screen Printing", "Textile / Fabric Printing", "T-Shirt Printing"],
+    categories: ["Sublimation Printing", "Heat Transfer Printing", "Screen Printing"],
     options: ["XS", "S", "M", "L", "XL", "XXL", "XXXL"],
   },
   {
     key: "tarpaulin",
     label: "Tarpaulin / banner sizes",
-    categories: ["Large Format Printing", "Large Format", "Banners", "Tarpaulin"],
+    categories: ["Large Format Printing"],
     options: ["2 x 3 ft Banner", "3 x 4 ft Banner", "4 x 6 ft Tarpaulin", "4 x 8 ft Tarpaulin", "5 x 10 ft Tarpaulin"],
   },
   {
     key: "photo",
     label: "ID and photo sizes",
-    categories: [],
+    categories: ["Inkjet Printing"],
     options: ["1 x 1 in ID Photo", "2 x 2 in ID Photo", "2 x 3 in ID Photo"],
   },
   {
     key: "id-card",
     label: "ID card sizes",
-    categories: ["ID Cards"],
+    categories: ["Digital Printing", "Laser Printing"],
     options: ["Standard ID Card (85.6 x 54 mm)"],
   },
   {
     key: "sticker",
     label: "Sticker / label sizes",
-    categories: ["Stickers & Labels"],
+    categories: ["Sticker Printing"],
     options: ["1 x 1 in Sticker", "2 x 2 in Sticker", "3 x 3 in Sticker", "4 x 6 in Sticker", "A4 Sticker Sheet"],
   },
   {
     key: "mug",
     label: "Mug / tumbler sizes",
-    categories: ["Mug Printing"],
+    categories: ["Sublimation Printing"],
     options: ["11 oz Mug", "15 oz Mug", "16 oz Tumbler"],
   },
 ];
+const NAME_PRESET_CATEGORY_COMPATIBILITY = {
+  apparel: ["Sublimation Printing", "Heat Transfer Printing", "Screen Printing"],
+  tarpaulin: ["Large Format Printing"],
+  poster: ["Digital Printing", "Inkjet Printing", "Large Format Printing"],
+  mug: ["Sublimation Printing"],
+  sticker: ["Sticker Printing", "Inkjet Printing"],
+  "id-card": ["Digital Printing", "Laser Printing"],
+  "business-card": ["Digital Printing", "Laser Printing"],
+  photo: ["Inkjet Printing"],
+  paper: ["Digital Printing", "Inkjet Printing", "Laser Printing"],
+};
 const SIZE_NAME_MATCHERS = [
   ["apparel", /\b(?:t[\s-]?shirt|tee|polo|shirt|cloth|clothing|textile|fabric|apparel)\b/i],
   ["tarpaulin", /\b(?:tarpaulin|banner|large format)\b/i],
@@ -163,8 +155,12 @@ const getInitialImageGallery = (initialValues, specs) => {
 };
 const getCategorySizePreset = (name = "", category = "") => {
   const namePresetKey = SIZE_NAME_MATCHERS.find(([, matcher]) => matcher.test(name))?.[0];
-  return CATEGORY_SIZE_PRESETS.find((preset) => preset.key === namePresetKey)
-    || CATEGORY_SIZE_PRESETS.find((preset) => preset.categories.includes(category))
+  const categoryPreset = CATEGORY_SIZE_PRESETS.find((preset) => preset.categories.includes(category));
+  const namePresetIsCompatible = namePresetKey
+    && (!category || NAME_PRESET_CATEGORY_COMPATIBILITY[namePresetKey]?.includes(category));
+
+  return (namePresetIsCompatible && CATEGORY_SIZE_PRESETS.find((preset) => preset.key === namePresetKey))
+    || categoryPreset
     || null;
 };
 const TSHIRT_SIZE_CHART = [
@@ -271,7 +267,11 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
       const existingSpecs = typeof initialValues.specs_json === 'string'
         ? (() => { try { return JSON.parse(initialValues.specs_json); } catch(e) { return {}; } })()
         : (initialValues.specs_json || {});
-      const initialCategoryPreset = getCategorySizePreset(initialValues.name || "", initialValues.category || "");
+      const normalizedInitialCategory = normalizeServiceCategory(
+        initialValues.category,
+        `${initialValues.name || ""} ${initialValues.description || ""}`,
+      );
+      const initialCategoryPreset = getCategorySizePreset(initialValues.name || "", normalizedInitialCategory);
       const initialOptionConfig = getCategoryOptionConfig(initialCategoryPreset?.key || "paper");
       const initialAllowedSizes = existingSpecs.allowed_sizes || [];
       const categoryAllowedSizes = initialCategoryPreset
@@ -303,7 +303,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
         description:          initialValues.description || "",
         price:                initialValues.price != null ? String(initialValues.price) : "0",
         price_max:            initialValues.price_max != null ? String(initialValues.price_max) : "",
-        category:             initialValues.category || "",
+        category:             normalizedInitialCategory,
         available:            initialValues.available !== false,
         imageUrl:             initialValues.image_url || null,
         imageFile:            null,
@@ -341,7 +341,6 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
   const [customSize, setCustomSize] = useState({ label: "", width: "", height: "", unit: "in", price: "" });
   const [customMaterial, setCustomMaterial] = useState({ label: "", modifier: "" });
   const [customQuality, setCustomQuality] = useState({ label: "", modifier: "" });
-  const [showCategoryRequest, setShowCategoryRequest] = useState(false);
 
   const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
 
@@ -466,6 +465,57 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
       }
       return { ...f, specs: nextSpecs };
     });
+  };
+
+  const handleCategoryRequest = async () => {
+    const categoryName = categoryRequestName.trim();
+    if (categoryName.length < 2) {
+      setCategoryNotice({ type: "error", message: "Enter the name of the category you want Admin to review." });
+      return;
+    }
+    if (SERVICE_CATEGORY_NAMES.some((name) => name.toLowerCase() === categoryName.toLowerCase())) {
+      setCategoryNotice({ type: "error", message: "That category is already available above. Choose it from the list." });
+      return;
+    }
+    if (!businessId) {
+      setCategoryNotice({ type: "error", message: "No active shop profile found. Save your shop profile first." });
+      return;
+    }
+
+    setCategoryRequestLoading(true);
+    setCategoryNotice(null);
+    try {
+      const { data: existingRequest, error: lookupError } = await supabase
+        .from("category_approval_requests")
+        .select("id")
+        .eq("business_id", businessId)
+        .ilike("category_name", categoryName)
+        .eq("status", "PENDING")
+        .limit(1)
+        .maybeSingle();
+      if (lookupError) throw lookupError;
+      if (existingRequest) {
+        setCategoryNotice({ type: "success", message: "This category is already waiting for Admin review." });
+        return;
+      }
+
+      const { error: requestError } = await supabase
+        .from("category_approval_requests")
+        .insert({
+          business_id: businessId,
+          category_name: categoryName,
+          reason: categoryRequestReason.trim() || null,
+          status: "PENDING",
+        });
+      if (requestError) throw requestError;
+      setCategoryRequestName("");
+      setCategoryRequestReason("");
+      setCategoryNotice({ type: "success", message: "Request sent to Admin. It will not appear as a category until it is reviewed and added to the system." });
+    } catch (requestError) {
+      setCategoryNotice({ type: "error", message: requestError.message || "Could not send the category request. Please try again." });
+    } finally {
+      setCategoryRequestLoading(false);
+    }
   };
 
   const addSizeChartRow = () => {
@@ -597,42 +647,6 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
         },
       };
     });
-  };
-
-  const handleCategoryRequest = async () => {
-    const categoryName = categoryRequestName.trim();
-    if (!categoryName) {
-      setCategoryNotice({ type: "error", message: "Enter the category name you want admin to review." });
-      return;
-    }
-    if (!businessId) {
-      setCategoryNotice({ type: "error", message: "No active shop profile found for this category request." });
-      return;
-    }
-
-    setCategoryRequestLoading(true);
-    setCategoryNotice(null);
-    try {
-      const { error: requestError } = await supabase
-        .from("category_approval_requests")
-        .insert({
-          business_id: businessId,
-          category_name: categoryName,
-          reason: categoryRequestReason.trim() || null,
-          status: "PENDING",
-        });
-      if (requestError) throw requestError;
-      setCategoryRequestName("");
-      setCategoryRequestReason("");
-      setCategoryNotice({ type: "success", message: "Category request sent to admin for approval." });
-    } catch (err) {
-      setCategoryNotice({
-        type: "error",
-        message: err.message || "Could not submit the category request. Check that the category approval table and policies are installed.",
-      });
-    } finally {
-      setCategoryRequestLoading(false);
-    }
   };
 
   const handleImagesSelected = async (files) => {
@@ -826,7 +840,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
         description: form.description.trim(),
         price: parsedPrice,
         price_max: isService && form.price_max ? (parseFloat(form.price_max) || null) : null,
-        category: form.category || "General Printing",
+        category: normalizeServiceCategory(form.category, `${form.name} ${form.description}`),
         item_type: form.item_type,
         available: form.available,
         image_url: form.removeImage ? null : (finalImageUrls[0] || null),
@@ -853,6 +867,19 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
     ...(form.specs?.quality_levels || [])
   ];
   const allCategorySizesSelected = Boolean(categorySizePreset?.options.length) && categorySizePreset.options.every((size) => selectedSizes.includes(size));
+  const showSizeSection = hasConfigurableOptions && !isApparel;
+  const showCustomerOptions = hasConfigurableOptions && (isService || isApparel || selectedNonSizeOptions.length > 0);
+  const progressSteps = [
+    { key: "details", label: "Details", hint: "Name, category, image" },
+    ...(showSizeSection ? [{ key: "sizes", label: "Sizes", hint: "Only the sizes you offer" }] : []),
+    { key: "price", label: "Price & stock", hint: "Base price and inventory" },
+    ...(showCustomerOptions ? [{
+      key: "options",
+      label: isApparel ? "Sizes & options" : "Extras",
+      hint: isApparel ? "Clothing sizes, materials, quality" : "Materials and quality",
+    }] : []),
+  ];
+  const stepNumber = (key) => progressSteps.findIndex((step) => step.key === key) + 1;
 
   return (
     <div className={embedded ? "w-full" : "dialog-overlay"} role={embedded ? undefined : "dialog"} aria-modal={embedded ? undefined : "true"} onClick={embedded ? undefined : onClose}>
@@ -873,9 +900,22 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
             </div>
           )}
 
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4" aria-label="Form sections">
+            {progressSteps.map((step, index) => (
+              <div key={step.key} className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-xs font-black text-[#00FFFF]">{index + 1}</span>
+                <span className="min-w-0">
+                  <span className="block text-xs font-black text-slate-900">{step.label}</span>
+                  <span className="mt-0.5 block truncate text-[10px] text-slate-500">{step.hint}</span>
+                </span>
+                <CheckCircle2 size={15} className="ml-auto shrink-0 text-slate-300" />
+              </div>
+            ))}
+          </div>
+
           <div id="basic-details" className="scroll-mt-6 space-y-5">
           <div className="flex items-center gap-3 border-b border-slate-100 pb-3">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-900 text-xs font-black text-[#00FFFF]">1</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-900 text-xs font-black text-[#00FFFF]">{stepNumber("details")}</span>
             <div>
               <h2 className="text-sm font-black text-slate-900">Item details</h2>
               <p className="mt-0.5 text-[10px] text-slate-500">{isService ? "Name it clearly, choose its category, and explain what customers will receive." : "Name it clearly, choose its category, and add a useful product image."}</p>
@@ -1006,68 +1046,88 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Category</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Printing category</label>
             <select
               value={form.category}
               onChange={(e) => handleCategoryChange(e.target.value)}
               className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium outline-none"
             >
-              <option value="">Select Category</option>
-              {form.category && !FLAT_CATEGORIES.includes(form.category) && (
-                <option value={form.category}>{form.category} (current)</option>
-              )}
-              {FLAT_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              <option value="">Choose the closest printing type</option>
+              {SERVICE_CATEGORY_NAMES.map((category) => <option key={category} value={category}>{category}</option>)}
             </select>
-            <p className="mt-1 text-[11px] text-slate-500">Use an approved category. New categories need admin approval before they appear in the list.</p>
-            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
-              <button type="button" onClick={() => setShowCategoryRequest((open) => !open)} className="flex w-full items-center justify-between gap-3 text-left">
-                <span>
-                  <span className="block text-xs font-bold text-amber-900">Need a new category?</span>
-                  <span className="mt-0.5 block text-[11px] text-amber-800/70">Request admin approval without leaving this page.</span>
-                </span>
-                <ShieldAlert size={15} className="shrink-0 text-amber-600" />
-              </button>
-              {showCategoryRequest && (
-                <div className="mt-3 space-y-2 border-t border-amber-200 pt-3">
-                  {categoryNotice && (
-                    <p className={`text-[11px] font-semibold ${categoryNotice.type === "error" ? "text-rose-700" : "text-emerald-700"}`}>
-                      {categoryNotice.message}
-                    </p>
-                  )}
-                  <input
-                    type="text"
-                    value={categoryRequestName}
-                    onChange={(e) => setCategoryRequestName(e.target.value)}
-                    placeholder="e.g. Risograph Printing"
-                    className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium outline-none"
-                  />
-                  <textarea
-                    value={categoryRequestReason}
-                    onChange={(e) => setCategoryRequestReason(e.target.value)}
-                    rows={2}
-                    placeholder="Describe what customers will upload or order under this category."
-                    className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium outline-none"
-                  />
+            <p className="mt-1 text-[11px] text-slate-500">Choose the closest match. Older or unmatched categories are automatically moved to the closest approved printing type.</p>
+            {form.category && (
+              <div className="mt-2 rounded-xl border border-cyan-100 bg-cyan-50/70 px-3 py-2 text-[11px] text-slate-600">
+                <p className="font-semibold text-slate-800">{SERVICE_CATEGORIES.find((category) => category.name === form.category)?.description}</p>
+                <p className="mt-1"><strong className="text-slate-800">Best for:</strong> {SERVICE_CATEGORIES.find((category) => category.name === form.category)?.examples}</p>
+              </div>
+            )}
+            <details className="mt-3 rounded-xl border border-slate-200 bg-white">
+              <summary className="cursor-pointer px-3 py-2 text-[11px] font-bold text-slate-700">View all category descriptions</summary>
+              <div className="grid gap-2 border-t border-slate-100 p-3 sm:grid-cols-2">
+                {SERVICE_CATEGORIES.map((category) => (
                   <button
+                    key={category.name}
                     type="button"
-                    onClick={handleCategoryRequest}
-                    disabled={categoryRequestLoading}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-[#EC008C] disabled:opacity-50"
+                    onClick={() => handleCategoryChange(category.name)}
+                    className={`rounded-lg border p-2 text-left transition-colors ${form.category === category.name ? "border-[#00AFC0] bg-cyan-50" : "border-slate-100 bg-slate-50 hover:border-cyan-200 hover:bg-cyan-50/50"}`}
                   >
-                    {categoryRequestLoading ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
-                    Send for approval
+                    <span className="block text-[11px] font-black text-slate-800">{category.name}</span>
+                    <span className="mt-0.5 block text-[10px] leading-relaxed text-slate-500">{category.description}</span>
+                    <span className="mt-1 block text-[10px] font-semibold text-[#008F91]">{category.examples}</span>
                   </button>
+                ))}
+              </div>
+            </details>
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
+              <div className="flex items-start gap-2">
+                <ShieldAlert size={16} className="mt-0.5 shrink-0 text-amber-600" aria-hidden="true" />
+                <div>
+                  <p className="text-xs font-bold text-amber-900">Need a category that is not listed?</p>
+                  <p className="mt-0.5 text-[11px] leading-relaxed text-amber-800/75">Send a request to Admin. This only creates a review request; it will not add or publish a new category automatically.</p>
                 </div>
-              )}
+              </div>
+              <div className="mt-3 space-y-2 border-t border-amber-200 pt-3">
+                {categoryNotice && (
+                  <p className={`text-[11px] font-semibold ${categoryNotice.type === "error" ? "text-rose-700" : "text-emerald-700"}`} role="status">
+                    {categoryNotice.message}
+                  </p>
+                )}
+                <input
+                  type="text"
+                  value={categoryRequestName}
+                  onChange={(event) => setCategoryRequestName(event.target.value)}
+                  placeholder="New category name"
+                  maxLength={80}
+                  className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium outline-none focus:border-amber-400"
+                />
+                <textarea
+                  value={categoryRequestReason}
+                  onChange={(event) => setCategoryRequestReason(event.target.value)}
+                  rows={2}
+                  placeholder="What should customers order under this category? (optional)"
+                  maxLength={500}
+                  className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium outline-none focus:border-amber-400"
+                />
+                <button
+                  type="button"
+                  onClick={handleCategoryRequest}
+                  disabled={categoryRequestLoading}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-[#EC008C] disabled:cursor-wait disabled:opacity-50"
+                >
+                  {categoryRequestLoading ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+                  {categoryRequestLoading ? "Sending request..." : "Send request to Admin"}
+                </button>
+              </div>
             </div>
           </div>
 
-          {hasConfigurableOptions && !isApparel && (
+          {showSizeSection && (
             <div id="category-size-selection" className="scroll-mt-6 rounded-2xl border-2 border-[#00AFC0]/30 bg-[#F3FFFF] p-4 sm:p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#00AFC0] text-xs font-black text-white">2</span>
+                    <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#00AFC0] text-xs font-black text-white">{stepNumber("sizes")}</span>
                     <p className="text-sm font-black text-slate-900">Choose available sizes</p>
                   </div>
                   <p className="mt-2 max-w-xl text-[11px] leading-relaxed text-slate-500">
@@ -1201,7 +1261,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
 
           <div id="pricing-inventory" className="scroll-mt-6 space-y-5 border-t border-[#D8D6CE] pt-6">
           <div className="flex items-center gap-3 border-b border-slate-100 pb-3">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-900 text-xs font-black text-[#00FFFF]">3</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-900 text-xs font-black text-[#00FFFF]">{stepNumber("price")}</span>
             <div>
               <h2 className="text-sm font-black text-slate-900">Price & inventory</h2>
               <p className="mt-0.5 text-[10px] text-slate-500">Set the starting price and the available quantity or capacity for this item.</p>
@@ -1273,11 +1333,11 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
             </div>
 
           {/* Printable Options & Spec Modifiers for Services */}
-          {hasConfigurableOptions && (isService || isApparel || selectedNonSizeOptions.length > 0) && (
+          {showCustomerOptions && (
             <div id="customer-options" className="scroll-mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 space-y-4">
               <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3">
                 <div className="flex items-center gap-2">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-900 text-xs font-black text-[#00FFFF]">4</span>
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-900 text-xs font-black text-[#00FFFF]">{stepNumber("options")}</span>
                   <div>
                     <p className="flex items-center gap-1.5 text-sm font-black text-slate-900"><Sparkles size={15} className="text-[#EC008C]" /> Other customer choices</p>
                     <p className="mt-1 text-[10px] text-slate-500">Optional {categoryOptionConfig.materialLabel.toLowerCase()} and {categoryOptionConfig.qualityLabel.toLowerCase()}. {isApparel ? "Clothing sizes are configured once in the chart below." : "Sizes are configured above."}</p>
@@ -1370,7 +1430,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
 
               {/* Materials Selection */}
               <div>
-                <span className="text-[11px] font-semibold text-slate-700 block mb-1.5">2. {categoryOptionConfig.materialLabel}</span>
+                <span className="text-[11px] font-semibold text-slate-700 block mb-1.5">{categoryOptionConfig.materialLabel}</span>
                 <div className="flex flex-wrap gap-1.5">
                   {categoryOptionConfig.materials.map((mat) => {
                     const isChecked = (form.specs?.allowed_materials || []).includes(mat);
@@ -1429,7 +1489,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
 
               {/* Quality Levels */}
               <div>
-                <span className="text-[11px] font-semibold text-slate-700 block mb-1.5">3. {categoryOptionConfig.qualityLabel}</span>
+                <span className="text-[11px] font-semibold text-slate-700 block mb-1.5">{categoryOptionConfig.qualityLabel}</span>
                 <div className="flex flex-wrap gap-1.5">
                   {categoryOptionConfig.qualities.map((q) => {
                     const isChecked = (form.specs?.quality_levels || []).includes(q);

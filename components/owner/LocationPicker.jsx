@@ -61,11 +61,12 @@ export default function LocationPicker({ lat, lng, onChange, readOnly = false })
   // Keep the local marker in sync when the parent loads or changes saved coordinates.
   useEffect(() => {
     const nextPosition = toPosition(lat, lng);
-    setPosition((current) => (
-      nextPosition && current?.lat === nextPosition.lat && current?.lng === nextPosition.lng
+    setPosition((current) => {
+      if (!nextPosition) return null;
+      return current?.lat === nextPosition.lat && current?.lng === nextPosition.lng
         ? current
-        : nextPosition
-    ));
+        : nextPosition;
+    });
   }, [lat, lng]);
 
   useEffect(() => {

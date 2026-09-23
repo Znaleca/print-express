@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { getRatingStats, getRatingSummary, ratingLabel } from "@/lib/rating";
 import { getCategoryOptionConfig, normalizeConfiguredOptions } from "@/lib/serviceOptions";
+import { normalizeServiceCategory } from "@/lib/serviceCategories";
 import { startMinuteAlignedRefresh } from "@/lib/openStateRefresh";
 
 const MAX_DESIGN_FILES = 5;
@@ -332,7 +333,13 @@ export default function BusinessDetailsPage({ params }) {
 
           data.services = (data.services || [])
             .filter((service) => service.available)
-            .map((service) => mergePricingRulesIntoService(service, rulesByService[service.id] || []));
+            .map((service) => {
+              const normalizedService = mergePricingRulesIntoService(service, rulesByService[service.id] || []);
+              return {
+                ...normalizedService,
+                category: normalizeServiceCategory(service.category, `${service.name || ""} ${service.description || ""}`),
+              };
+            });
 
           // Keep the business query small and avoid relying on a nested view
           // relationship, which can fail when the view is recreated in Supabase.

@@ -8,6 +8,7 @@ import {
   Plus, Edit, Trash2, Power, Loader2, Package, History, Search, SlidersHorizontal, X
 } from "lucide-react";
 import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
+import { normalizeServiceCategory } from "@/lib/serviceCategories";
 
 export default function OwnerServicesPage() {
   const router = useRouter();
@@ -58,6 +59,7 @@ export default function OwnerServicesPage() {
 
     const mergedItems = (servicesData || []).map((s) => ({
       ...s,
+      category: normalizeServiceCategory(s.category, `${s.name || ""} ${s.description || ""}`),
       specs_json: s.specs_json || rulesByService[s.id] || {},
     }));
 
@@ -125,7 +127,7 @@ export default function OwnerServicesPage() {
       description: values.description,
       price: values.price,
       price_max: values.item_type === "product" ? null : (values.price_max || null),
-      category: values.category || "General Printing",
+      category: normalizeServiceCategory(values.category, `${values.name || ""} ${values.description || ""}`),
       item_type: values.item_type,
       available: values.available !== false,
       is_customizable: values.is_customizable !== false,

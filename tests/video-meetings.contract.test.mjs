@@ -238,6 +238,7 @@ test("customer scheduling invites and accepted proposals use the correct email t
 
 test("owner scheduling choices stay chat-first and allow their newer message events", () => {
   const migration = source("supabase/migrations/20260924120000_fix_video_call_chat_events.sql");
+  const followUpMigration = source("supabase/migrations/20260924150000_reassert_video_call_chat_events.sql");
   const route = source("app/api/video-calls/route.js");
   const customer = source("app/messages/page.jsx");
   const owner = source("app/owner/messages/page.jsx");
@@ -245,6 +246,8 @@ test("owner scheduling choices stay chat-first and allow their newer message eve
   assert.doesNotMatch(route, /invite_to_schedule: "SCHEDULING_INVITE"/);
   assert.match(route, /\["confirm", "schedule"\]\.includes\(action\) && call\.status !== "SCHEDULED"/);
   assert.match(migration, /'scheduling_invite',\s*'proposed',\s*'rescheduled',\s*'reschedule_requested'/i);
+  assert.match(followUpMigration, /'scheduling_invite',\s*'proposed',\s*'rescheduled',\s*'reschedule_requested'/i);
+  assert.match(followUpMigration, /create or replace function public\.guard_video_call_message_insert/i);
   assert.doesNotMatch(customer, /messages\.filter\(\(m\) => m\.message_type !== "video_call"/);
   assert.doesNotMatch(owner, /messages\.filter\(\(msg\) => msg\.message_type !== "video_call"/);
   assert.match(owner, /Send an open scheduling link in this chat/);

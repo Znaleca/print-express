@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, CheckCircle2, Loader2, Package, Plus } from "lucide-react";
+import { ArrowLeft, Loader2, Package, Plus } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import ServiceFormModal from "@/components/owner/ServiceFormModal";
 import OwnerPageSkeleton from "@/components/owner/OwnerPageSkeleton";
+import { normalizeServiceCategory } from "@/lib/serviceCategories";
 
 function mergeSpecs(service, rules) {
   const baseSpecs = typeof service?.specs_json === "string"
@@ -98,7 +99,11 @@ export default function ServiceEditorPage() {
       if (serviceError || !service) {
         setPageError(serviceError?.message || "This catalog item could not be found.");
       } else {
-        setInitialValues({ ...service, specs_json: mergeSpecs(service, rules) });
+        setInitialValues({
+          ...service,
+          category: normalizeServiceCategory(service.category, `${service.name || ""} ${service.description || ""}`),
+          specs_json: mergeSpecs(service, rules),
+        });
       }
       setLoading(false);
     };
@@ -117,7 +122,7 @@ export default function ServiceEditorPage() {
       description: values.description,
       price: values.price,
       price_max: values.item_type === "product" ? null : (values.price_max || null),
-      category: values.category || "General Printing",
+      category: normalizeServiceCategory(values.category, `${values.name || ""} ${values.description || ""}`),
       item_type: values.item_type,
       available: values.available !== false,
       is_customizable: values.is_customizable !== false,
@@ -202,24 +207,6 @@ export default function ServiceEditorPage() {
             {editorType === "product" ? <Package size={22} /> : <Plus size={22} />}
           </div>
         </header>
-
-        <div className="mt-6 grid grid-cols-1 gap-2 sm:grid-cols-4">
-          {[
-            ["1", "Details", "Name, category, image"],
-            ["2", "Sizes", "Only the sizes you offer"],
-            ["3", "Price & stock", "Base price and inventory"],
-            ["4", "Extras", "Materials and quality"],
-          ].map(([number, label, hint]) => (
-            <div key={number} className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-xs font-black text-[#00FFFF]">{number}</span>
-              <span className="min-w-0">
-                <span className="block text-xs font-black text-slate-900">{label}</span>
-                <span className="mt-0.5 block truncate text-[10px] text-slate-500">{hint}</span>
-              </span>
-              <CheckCircle2 size={15} className="ml-auto shrink-0 text-slate-300" />
-            </div>
-          ))}
-        </div>
 
         <section className="mt-5 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.06)]">
           <ServiceFormModal

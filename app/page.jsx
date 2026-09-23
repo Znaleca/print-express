@@ -16,6 +16,7 @@ import {
   ShoppingBag,
   FileUp,
 } from "lucide-react";
+import { SERVICE_CATEGORIES } from "@/lib/serviceCategories";
 
 // ── REUSABLE PRINT-BRAND DECORATIVE SVG COMPONENTS ──
 
@@ -127,50 +128,22 @@ const workSteps = [
   },
 ];
 
-const printServices = [
-  {
-    name: "Business Cards",
-    desc: "Matte, glossy, or textured cardstock with clean die-cut finishes.",
-    badgeClass: "bg-cyan-100 text-cyan-800 border border-cyan-200/80",
-    tag: "350gsm Stock",
-    href: "/browse?category=cards",
-  },
-  {
-    name: "Flyers & Brochures",
-    desc: "Vibrant full-color promotional flyers, bi-fold, and tri-fold prints.",
-    badgeClass: "bg-pink-100 text-pink-800 border border-pink-200/80",
-    tag: "High Volume",
-    href: "/browse?category=flyers",
-  },
-  {
-    name: "Posters & Tarpaulins",
-    desc: "Heavy-duty outdoor vinyl banners, eyeleted posters, and signage.",
-    badgeClass: "bg-amber-100 text-amber-800 border border-amber-200/80",
-    tag: "Outdoor Grade",
-    href: "/browse?category=banners",
-  },
-  {
-    name: "Stickers & Labels",
-    desc: "Custom die-cut vinyl stickers, product labels, and packaging seals.",
-    badgeClass: "bg-slate-200 text-slate-800 border border-slate-300/80",
-    tag: "Waterproof",
-    href: "/browse?category=stickers",
-  },
-  {
-    name: "Shirts & Merchandise",
-    desc: "DTF apparel printing, screen printing, and customized event shirts.",
-    badgeClass: "bg-emerald-100 text-emerald-800 border border-emerald-200/80",
-    tag: "Custom Merch",
-    href: "/browse?category=apparel",
-  },
-  {
-    name: "Invitations & Stationery",
-    desc: "Event invitation cards, official documents, and custom binding.",
-    badgeClass: "bg-purple-100 text-purple-800 border border-purple-200/80",
-    tag: "Specialty Print",
-    href: "/browse?category=stationery",
-  },
+const CATEGORY_BADGES = [
+  "bg-cyan-100 text-cyan-800 border border-cyan-200/80",
+  "bg-pink-100 text-pink-800 border border-pink-200/80",
+  "bg-amber-100 text-amber-800 border border-amber-200/80",
+  "bg-slate-200 text-slate-800 border border-slate-300/80",
+  "bg-emerald-100 text-emerald-800 border border-emerald-200/80",
+  "bg-purple-100 text-purple-800 border border-purple-200/80",
 ];
+
+const printServices = SERVICE_CATEGORIES.map((category, index) => ({
+  name: category.name,
+  desc: category.description,
+  badgeClass: CATEGORY_BADGES[index % CATEGORY_BADGES.length],
+  tag: category.examples.split(",")[0],
+  href: `/browse?category=${encodeURIComponent(category.name)}`,
+}));
 
 export default function Home() {
   return (

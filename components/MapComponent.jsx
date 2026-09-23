@@ -74,7 +74,7 @@ const createUserLocationIcon = () => new L.DivIcon({
   popupAnchor: [0, -24],
 });
 
-function MapController({ center, selectedBusinessId, markerRefs, routePoints }) {
+function MapController({ center, selectedBusinessId, markerRefs, routePoints, shopPoints, hasUserLocation }) {
   const map = useMap();
 
   useEffect(() => {
@@ -105,6 +105,13 @@ function MapController({ center, selectedBusinessId, markerRefs, routePoints }) 
           map.flyTo(center, 16, { duration: 1.2, easeLinearity: 0.25 });
         } catch { /* map was disposed during a route change */ }
       }, 50);
+    } else if (hasUserLocation) {
+      moveTimer = setTimeout(() => {
+        if (!isMapReady()) return;
+        try {
+          map.flyTo(center, 13, { duration: 1.2, easeLinearity: 0.25 });
+        } catch { /* map was disposed during a route change */ }
+      }, 50);
     } else if (routePoints?.length === 2) {
       moveTimer = setTimeout(() => {
         if (!isMapReady()) return;
@@ -112,6 +119,20 @@ function MapController({ center, selectedBusinessId, markerRefs, routePoints }) 
           map.fitBounds(routePoints, { padding: [48, 48], maxZoom: 15 });
         } catch { /* map was disposed during a route change */ }
       }, 80);
+    } else if (shopPoints?.length > 1) {
+      moveTimer = setTimeout(() => {
+        if (!isMapReady()) return;
+        try {
+          map.fitBounds(shopPoints, { padding: [48, 48], maxZoom: 13 });
+        } catch { /* map was disposed during a route change */ }
+      }, 80);
+    } else if (shopPoints?.length === 1) {
+      moveTimer = setTimeout(() => {
+        if (!isMapReady()) return;
+        try {
+          map.flyTo(shopPoints[0], 13, { duration: 1.2, easeLinearity: 0.25 });
+        } catch { /* map was disposed during a route change */ }
+      }, 50);
     } else {
       moveTimer = setTimeout(() => {
         if (!isMapReady()) return;
@@ -136,7 +157,7 @@ function MapController({ center, selectedBusinessId, markerRefs, routePoints }) 
       clearTimeout(moveTimer);
       clearTimeout(popupTimer);
     };
-  }, [selectedBusinessId, center, map, markerRefs, routePoints]);
+  }, [selectedBusinessId, center, map, markerRefs, routePoints, shopPoints, hasUserLocation]);
 
   return null;
 }
@@ -202,13 +223,19 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
     })
   ), [mapBusinesses, nearestBusinessId, selectedBusinessId]);
   const selected = mapBusinesses.find((b) => b.id === selectedBusinessId);
-  const nearest = mapBusinesses.find((b) => b.id === nearestBusinessId);
-  const routeTarget = selected || nearest;
+  // The user's location is the map's anchor after location lookup. Do not
+  // automatically fit to the nearest shop on the first location update: that
+  // makes the viewport jump away from the customer's real position.
+  const routeTarget = selected;
   const routePoints = useMemo(
     () => (safeUserLocation && routeTarget
       ? [[safeUserLocation.lat, safeUserLocation.lng], [routeTarget.lat, routeTarget.lng]]
       : null),
     [routeTarget, safeUserLocation]
+  );
+  const shopPoints = useMemo(
+    () => mapBusinesses.map((business) => [business.lat, business.lng]),
+    [mapBusinesses]
   );
   const center = selected
     ? [selected.lat, selected.lng]
@@ -221,7 +248,7 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
   return (
     <div className="w-full h-full relative bg-slate-200" role="region" aria-label="Printing shops map">
       <MapContainer
-        center={[DEFAULT_MAP_CENTER.lat, DEFAULT_MAP_CENTER.lng]}
+        center={center}
         zoom={13}
         scrollWheelZoom={true}
         className="z-0 w-full h-full"
@@ -233,6 +260,8 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
           selectedBusinessId={selectedBusinessId}
           markerRefs={markerRefs}
           routePoints={routePoints}
+          shopPoints={shopPoints}
+          hasUserLocation={Boolean(safeUserLocation)}
         />
 
         <TileLayer

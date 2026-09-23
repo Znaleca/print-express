@@ -237,7 +237,14 @@ export async function POST(request) {
 
     const userClient = getUserScopedClient(auth.token);
     const { data, error } = await userClient.rpc(rpc.name, rpc.args(body));
-    if (error) return NextResponse.json({ error: String(error.message || "Unable to update the meeting.").replace(/^.*DETAIL:\s*/i, "").slice(0, 240) }, { status: safeErrorStatus(error.message) });
+    if (error) {
+      const rawMessage = String(error.message || "Unable to update the meeting.").replace(/^.*DETAIL:\s*/i, "").slice(0, 240);
+      const message = /invalid video call message/i.test(rawMessage)
+        ? "Scheduling is temporarily unavailable because the meeting system needs its latest database update. Please try again after the update is applied."
+        : rawMessage;
+      console.error("VIDEO_CALL_RPC_FAILED", { action, code: error.code || null, message: rawMessage });
+      return NextResponse.json({ error: message }, { status: /invalid video call message/i.test(rawMessage) ? 503 : safeErrorStatus(error.message) });
+    }
     const call = Array.isArray(data) ? data[0] : data;
     if (!call) return NextResponse.json({ error: "The meeting was not saved. Please choose the time again." }, { status: 500 });
     let notification = null;

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/serverAuth";
+import { normalizeServiceCategory } from "@/lib/serviceCategories";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -231,7 +232,7 @@ function mapService(row, rules) {
     id: row.id,
     business_id: row.business_id,
     name: row.name || "Unnamed catalog item",
-    category: row.category || "General Printing",
+    category: normalizeServiceCategory(row.category, `${row.name || ""} ${row.description || ""}`),
     description: row.description || "",
     price: row.price,
     price_max: row.price_max,

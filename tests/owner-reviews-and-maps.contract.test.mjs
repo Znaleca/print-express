@@ -94,6 +94,7 @@ test("all map consumers normalize coordinates and keep Leaflet client-only", asy
   assert.match(picker, /markerRef\.current\?\.remove\(\)/);
   assert.match(picker, /resizeObserver\?\.disconnect\(\)/);
   assert.match(picker, /draggable: !readOnly/);
+  assert.match(picker, /if \(!nextPosition\) return null;/);
   assert.match(browse, /ssr: false/);
   assert.match(browse, /normalizeCoordinates\(pos\.coords\.latitude, pos\.coords\.longitude\)/);
   assert.match(checkout, /Pin your delivery location on the map before placing your order/);
