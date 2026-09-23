@@ -58,7 +58,9 @@ export default function MeetingBookingModal({
   existingCall = null,
   isOwner = false,
   ownerAction = "manage",
+  readOnly = false,
   onClose,
+  onCancelMeeting,
   onBooked,
   }) {
   const [availability, setAvailability] = useState(null);
@@ -68,6 +70,8 @@ export default function MeetingBookingModal({
   const [note, setNote] = useState(existingCall?.customer_note || "");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [canceling, setCanceling] = useState(false);
   const [error, setError] = useState("");
   const [warning, setWarning] = useState("");
 
@@ -99,10 +103,14 @@ export default function MeetingBookingModal({
   };
 
   useEffect(() => {
+    if (readOnly) {
+      setLoading(false);
+      return undefined;
+    }
     loadAvailability();
     // The modal is intentionally scoped to one conversation and one call.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [businessId, conversationId, existingCall?.id]);
+  }, [businessId, conversationId, existingCall?.id, readOnly]);
 
   const dates = availability?.dates || [];
   const availableMonths = useMemo(
@@ -120,7 +128,9 @@ export default function MeetingBookingModal({
   );
   const activeDate = dates.find((date) => date.dateKey === selectedDate);
   const visibleMonthIndex = availableMonths.indexOf(visibleMonth);
-  const title = isOwner && ownerAction === "propose"
+  const title = readOnly
+    ? "View scheduled meeting"
+    : isOwner && ownerAction === "propose"
     ? "Propose a meeting time"
     : isOwner
     ? existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by === "CUSTOMER" ? "Change proposed meeting time" : existingCall?.status === "REQUESTED" ? "Confirm online meeting" : "Reschedule online meeting"
@@ -138,8 +148,9 @@ export default function MeetingBookingModal({
     existingCall?.status === "SCHEDULED"
     || existingCall?.confirmation_required_by === "CUSTOMER"
   );
-  const currentMeetingLabel = currentMeetingTime && availability?.business?.timezone
-    ? formatMeetingDateTime(currentMeetingTime, availability.business.timezone)
+  const meetingTimeZone = availability?.business?.timezone || existingCall?.booking_timezone || "Asia/Manila";
+  const currentMeetingLabel = currentMeetingTime
+    ? formatMeetingDateTime(currentMeetingTime, meetingTimeZone)
     : "";
   const selectedLabel = useMemo(
     () => selectedSlot && availability?.business?.timezone ? formatMeetingDateTime(selectedSlot.startAt, availability.business.timezone) : "Choose a time",
@@ -161,13 +172,14 @@ export default function MeetingBookingModal({
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    if (!selectedSlot || saving) return;
+    if (readOnly || !selectedSlot || saving) return;
     setSaving(true);
     setError("");
     setWarning("");
     try {
-      const action = isOwner && ownerAction === "propose"
-        ? "propose"
+      const isOwnerProposal = isOwner && ownerAction === "propose";
+      const action = isOwnerProposal
+        ? existingCall ? "reschedule" : "propose"
         : isOwner
         ? existingCall?.status === "REQUESTED" && existingCall?.confirmation_required_by !== "CUSTOMER" ? "schedule" : "reschedule"
         : existingCall ? "reschedule" : "book";
@@ -188,6 +200,20 @@ export default function MeetingBookingModal({
     }
   };
 
+  const handleCancelConfirm = async () => {
+    if (!onCancelMeeting || canceling) return;
+    setCanceling(true);
+    try {
+      const canceledCall = await onCancelMeeting();
+      if (canceledCall) {
+        setShowCancelConfirm(false);
+        onClose?.();
+      }
+    } finally {
+      setCanceling(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/60 p-3" role="dialog" aria-modal="true" aria-labelledby="meeting-booking-title" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose?.()}>
       <form onSubmit={handleSubmit} className="relative flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
@@ -196,7 +222,7 @@ export default function MeetingBookingModal({
           <div>
             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EC008C]">{isOwner ? "Owner calendar" : "Meeting booking"}</p>
             <h2 id="meeting-booking-title" className="mt-1 text-xl font-black text-slate-900">{title}</h2>
-            <p className="mt-1 text-xs text-slate-500">Pick an open slot in the shop&apos;s local time.</p>
+            <p className="mt-1 text-xs text-slate-500">{readOnly ? "This meeting cannot be changed until it is cancelled." : "Pick an open slot in the shop&apos;s local time."}</p>
           </div>
           <button type="button" onClick={onClose} disabled={saving} aria-label="Close meeting booking" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-900 disabled:opacity-40"><X size={20} /></button>
         </div>
@@ -204,7 +230,23 @@ export default function MeetingBookingModal({
         <div className="min-h-0 flex-1 overflow-y-auto bg-[#F6F6F2] p-5 sm:p-6">
           {error && <div role="alert" className="mb-4 border-l-4 border-[#EC008C] bg-rose-50 px-3 py-3 text-xs font-semibold text-rose-800">{error}</div>}
           {warning && <div role="status" className="mb-4 border-l-4 border-[#FFF200] bg-amber-50 px-3 py-3 text-xs font-semibold text-amber-800">{warning}</div>}
-          {loading ? (
+          {readOnly ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-[#00aeb5] bg-[#e8ffff] p-5">
+                <div className="flex items-start gap-3">
+                  <Calendar size={20} className="mt-0.5 shrink-0 text-[#00aeb5]" />
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Current schedule</p>
+                    <p className="mt-1 text-lg font-black text-slate-900">{currentMeetingLabel || "Meeting time unavailable"}</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-600">{getMeetingStatusLabel(existingCall?.status || "SCHEDULED")} · {existingCall?.duration_minutes || 30} minutes</p>
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold leading-relaxed text-amber-900">
+                To choose another time, cancel this meeting first. After it is cancelled, request a new meeting time from the chat.
+              </div>
+            </div>
+          ) : loading ? (
             <div className="flex min-h-48 items-center justify-center gap-2 text-sm font-semibold text-slate-500"><Loader2 className="animate-spin" size={18} /> Loading available times…</div>
           ) : !availability?.hasPublishedHours ? (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm font-semibold text-amber-900">This shop has not published meeting hours yet. Please message the shop for help.</div>
@@ -292,9 +334,27 @@ export default function MeetingBookingModal({
           )}
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-white px-5 py-4 sm:px-6">
-          <button type="button" onClick={onClose} disabled={saving} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Cancel</button>
-          <button type="submit" disabled={loading || saving || !selectedSlot || !dates.length || needsDifferentTime} title={!selectedSlot ? "Choose an available day and time first." : needsDifferentTime ? "Choose a different time to reschedule." : undefined} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-[#EC008C] disabled:cursor-not-allowed disabled:opacity-40">{saving && <Loader2 size={14} className="animate-spin" />}{saving ? "Saving…" : !selectedSlot || needsDifferentTime ? "Choose a new time" : actionLabel}<CheckCircle2 size={14} /></button>
+          {readOnly && onCancelMeeting && <button type="button" onClick={() => setShowCancelConfirm(true)} disabled={saving || canceling} className="rounded-lg border border-rose-300 px-4 py-2.5 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:opacity-40">Cancel meeting</button>}
+          <button type="button" onClick={onClose} disabled={saving || canceling} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Close</button>
+          {!readOnly && <button type="submit" disabled={loading || saving || !selectedSlot || !dates.length || needsDifferentTime} title={!selectedSlot ? "Choose an available day and time first." : needsDifferentTime ? "Choose a different time to reschedule." : undefined} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-[#EC008C] disabled:cursor-not-allowed disabled:opacity-40">{saving && <Loader2 size={14} className="animate-spin" />}{saving ? "Saving…" : !selectedSlot || needsDifferentTime ? "Choose a new time" : actionLabel}<CheckCircle2 size={14} /></button>}
         </div>
+        {showCancelConfirm && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-[2px]" role="presentation">
+            <div role="alertdialog" aria-modal="true" aria-labelledby="cancel-meeting-title" aria-describedby="cancel-meeting-description" className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-2xl">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-700">!</div>
+                <div>
+                  <h3 id="cancel-meeting-title" className="text-base font-black text-slate-900">Cancel this meeting?</h3>
+                  <p id="cancel-meeting-description" className="mt-1 text-sm leading-relaxed text-slate-600">This scheduled time will be released. You must request a new time after cancelling.</p>
+                </div>
+              </div>
+              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => setShowCancelConfirm(false)} disabled={canceling} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Keep meeting</button>
+                <button type="button" onClick={handleCancelConfirm} disabled={canceling} className="inline-flex items-center justify-center gap-2 rounded-lg bg-rose-600 px-4 py-2.5 text-xs font-black text-white hover:bg-rose-700 disabled:cursor-wait disabled:opacity-50">{canceling && <Loader2 size={14} className="animate-spin" />} {canceling ? "Cancelling…" : "Yes, cancel meeting"}</button>
+              </div>
+            </div>
+          </div>
+        )}
       </form>
     </div>
   );

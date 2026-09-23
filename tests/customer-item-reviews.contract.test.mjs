@@ -13,7 +13,7 @@ test("admin navigation exposes pending review-removal requests", async () => {
   assert.match(sidebar, /countKey: "reviewRemovals"/);
   assert.match(counts, /review_moderation_requests/);
   assert.match(counts, /reviewRemovals/);
-  assert.match(page, /first\.status === "PENDING"/);
+  assert.match(page, /pending_request/);
   assert.match(sidebar, /review_moderation_requests/);
 });
 

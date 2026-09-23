@@ -126,6 +126,7 @@ export default function CheckoutPage({ params }) {
   const [paymentMethod, setPaymentMethod] = useState("COD");
   const [receiptFile, setReceiptFile] = useState(null);
   const [receiptPreview, setReceiptPreview] = useState(null);
+  const [refundPolicyAgreed, setRefundPolicyAgreed] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [minimumDownpaymentPercent, setMinimumDownpaymentPercent] = useState(0);
   const [userSelectedDownpaymentPercent, setUserSelectedDownpaymentPercent] = useState(null);
@@ -166,9 +167,10 @@ export default function CheckoutPage({ params }) {
             name,
             price,
             image_url,
-            stock_qty,
-            available,
-            item_type
+             stock_qty,
+             available,
+             item_type,
+             specs_json
           )
         `)
         .eq("id", businessId)
@@ -183,7 +185,8 @@ export default function CheckoutPage({ params }) {
       setMinimumDownpaymentPercent(bizData.min_downpayment_percent ?? 50);
 
       const cartKey = `cart_${businessId}`;
-      const savedCart = localStorage.getItem(cartKey);
+      const checkoutCartKey = `checkout_cart_${businessId}`;
+      const savedCart = localStorage.getItem(checkoutCartKey) || localStorage.getItem(cartKey);
       if (savedCart) {
         const savedItems = JSON.parse(savedCart);
         setSelectedServices(savedItems.map((item) => {
@@ -346,6 +349,7 @@ export default function CheckoutPage({ params }) {
     };
 
     if (!isCustomer) return rejectOrder("Sign in with a customer account before placing an order.");
+    if (!refundPolicyAgreed) return rejectOrder("Please agree to the order cancellation and refund policy before placing your order.");
     if (isClosed) return rejectOrder("This shop is currently closed and cannot accept new orders.");
     if (deliveryType === "DELIVERY" && business.delivery_enabled === false) return rejectOrder("Delivery is currently unavailable for this shop. Select Store Pickup instead.");
     if (deliveryType === "DELIVERY" && !deliveryAddress.trim()) return rejectOrder("Add a delivery address before placing your order.");
@@ -475,6 +479,7 @@ export default function CheckoutPage({ params }) {
         }
       }
 
+      localStorage.removeItem(`checkout_cart_${businessId}`);
       localStorage.removeItem(`cart_${businessId}`);
       router.push(`/track`);
 
@@ -548,6 +553,7 @@ export default function CheckoutPage({ params }) {
   const isReadyToExecute =
     selectedServices.length > 0 &&
     isCustomer &&
+    refundPolicyAgreed &&
     !isClosed &&
     isPhoneValid &&
     !(deliveryType === "DELIVERY" && (!deliveryAddress.trim() || !deliveryQuote.eligible)) &&
@@ -700,8 +706,8 @@ export default function CheckoutPage({ params }) {
                             <p className="font-bold text-slate-900">{s.name}</p>
                             <p className="mt-1 text-[11px] text-slate-500">
                               {s.item_type === "product"
-                                ? "Ready-made product — direct catalog checkout."
-                                : `Seller quotation · requested quantity ${s.selected_specs?.requested_quantity || 1}${s.selected_specs?.size ? ` · ${s.selected_specs.size}` : ""}`}
+                                ? `Ready-made product${s.selected_specs?.variant_name ? ` · ${s.selected_specs.variant_name}` : ""} — direct catalog checkout.`
+                                : `Seller quotation · requested quantity ${s.selected_specs?.requested_quantity || 1}${s.selected_specs?.size ? ` · ${s.selected_specs.size}` : s.selected_specs?.size_breakdown?.length ? ` · ${s.selected_specs.size_breakdown.map((row) => `${row.size} × ${row.quantity}`).join(", ")}` : ""}`}
                             </p>
                           </div>
                           <div className="text-right">
@@ -713,6 +719,7 @@ export default function CheckoutPage({ params }) {
                           <span>{s.isQuotedCheckout ? "Quoted total" : "Line total"}</span>
                           <span>PHP {(unit * qty).toFixed(2)}</span>
                         </div>
+                        {s.selected_specs?.variant_sku && <p className="mt-2 text-[11px] text-slate-500">SKU: {s.selected_specs.variant_sku}</p>}
                         {s.selected_specs?.notes && <p className="mt-2 text-[11px] italic text-amber-700">Order notes: {s.selected_specs.notes}</p>}
                         {getDesignFiles(s).length > 0 && (
                           <button
@@ -1031,6 +1038,8 @@ export default function CheckoutPage({ params }) {
               downpaymentAmount={downpaymentAmount}
               balanceAmount={balanceAmount}
               paymentMethod={paymentMethod}
+              refundPolicyAgreed={refundPolicyAgreed}
+              setRefundPolicyAgreed={setRefundPolicyAgreed}
               isProcessing={isProcessing}
               isReadyToExecute={isReadyToExecute}
               handleExecuteOrder={handleExecuteOrder}

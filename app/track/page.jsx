@@ -8,7 +8,7 @@ import {
   Truck, Printer, Clock, 
   MapPin, CheckCircle2, 
   Loader2, AlertTriangle, ShoppingBag,
-  Star, Package, CreditCard, Upload, XCircle, Eye, MessageSquare, AlertOctagon, X,
+  Star, Package, CreditCard, Upload, XCircle, Eye, MessageSquare, AlertOctagon, X, RefreshCcw,
   ChevronLeft, ChevronRight
 } from "lucide-react";
 import ReceiptModal from "@/components/ReceiptModal";
@@ -77,6 +77,8 @@ export default function TrackOrderPage() {
   const [submittingReviewId, setSubmittingReviewId] = useState(null);
   const [confirmingRefundId, setConfirmingRefundId] = useState(null);
   const [reportingRefundId, setReportingRefundId] = useState(null);
+  const [cancellingOrderId, setCancellingOrderId] = useState(null);
+  const [requestingRefundId, setRequestingRefundId] = useState(null);
   const [viewReceipt, setViewReceipt] = useState(null);
   const [viewDocType, setViewDocType] = useState("RECEIPT");
   const [viewRefundProof, setViewRefundProof] = useState(null);
@@ -295,6 +297,64 @@ export default function TrackOrderPage() {
     }
   };
 
+  const handleCustomerCancel = async (order) => {
+    if (!order || order.status !== "PENDING" || cancellingOrderId) return;
+    if (!window.confirm("Cancel this pending order? If you already paid, the shop will review any refund due.")) return;
+
+    setCancellingOrderId(order.id);
+    try {
+      const { data, error } = await supabase
+        .from("orders")
+        .update({
+          status: "CANCELLED",
+          cancel_reason: "Cancelled by customer",
+          cancelled_at: new Date().toISOString(),
+        })
+        .eq("id", order.id)
+        .eq("customer_id", user?.id)
+        .eq("status", "PENDING")
+        .select("id, status, cancel_reason, cancelled_at")
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("This order is no longer pending and could not be cancelled.");
+      setOrders((prev) => prev.map((item) => item.id === order.id ? { ...item, ...data } : item));
+      alert("Your pending order was cancelled.");
+    } catch (error) {
+      alert(error.message || "We could not cancel this order.");
+    } finally {
+      setCancellingOrderId(null);
+    }
+  };
+
+  const handleCustomerRefundRequest = async (order) => {
+    if (!order || !["PENDING", "PLACED"].includes(order.status) || requestingRefundId) return;
+    if (!window.confirm("Request a refund for this order? The shop owner must review and process the refund.")) return;
+
+    setRequestingRefundId(order.id);
+    try {
+      const { data, error } = await supabase
+        .from("orders")
+        .update({
+          status: "REFUND_PENDING",
+          refund_reason: "Refund requested by customer",
+          refund_requested_at: new Date().toISOString(),
+        })
+        .eq("id", order.id)
+        .eq("customer_id", user?.id)
+        .in("status", ["PENDING", "PLACED"])
+        .select("id, status, refund_reason, refund_requested_at")
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("This order is no longer eligible for a refund request.");
+      setOrders((prev) => prev.map((item) => item.id === order.id ? { ...item, ...data } : item));
+      alert("Your refund request was sent to the shop owner for review.");
+    } catch (error) {
+      alert(error.message || "We could not submit the refund request.");
+    } finally {
+      setRequestingRefundId(null);
+    }
+  };
+
   const handleReviewSubmit = async (orderId) => {
     const rev = reviewsState[orderId];
     if (!rev || !rev.rating) return alert("Please select a star rating.");
@@ -473,6 +533,8 @@ export default function TrackOrderPage() {
                 const isReviewable = ["COMPLETED", "DELIVERY_COMPLETED"].includes(o.status);
                 const isRefundPending = o.status === "REFUND_PENDING";
                 const isRefunded = o.status === "REFUNDED";
+                const canCustomerCancel = o.status === "PENDING";
+                const canCustomerRequestRefund = ["PENDING", "PLACED"].includes(o.status);
                 const remainingPaymentMethod = o.payment_method === "E-Wallet" ? "E-Wallet" : "COD";
                 const isEWalletRemainingPayment = remainingPaymentMethod === "E-Wallet";
                 const progressSteps = getProgressSteps(o);
@@ -530,12 +592,14 @@ export default function TrackOrderPage() {
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            onClick={() => { setViewDocType("RECEIPT"); setViewReceipt(o); }}
-                            className="inline-flex items-center rounded-xl border border-[#D8D6CE] bg-[#ECECE8] px-3.5 py-2 text-xs font-bold text-[#1A1A1A] transition-colors hover:bg-[#D8D6CE]"
-                          >
-                            Receipt
-                          </button>
+                          {!canCustomerCancel && (
+                            <button
+                              onClick={() => { setViewDocType("RECEIPT"); setViewReceipt(o); }}
+                              className="inline-flex items-center rounded-xl border border-[#D8D6CE] bg-[#ECECE8] px-3.5 py-2 text-xs font-bold text-[#1A1A1A] transition-colors hover:bg-[#D8D6CE]"
+                            >
+                              Receipt
+                            </button>
+                          )}
                           <button
                             onClick={() => { setViewDocType("QUOTATION"); setViewReceipt(o); }}
                             className="inline-flex items-center rounded-xl border border-[#E6D400] bg-[#FFF9D6] px-3.5 py-2 text-xs font-bold text-[#796900] transition-colors hover:bg-[#FFF200]"
@@ -567,6 +631,7 @@ export default function TrackOrderPage() {
                                   {it.selected_specs && (
                                     <div className="text-[11px] text-slate-600 mt-1 space-y-0.5 font-medium">
                                       {it.selected_specs.size && <div>Size: <span className="font-semibold text-slate-900">{it.selected_specs.size}</span></div>}
+                                      {it.selected_specs.size_breakdown?.length > 0 && <div>Sizes: <span className="font-semibold text-slate-900">{it.selected_specs.size_breakdown.map((row) => `${row.size} × ${row.quantity}`).join(", ")}</span></div>}
                                       {it.selected_specs.material && <div>Paper/Material: <span className="font-semibold text-slate-900">{it.selected_specs.material}</span></div>}
                                       {it.selected_specs.quality && <div>Quality: <span className="font-semibold text-slate-900">{it.selected_specs.quality}</span></div>}
                                       {it.selected_specs.notes && <div className="text-amber-800 italic">"Notes: {it.selected_specs.notes}"</div>}
@@ -658,6 +723,31 @@ export default function TrackOrderPage() {
                       ) : null}
 
                       {/* Actions Banner */}
+                      {(canCustomerCancel || canCustomerRequestRefund) && (
+                        <section className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50 p-4" aria-label="Order cancellation and refund actions">
+                          <div>
+                            <p className="inline-flex items-center gap-2 text-xs font-black uppercase tracking-[0.12em] text-amber-950"><AlertTriangle size={15} className="text-amber-700" /> Order changes</p>
+                            <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                              {canCustomerCancel
+                                ? "This order is still Pending. You can cancel it or request a refund for shop review."
+                                : "This order is already Placed, so it cannot be cancelled. You can still request a refund for shop review."}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {canCustomerCancel && (
+                              <button type="button" onClick={() => handleCustomerCancel(o)} disabled={cancellingOrderId === o.id || requestingRefundId === o.id} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-rose-300 bg-white px-4 py-2.5 text-xs font-black text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-wait disabled:opacity-60">
+                                <XCircle size={14} /> {cancellingOrderId === o.id ? "Cancelling..." : "Cancel order"}
+                              </button>
+                            )}
+                            {canCustomerRequestRefund && (
+                              <button type="button" onClick={() => handleCustomerRefundRequest(o)} disabled={cancellingOrderId === o.id || requestingRefundId === o.id} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-[#EC008C] px-4 py-2.5 text-xs font-black text-white transition-colors hover:bg-[#c90076] disabled:cursor-wait disabled:opacity-60">
+                                <RefreshCcw size={14} /> {requestingRefundId === o.id ? "Submitting..." : "Request refund"}
+                              </button>
+                            )}
+                          </div>
+                        </section>
+                      )}
+
                       {isRefundPending && (
                         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-4">
                           <div className="w-full rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-xs font-semibold text-orange-800 sm:w-auto">

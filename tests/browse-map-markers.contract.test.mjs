@@ -46,6 +46,7 @@ test("browse location permission states never create a fake customer marker", as
   assert.match(browse, /normalizeCoordinates\(pos\.coords\.latitude, pos\.coords\.longitude\)/);
   assert.match(map, /normalizeCoordinates\(userLocation\?\.lat, userLocation\?\.lng\)/);
   assert.match(map, /safeUserLocation && \(/);
-  assert.match(map, /routePoints = safeUserLocation && routeTarget/);
+  assert.match(map, /routePoints = useMemo\(/);
+  assert.match(map, /safeUserLocation && routeTarget/);
   assert.match(map, /safeUserLocation\.lat, safeUserLocation\.lng/);
 });

@@ -142,6 +142,25 @@ const SIZE_NAME_MATCHERS = [
   ["photo", /\b(?:photo|photocopy|passport)\b/i],
   ["paper", /\b(?:paper|document|flyer|brochure|bond)\b/i],
 ];
+const MAX_PRODUCT_IMAGES = 8;
+const MAX_PRODUCT_VARIANTS = 50;
+
+const normalizeProductVariants = (variants = []) => (Array.isArray(variants) ? variants : [])
+  .map((variant, index) => ({
+    id: String(variant?.id || `variant-${index + 1}`),
+    name: String(variant?.name || ""),
+    sku: String(variant?.sku || ""),
+    price: variant?.price != null ? String(variant.price) : "0",
+    stock_qty: variant?.stock_qty != null ? String(variant.stock_qty) : "0",
+  }));
+
+const getInitialImageGallery = (initialValues, specs) => {
+  const storedImages = Array.isArray(specs?.image_urls) ? specs.image_urls : [];
+  return [...new Set([initialValues?.image_url, ...storedImages]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean))]
+    .map((url) => ({ url, file: null }));
+};
 const getCategorySizePreset = (name = "", category = "") => {
   const namePresetKey = SIZE_NAME_MATCHERS.find(([, matcher]) => matcher.test(name))?.[0];
   return CATEGORY_SIZE_PRESETS.find((preset) => preset.key === namePresetKey)
@@ -201,6 +220,7 @@ const EMPTY_SERVICE = {
   available: true,
   imageUrl: null,
   imageFile: null,
+  imageGallery: [],
   removeImage: false,
   stock_qty: "",
   low_stock_threshold: 10,
@@ -223,6 +243,7 @@ const EMPTY_PRODUCT = {
   available: true,
   imageUrl: null,
   imageFile: null,
+  imageGallery: [],
   removeImage: false,
   stock_qty: "20",
   low_stock_threshold: 10,
@@ -236,6 +257,8 @@ const EMPTY_PRODUCT = {
     default_material: null,
     default_quality: null,
     size_chart: [],
+    image_urls: [],
+    variants: [],
     is_customizable: false
   }
 };
@@ -273,6 +296,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
         available:            initialValues.available !== false,
         imageUrl:             initialValues.image_url || null,
         imageFile:            null,
+        imageGallery:        defaultType === "product" ? getInitialImageGallery(initialValues, existingSpecs) : [],
         removeImage:          false,
         stock_qty:            initialValues.stock_qty != null ? String(initialValues.stock_qty) : "0",
         low_stock_threshold: initialValues.low_stock_threshold != null ? String(initialValues.low_stock_threshold) : "10",
@@ -286,6 +310,8 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
           default_material:  initialMaterials.includes(existingSpecs.default_material) ? existingSpecs.default_material : (initialMaterials[0] || null),
           default_quality:   initialQualities.includes(existingSpecs.default_quality) ? existingSpecs.default_quality : (initialQualities[0] || null),
           size_chart:        Array.isArray(existingSpecs.size_chart) ? existingSpecs.size_chart : [],
+          image_urls:        Array.isArray(existingSpecs.image_urls) ? existingSpecs.image_urls : [],
+          variants:          normalizeProductVariants(existingSpecs.variants),
           is_customizable:   existingSpecs.is_customizable !== false,
         }
       };
@@ -293,7 +319,6 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
     return defaultType === "product" ? { ...EMPTY_PRODUCT } : { ...EMPTY_SERVICE };
   });
 
-  const [imagePreview, setImagePreview] = useState(initialValues?.image_url || null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [categoryRequestName, setCategoryRequestName] = useState("");
@@ -586,22 +611,87 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
     }
   };
 
-  const handleImageSelected = async (file) => {
-    if (!file) return;
-    if (!file.type?.startsWith("image/")) {
-      setError("Choose a JPG, PNG, or WebP image.");
+  const handleImagesSelected = async (files) => {
+    const incomingFiles = Array.from(files || []);
+    if (incomingFiles.length === 0) return;
+    if (incomingFiles.some((file) => !file.type?.startsWith("image/"))) {
+      setError("Choose JPG, PNG, or WebP images only.");
+      return;
+    }
+
+    const remainingSlots = Math.max(0, MAX_PRODUCT_IMAGES - (form.imageGallery || []).length);
+    if (remainingSlots === 0) {
+      setError(`You can add up to ${MAX_PRODUCT_IMAGES} product images.`);
       return;
     }
 
     try {
-      const optimized = await optimizeImageForUpload(file);
-      set("imageFile", optimized);
-      set("removeImage", false);
-      setImagePreview(URL.createObjectURL(optimized));
+      const preparedImages = await Promise.all(incomingFiles.slice(0, remainingSlots).map(async (file) => {
+        const optimized = await optimizeImageForUpload(file);
+        return { url: URL.createObjectURL(optimized), file: optimized };
+      }));
+      setForm((current) => ({
+        ...current,
+        imageGallery: [...(current.imageGallery || []), ...preparedImages].slice(0, MAX_PRODUCT_IMAGES),
+        removeImage: false,
+      }));
       setError(null);
     } catch (optimizationError) {
-      setError(optimizationError.message || "Could not optimize this image.");
+      setError(optimizationError.message || "Could not optimize the product images.");
     }
+  };
+
+  const removeGalleryImage = (index) => {
+    setForm((current) => {
+      const imageGallery = (current.imageGallery || []).filter((_, imageIndex) => imageIndex !== index);
+      return {
+        ...current,
+        imageGallery,
+        imageUrl: imageGallery[0]?.url || null,
+        removeImage: imageGallery.length === 0,
+      };
+    });
+  };
+
+  const addVariant = () => {
+    setForm((current) => ({
+      ...current,
+      specs: {
+        ...(current.specs || {}),
+        variants: [
+          ...(current.specs?.variants || []),
+          {
+            id: `variant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            name: "",
+            sku: "",
+            price: current.price || "0",
+            stock_qty: "0",
+          },
+        ].slice(0, MAX_PRODUCT_VARIANTS),
+      },
+    }));
+  };
+
+  const updateVariant = (variantId, key, value) => {
+    setForm((current) => ({
+      ...current,
+      specs: {
+        ...(current.specs || {}),
+        variants: (current.specs?.variants || []).map((variant) => (
+          variant.id === variantId ? { ...variant, [key]: value } : variant
+        )),
+      },
+    }));
+  };
+
+  const removeVariant = (variantId) => {
+    setForm((current) => ({
+      ...current,
+      specs: {
+        ...(current.specs || {}),
+        variants: (current.specs?.variants || []).filter((variant) => variant.id !== variantId),
+      },
+    }));
   };
 
   const handleSubmit = async (e) => {
@@ -618,21 +708,37 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
     setError(null);
 
     try {
-      let finalImageUrl = form.imageUrl;
-      if (form.imageFile) {
-        const { data: { user: currentUser } } = await supabase.auth.getUser();
+      const productVariants = isService ? [] : (form.specs?.variants || []);
+      if (productVariants.some((variant) => !String(variant.name || "").trim())) {
+        throw new Error("Give every product variant a name or remove the empty variant.");
+      }
+      if (productVariants.some((variant) => !Number.isFinite(Number(variant.price)) || Number(variant.price) < 0 || !Number.isInteger(Number(variant.stock_qty)) || Number(variant.stock_qty) < 0)) {
+        throw new Error("Each product variant needs a valid price and whole-number stock quantity.");
+      }
+
+      const imageGallery = form.removeImage ? [] : (form.imageGallery || []);
+      let currentUser = null;
+      if (imageGallery.some((image) => image.file)) {
+        const { data: authData } = await supabase.auth.getUser();
+        currentUser = authData?.user || null;
         if (!currentUser || !businessId) throw new Error("Your owner session expired. Please sign in again.");
-        const optimized = await optimizeImageForUpload(form.imageFile);
-        const fileExt = getUploadExtension(optimized);
+      }
+
+      const finalImageUrls = [];
+      for (const image of imageGallery) {
+        if (!image.file) {
+          if (image.url && !image.url.startsWith("blob:")) finalImageUrls.push(image.url);
+          continue;
+        }
+        const fileExt = getUploadExtension(image.file);
         const filePath = `services/${businessId}/${currentUser.id}-${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
-        const { error: uploadErr } = await supabase.storage.from(IMAGE_BUCKET).upload(filePath, optimized, {
+        const { error: uploadErr } = await supabase.storage.from(IMAGE_BUCKET).upload(filePath, image.file, {
           cacheControl: "31536000",
-          contentType: optimized.type,
+          contentType: image.file.type,
         });
         if (uploadErr) throw uploadErr;
-
         const { data: { publicUrl } } = supabase.storage.from(IMAGE_BUCKET).getPublicUrl(filePath);
-        finalImageUrl = publicUrl;
+        finalImageUrls.push(publicUrl);
       }
 
       const cleanModifiers = {};
@@ -650,10 +756,23 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
         .filter((row) => row.size);
       cleanSizeChart.forEach((row) => { cleanModifiers[row.size] = row.price_modifier; });
 
+      const cleanVariants = productVariants
+        .map((variant, index) => ({
+          id: String(variant.id || `variant-${index + 1}`),
+          name: String(variant.name || "").trim(),
+          sku: String(variant.sku || "").trim() || null,
+          price: Number(Number(variant.price).toFixed(2)),
+          stock_qty: Number.parseInt(variant.stock_qty, 10),
+        }))
+        .filter((variant) => variant.name);
+      const variantStockTotal = cleanVariants.reduce((total, variant) => total + variant.stock_qty, 0);
+
       const finalSpecs = {
         ...form.specs,
         price_modifiers: cleanModifiers,
         size_chart: cleanSizeChart,
+        image_urls: finalImageUrls,
+        variants: cleanVariants,
         is_customizable: isService ? form.is_customizable : false
       };
 
@@ -665,9 +784,9 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
         category: form.category || "General Printing",
         item_type: form.item_type,
         available: form.available,
-        image_url: form.removeImage ? null : finalImageUrl,
-        stock_qty: isService ? 0 : Number.parseInt(form.stock_qty || "0", 10),
-        low_stock_threshold: isService ? 10 : Number.parseInt(form.low_stock_threshold || "10", 10),
+        image_url: form.removeImage ? null : (finalImageUrls[0] || null),
+        stock_qty: cleanVariants.length > 0 ? variantStockTotal : Math.max(0, Number.parseInt(form.stock_qty || "0", 10)),
+        low_stock_threshold: Math.max(0, Number.parseInt(form.low_stock_threshold || "10", 10)),
         is_customizable: isService ? form.is_customizable : false,
         specs_json: finalSpecs,
       });
@@ -742,7 +861,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
               </button>
             </div>
             <p className="text-[11px] text-slate-500 mt-1.5">
-              {isService ? "★ Made-to-order custom printing (no inventory stock required)." : "★ Ready-made physical store product (inventory stock is automatically decremented on order)."}
+              {isService ? "★ Made-to-order custom printing with an optional available quantity or capacity." : "★ Ready-made physical store product with inventory deducted after checkout."}
             </p>
           </div>
 
@@ -760,44 +879,73 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
           {!isService && (
             <div>
               <div className="mb-1.5 flex items-center justify-between gap-3">
-                <label className="block text-xs font-semibold text-slate-700">Product image</label>
-                <span className="text-[10px] font-semibold text-slate-400">Auto-compressed · 5MB max</span>
+                <label className="block text-xs font-semibold text-slate-700">Product images</label>
+                <span className="text-[10px] font-semibold text-slate-400">Up to {MAX_PRODUCT_IMAGES} · first image is the cover</span>
               </div>
-              <div className="flex flex-col gap-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center">
-                <div className="flex h-48 w-full shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white sm:h-44 sm:w-44">
-                  {imagePreview ? (
-                    <img src={imagePreview} alt="Product preview" className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="flex flex-col items-center gap-2 text-slate-400">
-                      <ImageOff size={32} />
-                      <span className="text-[11px] font-semibold">No image yet</span>
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {(form.imageGallery || []).map((image, index) => (
+                    <div key={`${image.url}-${index}`} className="group relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-white">
+                      <img src={image.url} alt={`Product image ${index + 1}`} className="h-full w-full object-cover" />
+                      {index === 0 && <span className="absolute left-1.5 top-1.5 rounded-md bg-slate-900/85 px-1.5 py-1 text-[9px] font-black text-white">COVER</span>}
+                      <button type="button" onClick={() => removeGalleryImage(index)} aria-label={`Remove product image ${index + 1}`} className="absolute right-1.5 top-1.5 rounded-md bg-white/90 p-1 text-rose-600 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus:opacity-100"><Trash2 size={12} /></button>
+                    </div>
+                  ))}
+                  {(form.imageGallery || []).length === 0 && (
+                    <div className="col-span-2 flex aspect-square flex-col items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-slate-400 sm:col-span-4 sm:aspect-[4/1]">
+                      <ImageOff size={28} />
+                      <span className="text-[11px] font-semibold">No images yet</span>
                     </div>
                   )}
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="mb-2 text-[11px] leading-relaxed text-slate-500">Add a clear photo so customers can recognize this ready-to-sell product.</p>
+                <div className="mt-4">
+                  <p className="mb-2 text-[11px] leading-relaxed text-slate-500">Add several product photos like a storefront gallery. Customers can browse them before choosing a variant.</p>
                   <input
                     type="file"
+                    multiple
                     accept="image/jpeg,image/png,image/webp"
-                    onChange={(event) => handleImageSelected(event.target.files?.[0])}
+                    onChange={(event) => { void handleImagesSelected(event.target.files); event.target.value = ""; }}
                     className="w-full text-xs text-slate-500 file:mr-3 file:rounded-xl file:border-0 file:bg-slate-900 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white hover:file:bg-[#EC008C]"
                   />
-                  {imagePreview && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        set("imageFile", null);
-                        set("imageUrl", null);
-                        set("removeImage", true);
-                        setImagePreview(null);
-                      }}
-                      className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 hover:text-rose-700"
-                    >
-                      <Trash2 size={12} /> Remove image
-                    </button>
-                  )}
                 </div>
               </div>
+            </div>
+          )}
+
+          {!isService && (
+            <div className="rounded-2xl border-2 border-[#EC008C]/20 bg-[#FFF8FC] p-4 sm:p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Layers size={17} className="text-[#EC008C]" />
+                    <h3 className="text-sm font-black text-slate-900">Product variants</h3>
+                  </div>
+                  <p className="mt-1 max-w-xl text-[11px] leading-relaxed text-slate-500">Add options such as color, size, finish, or bundle. Each variant can have its own price, SKU, and stock quantity.</p>
+                </div>
+                <button type="button" onClick={addVariant} disabled={(form.specs?.variants || []).length >= MAX_PRODUCT_VARIANTS} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-black text-white hover:bg-[#EC008C] disabled:cursor-not-allowed disabled:opacity-40"><Plus size={13} /> Add variant</button>
+              </div>
+
+              {(form.specs?.variants || []).length === 0 ? (
+                <div className="mt-4 rounded-xl border border-dashed border-[#EC008C]/30 bg-white p-3 text-[11px] text-slate-500">No variants yet. The product will use the base price and stock below.</div>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {(form.specs?.variants || []).map((variant, index) => (
+                    <div key={variant.id} className="rounded-xl border border-slate-200 bg-white p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">Variant {index + 1}</span>
+                        <button type="button" onClick={() => removeVariant(variant.id)} className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-600 hover:text-rose-700"><Trash2 size={12} /> Remove</button>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+                        <input type="text" value={variant.name} onChange={(event) => updateVariant(variant.id, "name", event.target.value)} placeholder="e.g. Red · Large" aria-label={`Variant ${index + 1} name`} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-[#EC008C] sm:col-span-2" />
+                        <input type="text" value={variant.sku} onChange={(event) => updateVariant(variant.id, "sku", event.target.value)} placeholder="SKU (optional)" aria-label={`Variant ${index + 1} SKU`} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs outline-none focus:border-[#EC008C]" />
+                        <input type="number" min="0" step="0.01" value={variant.price} onChange={(event) => updateVariant(variant.id, "price", event.target.value)} placeholder="Price" aria-label={`Variant ${index + 1} price`} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold outline-none focus:border-[#EC008C]" />
+                        <label className="flex items-center gap-2 text-[10px] font-semibold text-slate-500 sm:col-span-2"><span className="shrink-0">Stock</span><input type="number" min="0" step="1" value={variant.stock_qty} onChange={(event) => updateVariant(variant.id, "stock_qty", event.target.value)} aria-label={`Variant ${index + 1} stock`} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold outline-none focus:border-[#EC008C]" /></label>
+                      </div>
+                    </div>
+                  ))}
+                  <p className="text-[10px] font-semibold text-slate-500">Variant stock is counted into the product total automatically when you save.</p>
+                </div>
+              )}
             </div>
           )}
 
@@ -1011,7 +1159,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
             <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-900 text-xs font-black text-[#00FFFF]">3</span>
             <div>
               <h2 className="text-sm font-black text-slate-900">Price & inventory</h2>
-              <p className="mt-0.5 text-[10px] text-slate-500">Set the starting price and, for ready-made products, the stock you have available.</p>
+              <p className="mt-0.5 text-[10px] text-slate-500">Set the starting price and the available quantity or capacity for this item.</p>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -1043,18 +1191,20 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
             )}
           </div>
 
-          {/* Physical Inventory Settings */}
-          {!isService && (
+          {/* Quantity / Inventory Settings */}
+          {
             <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-amber-900">Physical Stock Inventory Control</span>
+                <span className="text-xs font-bold text-amber-900">{isService ? "Available Service Quantity" : "Physical Stock Inventory Control"}</span>
                 <ShieldAlert size={16} className="text-amber-600" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-semibold text-amber-800 mb-1">Current Stock Quantity</label>
+                  <label className="block text-[11px] font-semibold text-amber-800 mb-1">{isService ? "Available Quantity / Capacity" : "Current Stock Quantity"}</label>
                   <input
                     type="number"
+                    min="0"
+                    step="1"
                     value={form.stock_qty}
                     onChange={(e) => set("stock_qty", e.target.value)}
                     className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold outline-none"
@@ -1064,14 +1214,17 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
                   <label className="block text-[11px] font-semibold text-amber-800 mb-1">Low Stock Warning Limit</label>
                   <input
                     type="number"
+                    min="0"
+                    step="1"
                     value={form.low_stock_threshold}
                     onChange={(e) => set("low_stock_threshold", e.target.value)}
                     className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold outline-none"
                   />
                 </div>
               </div>
+              <p className="text-[10px] leading-relaxed text-amber-800">Set this to 0 when the item has no fixed quantity limit. Products deduct stock after checkout; service quantities help you track available capacity while you review the customer quote.</p>
             </div>
-          )}
+          }
             </div>
 
           {/* Printable Options & Spec Modifiers for Services */}

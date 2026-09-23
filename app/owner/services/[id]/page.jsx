@@ -21,6 +21,8 @@ function mergeSpecs(service, rules) {
     default_material: baseSpecs.default_material || null,
     default_quality: baseSpecs.default_quality || null,
     size_chart: Array.isArray(baseSpecs.size_chart) ? baseSpecs.size_chart : [],
+    image_urls: Array.isArray(baseSpecs.image_urls) ? baseSpecs.image_urls : [],
+    variants: Array.isArray(baseSpecs.variants) ? baseSpecs.variants : [],
     is_customizable: baseSpecs.is_customizable !== false,
   };
 
@@ -108,9 +110,7 @@ export default function ServiceEditorPage() {
   const handleSave = async (values) => {
     if (!businessId) throw new Error("No active shop profile found for your account.");
 
-    const safeStockQty = values.item_type === "product"
-      ? Math.max(0, Number.parseInt(values.stock_qty || "0", 10))
-      : 0;
+    const safeStockQty = Math.max(0, Number.parseInt(values.stock_qty || "0", 10));
     const mainPayload = {
       business_id: businessId,
       name: values.name,
@@ -124,7 +124,7 @@ export default function ServiceEditorPage() {
       specs_json: values.specs_json || {},
       image_url: values.image_url,
       stock_qty: safeStockQty,
-      low_stock_threshold: values.item_type === "product" ? Math.max(0, Number.parseInt(values.low_stock_threshold || "10", 10)) : 10,
+      low_stock_threshold: Math.max(0, Number.parseInt(values.low_stock_threshold || "10", 10)),
     };
 
     let serviceId = isCreate ? null : itemId;
@@ -132,14 +132,14 @@ export default function ServiceEditorPage() {
       const { data: created, error } = await supabase.from("services").insert(mainPayload).select("id").single();
       if (error) throw new Error(error.message || "Failed to create item.");
       serviceId = created.id;
-      if (values.item_type === "product" && safeStockQty > 0) {
+      if (safeStockQty > 0) {
         await supabase.from("inventory_movements").insert({
           business_id: businessId,
           service_id: serviceId,
           qty_change: safeStockQty,
           new_stock_qty: safeStockQty,
           reason: "RESTOCK",
-          note: "Initial stock on product creation",
+          note: "Initial quantity on catalog creation",
         });
       }
     } else {

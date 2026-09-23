@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import { useRouter } from "next/navigation";
 import { Star, ChevronRight, MapPin, UserRound } from "lucide-react";
 import { ratingLabel } from "@/lib/rating";
 import { DEFAULT_MAP_CENTER, normalizeCoordinates } from "@/lib/coordinates";
+import RoadRoute from "@/components/RoadRoute";
 import "leaflet/dist/leaflet.css";
 
 const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
@@ -203,9 +204,12 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
   const selected = mapBusinesses.find((b) => b.id === selectedBusinessId);
   const nearest = mapBusinesses.find((b) => b.id === nearestBusinessId);
   const routeTarget = selected || nearest;
-  const routePoints = safeUserLocation && routeTarget
-    ? [[safeUserLocation.lat, safeUserLocation.lng], [routeTarget.lat, routeTarget.lng]]
-    : null;
+  const routePoints = useMemo(
+    () => (safeUserLocation && routeTarget
+      ? [[safeUserLocation.lat, safeUserLocation.lng], [routeTarget.lat, routeTarget.lng]]
+      : null),
+    [routeTarget, safeUserLocation]
+  );
   const center = selected
     ? [selected.lat, selected.lng]
     : safeUserLocation
@@ -248,12 +252,7 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
           </Marker>
         )}
 
-        {routePoints && (
-          <Polyline
-            positions={routePoints}
-            pathOptions={{ color: "#EC008C", weight: 4, dashArray: "10 8", opacity: 0.9 }}
-          />
-        )}
+        {routePoints && <RoadRoute points={routePoints} />}
 
         {mapBusinesses.map((b) => {
           const isSelected = selectedBusinessId === b.id;

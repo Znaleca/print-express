@@ -5,11 +5,9 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const MAX_REVIEW_ROWS = 10000;
-const MAX_SHOP_ROWS = 10000;
-const SHOP_PAGE_SIZE = 5;
-const REVIEW_PAGE_SIZE = 10;
+const REVIEW_PAGE_SIZE = 12;
 const COMPLETED_STATUSES = ["COMPLETED", "DELIVERY_COMPLETED"];
-const VALID_VISIBILITY = new Set(["ALL", "VISIBLE", "HIDDEN"]);
+const VALID_REVIEW_STATES = new Set(["ALL", "PENDING", "VISIBLE", "HIDDEN"]);
 const VALID_SORTS = new Set(["RECENT", "HIGHEST", "LOWEST"]);
 
 function clampPage(value) {
@@ -56,18 +54,16 @@ export async function GET(request) {
 
     const params = new URL(request.url).searchParams;
     const search = normalizeText(params.get("search"));
-    const requestedVisibility = String(params.get("visibility") || "ALL").toUpperCase();
-    const visibility = VALID_VISIBILITY.has(requestedVisibility) ? requestedVisibility : "ALL";
+    const requestedReviewState = String(params.get("reviewState") || params.get("visibility") || "ALL").toUpperCase();
+    const reviewState = VALID_REVIEW_STATES.has(requestedReviewState) ? requestedReviewState : "ALL";
     const requestedSort = String(params.get("sort") || "RECENT").toUpperCase();
     const sort = VALID_SORTS.has(requestedSort) ? requestedSort : "RECENT";
-    const shopPage = clampPage(params.get("page"));
-    const reviewPage = clampPage(params.get("reviewPage"));
-    const selectedShopId = String(params.get("shopId") || "").trim() || null;
+    const reviewPage = clampPage(params.get("reviewPage") || params.get("page"));
 
     const orderRows = await readRows(
       auth.supabase
         .from("orders")
-        .select("id, business_id, customer_id, status, rating, feedback, feedback_hidden, feedback_hidden_at, feedback_hidden_by, created_at, items, review_service_id")
+        .select("id, business_id, customer_id, status, rating, feedback, feedback_hidden, feedback_hidden_at, feedback_hidden_by, created_at, review_service_id")
         .in("status", COMPLETED_STATUSES)
         .not("rating", "is", null)
         .order("created_at", { ascending: false })
@@ -80,9 +76,8 @@ export async function GET(request) {
         .order("created_at", { ascending: false })
         .range(0, MAX_REVIEW_ROWS - 1),
     );
-
     const businesses = await readRows(
-      auth.supabase.from("businesses").select("id, name, owner_id").order("name", { ascending: true }).range(0, MAX_SHOP_ROWS - 1),
+      auth.supabase.from("businesses").select("id, name, owner_id").order("name", { ascending: true }).range(0, MAX_REVIEW_ROWS - 1),
     );
     const profileIds = [...new Set([
       ...businesses.map((business) => business.owner_id),
@@ -99,102 +94,80 @@ export async function GET(request) {
         .order("created_at", { ascending: false })
         .range(0, MAX_REVIEW_ROWS - 1),
     );
+    const pendingOrderIds = new Set(moderationRows.filter((row) => row.status === "PENDING" && !row.review_id).map((row) => row.order_id));
+    const pendingItemReviewIds = new Set(moderationRows.filter((row) => row.status === "PENDING" && row.review_id).map((row) => row.review_id));
+    const pendingRequestMap = new Map(moderationRows.filter((row) => row.status === "PENDING").map((row) => [row.review_id ? `ITEM:${row.review_id}` : `ORDER:${row.order_id}`, row]));
     const serviceIds = [...new Set([...orderRows.map((row) => row.review_service_id), ...itemReviewRows.map((row) => row.service_id)].filter(Boolean))];
     const services = serviceIds.length > 0
       ? await readRows(auth.supabase.from("services").select("id, name, item_type").in("id", serviceIds))
       : [];
+
     const businessMap = Object.fromEntries(businesses.map((business) => [business.id, business]));
     const profileMap = Object.fromEntries(profiles.map((profile) => [profile.id, profile]));
     const serviceMap = Object.fromEntries(services.map((service) => [service.id, service]));
-    const groups = new Map();
-
-    businesses.forEach((business) => {
-      groups.set(business.id, {
-        shopId: business.id,
-        shopName: business.name || "Unknown shop",
-        ownerName: profileMap[business.owner_id]?.full_name || "Business Owner",
-        reviews: [],
-        totalReviewCount: 0,
-        visibleCount: 0,
-        hiddenCount: 0,
-        ratingTotal: 0,
-        recentReviewDate: null,
-      });
-    });
-
-    orderRows.forEach((row) => {
-      const business = businessMap[row.business_id];
-      const owner = business ? profileMap[business.owner_id] : null;
-      const group = groups.get(row.business_id) || {
-        shopId: row.business_id,
-        shopName: business?.name || "Unknown shop",
-        ownerName: owner?.full_name || "Business Owner",
-        reviews: [],
-        totalReviewCount: 0,
-        visibleCount: 0,
-        hiddenCount: 0,
-        ratingTotal: 0,
-        recentReviewDate: null,
+    const getBusinessInfo = (businessId) => {
+      const business = businessMap[businessId];
+      return {
+        shop_name: business?.name || "Unknown shop",
+        owner_name: profileMap[business?.owner_id]?.full_name || "Business Owner",
       };
-      const review = {
+    };
+
+    const reviews = [
+      ...orderRows.map((row) => ({
+        review_id: row.id,
+        review_type: "ORDER",
         order_id: row.id,
         business_id: row.business_id,
+        customer_id: row.customer_id,
+        ...getBusinessInfo(row.business_id),
+        customer_name: profileMap[row.customer_id]?.full_name || "Customer",
         rating: Number(row.rating),
         feedback: row.feedback || "",
         feedback_hidden: isHidden(row),
         feedback_hidden_at: row.feedback_hidden_at,
         feedback_hidden_by: row.feedback_hidden_by,
         created_at: row.created_at,
-        customer_name: profileMap[row.customer_id]?.full_name || "Customer",
         item_name: serviceMap[row.review_service_id]?.name || null,
-        review_service_id: row.review_service_id || null,
         review_target_type: serviceMap[row.review_service_id]?.item_type || null,
-      };
-      group.reviews.push(review);
-      group.totalReviewCount += 1;
-      group.ratingTotal += review.rating;
-      if (review.feedback_hidden) group.hiddenCount += 1;
-      else group.visibleCount += 1;
-      if (!group.recentReviewDate || String(row.created_at) > String(group.recentReviewDate)) group.recentReviewDate = row.created_at;
-      groups.set(row.business_id, group);
-    });
-    const allGroups = [...groups.values()].map((group) => ({
-      ...group,
-      averageRating: group.totalReviewCount > 0 ? (group.ratingTotal / group.totalReviewCount).toFixed(1) : "0.0",
-      overallActivity: `${group.visibleCount} visible · ${group.hiddenCount} hidden`,
-    }));
-    const matchesReview = (group, review) => {
-      if (visibility === "VISIBLE" && review.feedback_hidden) return false;
-      if (visibility === "HIDDEN" && !review.feedback_hidden) return false;
+        pending_request: pendingRequestMap.get(`ORDER:${row.id}`) || null,
+      })),
+      ...itemReviewRows.map((row) => ({
+        review_id: row.id,
+        review_type: "ITEM",
+        order_id: row.order_id,
+        business_id: row.business_id,
+        customer_id: row.customer_id,
+        ...getBusinessInfo(row.business_id),
+        customer_name: profileMap[row.customer_id]?.full_name || "Customer",
+        rating: Number(row.rating),
+        feedback: row.feedback || "",
+        feedback_hidden: isHidden(row),
+        feedback_hidden_at: row.feedback_hidden_at,
+        feedback_hidden_by: row.feedback_hidden_by,
+        created_at: row.created_at,
+        item_name: row.item_name || serviceMap[row.service_id]?.name || null,
+        review_target_type: row.item_type || serviceMap[row.service_id]?.item_type || null,
+        pending_request: pendingRequestMap.get(`ITEM:${row.id}`) || null,
+      })),
+    ];
+
+    const matchesReview = (review) => {
+      if (reviewState === "PENDING") {
+        const isPending = review.review_type === "ITEM"
+          ? pendingItemReviewIds.has(review.review_id)
+          : pendingOrderIds.has(review.review_id);
+        if (!isPending) return false;
+      }
+      if (reviewState === "VISIBLE" && review.feedback_hidden) return false;
+      if (reviewState === "HIDDEN" && !review.feedback_hidden) return false;
       if (!search) return true;
-      const shopAndOwner = normalizeText(`${group.shopName} ${group.ownerName}`);
-      if (shopAndOwner.includes(search)) return true;
-      return normalizeText(`${review.customer_name} ${review.feedback} ${review.item_name}`).includes(search);
+      return normalizeText(`${review.shop_name} ${review.owner_name} ${review.customer_name} ${review.feedback} ${review.item_name}`).includes(search);
     };
-    const filteredGroups = allGroups
-      .filter((group) => group.reviews.length === 0
-        ? visibility === "ALL" && (!search || normalizeText(`${group.shopName} ${group.ownerName}`).includes(search))
-        : group.reviews.some((review) => matchesReview(group, review)))
-      .sort((first, second) => {
-        if (sort === "HIGHEST") return Number(second.averageRating) - Number(first.averageRating) || second.totalReviewCount - first.totalReviewCount;
-        if (sort === "LOWEST") return Number(first.averageRating) - Number(second.averageRating) || second.totalReviewCount - first.totalReviewCount;
-        return String(second.recentReviewDate || "").localeCompare(String(first.recentReviewDate || ""));
-      });
-    const { rows: pagedGroups, pagination: shopPagination } = paginate(filteredGroups, shopPage, SHOP_PAGE_SIZE);
+    const filteredReviews = sortReviews(reviews.filter(matchesReview), sort);
+    const { rows: pagedReviews, pagination: reviewPagination } = paginate(filteredReviews, reviewPage, REVIEW_PAGE_SIZE);
 
-    const selectedGroup = selectedShopId ? allGroups.find((group) => group.shopId === selectedShopId) : null;
-    let selectedShop = null;
-    if (selectedGroup) {
-      const selectedReviews = sortReviews(selectedGroup.reviews.filter((review) => matchesReview(selectedGroup, review)), sort);
-      const { rows, pagination } = paginate(selectedReviews, reviewPage, REVIEW_PAGE_SIZE);
-      selectedShop = {
-        ...selectedGroup,
-        reviews: rows,
-        reviewPagination: pagination,
-      };
-    }
-
-    const totals = orderRows.reduce((summary, row) => {
+    const totals = reviews.reduce((summary, row) => {
       summary.total += 1;
       if (isHidden(row)) summary.hidden += 1;
       else summary.visible += 1;
@@ -207,25 +180,25 @@ export async function GET(request) {
     const moderationRequests = moderationRows.map((request) => {
       const order = orderMap[request.order_id];
       const itemReview = request.review_id ? itemReviewMap[request.review_id] : null;
-      const business = businessMap[request.business_id];
+      const review = reviews.find((row) => row.review_id === (itemReview?.id || order?.id) && row.review_type === (itemReview ? "ITEM" : "ORDER"));
       return {
         ...request,
-        shop_name: business?.name || "Unknown shop",
-        owner_name: profileMap[business?.owner_id || request.owner_id]?.full_name || "Business Owner",
-        customer_name: profileMap[itemReview?.customer_id || order?.customer_id]?.full_name || "Customer",
-        rating: itemReview ? Number(itemReview.rating) : order?.rating == null ? null : Number(order.rating),
-        review_text: itemReview?.feedback || order?.feedback || "",
-        feedback_hidden: Boolean(itemReview?.feedback_hidden ?? order?.feedback_hidden),
-        review_service_id: itemReview?.service_id || order?.review_service_id || null,
-        review_target_name: itemReview?.item_name || serviceMap[order?.review_service_id]?.name || null,
-        review_target_type: itemReview?.item_type || serviceMap[order?.review_service_id]?.item_type || null,
+        shop_name: review?.shop_name || getBusinessInfo(request.business_id).shop_name,
+        owner_name: review?.owner_name || getBusinessInfo(request.business_id).owner_name,
+        customer_name: review?.customer_name || "Customer",
+        rating: review?.rating ?? null,
+        review_text: review?.feedback || "",
+        feedback_hidden: Boolean(review?.feedback_hidden),
+        review_type: itemReview ? "ITEM" : "ORDER",
+        review_target_name: review?.item_name || null,
+        review_target_type: review?.review_target_type || null,
       };
     });
 
     return NextResponse.json({
-      shops: pagedGroups.map(({ reviews, ratingTotal, ...group }) => group),
-      selectedShop,
-      shopPagination,
+      reviews: pagedReviews,
+      reviewPagination,
+      reviewState,
       totals: { ...totals, averageRating },
       moderationRequests,
       moderationSummary: {
@@ -234,7 +207,7 @@ export async function GET(request) {
         approved: moderationRequests.filter((request) => request.status === "APPROVED").length,
         rejected: moderationRequests.filter((request) => request.status === "REJECTED").length,
       },
-      truncated: orderRows.length === MAX_REVIEW_ROWS,
+      truncated: orderRows.length === MAX_REVIEW_ROWS || itemReviewRows.length === MAX_REVIEW_ROWS,
     });
   } catch (error) {
     console.error("ADMIN_REVIEWS_LOAD_ERROR:", {
@@ -274,12 +247,33 @@ export async function PATCH(request) {
       return NextResponse.json({ request: data });
     }
 
-    const orderId = String(body.orderId || "").trim();
-    if (!orderId || typeof body.hidden !== "boolean") {
+    const reviewType = String(body.reviewType || "ORDER").toUpperCase();
+    const hidden = body.hidden;
+    if (typeof hidden !== "boolean") {
       return NextResponse.json({ error: "INVALID_REVIEW_VISIBILITY_ACTION" }, { status: 400 });
     }
 
-    const hidden = body.hidden;
+    if (reviewType === "ITEM") {
+      const reviewId = String(body.reviewId || "").trim();
+      if (!reviewId) return NextResponse.json({ error: "INVALID_ITEM_REVIEW_ID" }, { status: 400 });
+      const { data, error } = await auth.supabase.rpc("set_admin_item_review_visibility", {
+        p_review_id: reviewId,
+        p_hidden: hidden,
+        p_note: String(body.note || "").trim().slice(0, 1000) || null,
+        p_requester_id: auth.user.id,
+      });
+      if (error) throw error;
+      return NextResponse.json({ review: {
+        id: data?.id,
+        review_type: "ITEM",
+        feedback_hidden: Boolean(data?.feedback_hidden),
+        feedback_hidden_at: data?.feedback_hidden_at || null,
+        feedback_hidden_by: data?.feedback_hidden_by || null,
+      } });
+    }
+
+    const orderId = String(body.orderId || "").trim();
+    if (!orderId) return NextResponse.json({ error: "INVALID_REVIEW_ID" }, { status: 400 });
     const { data, error } = await auth.supabase.rpc("set_admin_review_visibility", {
       p_order_id: orderId,
       p_hidden: hidden,
@@ -290,6 +284,7 @@ export async function PATCH(request) {
 
     return NextResponse.json({ review: {
       id: data?.id,
+      review_type: "ORDER",
       feedback_hidden: Boolean(data?.feedback_hidden),
       feedback_hidden_at: data?.feedback_hidden_at || null,
       feedback_hidden_by: data?.feedback_hidden_by || null,

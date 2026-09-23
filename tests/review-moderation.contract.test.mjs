@@ -16,6 +16,7 @@ test("review moderation keeps owner requests separate from Admin decisions", asy
   const adminRoute = await source("app/api/admin/reviews/route.js");
   const ownerPage = await source("app/owner/reviews/page.jsx");
   const adminPage = await source("app/admin/reviews/page.jsx");
+  const ratingPreservationMigration = await source("supabase/migrations/20260923110000_admin_reviews_flat_and_rating_preservation.sql");
 
   assert.match(migration, /create table if not exists public\.review_moderation_requests/);
   assert.match(migration, /review_moderation_requests_one_pending_idx/);
@@ -33,11 +34,17 @@ test("review moderation keeps owner requests separate from Admin decisions", asy
   assert.match(adminRoute, /requireAdmin\(request\)/);
   assert.match(adminRoute, /moderate_review_removal/);
   assert.match(adminRoute, /set_admin_review_visibility/);
+  assert.match(adminRoute, /set_admin_item_review_visibility/);
   assert.doesNotMatch(adminRoute, /getItemName/);
   assert.match(ownerPage, /Request review removal/);
   assert.match(ownerPage, /This review remains visible/);
-  assert.match(adminPage, /Review-hide requests/);
-  assert.match(adminPage, /Approve &amp; hide/);
+  assert.doesNotMatch(adminPage, /Preview all pending requests/);
+  assert.match(adminPage, /PENDING ADMIN REVIEW/);
+  assert.match(adminPage, /Approve &amp; hide comment/);
+  assert.match(ratingPreservationMigration, /case when coalesce\(new\.feedback_hidden, false\) then null/);
+  assert.match(ratingPreservationMigration, /create or replace function public\.set_admin_item_review_visibility/);
+  assert.match(ratingPreservationMigration, /where public\.is_business_customer_visible\(r\.business_id\)/);
+  assert.match(ratingPreservationMigration, /Admins can read all item reviews/);
   assert.match(adminPage, /Offensive-word filter/);
 });
 

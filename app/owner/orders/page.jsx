@@ -1416,6 +1416,7 @@ export default function OwnerOrdersPage() {
                                     {it.selected_specs && (
                                       <div className="mt-2 space-y-0.5 rounded-lg border border-slate-200 bg-white p-2 text-[11px] font-medium text-slate-600">
                                         {it.selected_specs.size && <div>Size: <span className="font-semibold text-slate-900">{it.selected_specs.size}</span></div>}
+                                        {it.selected_specs.size_breakdown?.length > 0 && <div>Sizes: <span className="font-semibold text-slate-900">{it.selected_specs.size_breakdown.map((row) => `${row.size} × ${row.quantity}`).join(", ")}</span></div>}
                                         {it.selected_specs.material && <div>Material: <span className="font-semibold text-slate-900">{it.selected_specs.material}</span></div>}
                                         {it.selected_specs.quality && <div>Quality: <span className="font-semibold text-slate-900">{it.selected_specs.quality}</span></div>}
                                         {it.selected_specs.notes && <div className="break-words text-amber-800 italic">Notes: {it.selected_specs.notes}</div>}
@@ -1469,7 +1470,7 @@ export default function OwnerOrdersPage() {
 
                           <section className="rounded-xl border border-slate-200 bg-white p-4" aria-label="Order actions and notes">
                             <div className="flex flex-wrap items-center gap-2">
-                              <button type="button" onClick={() => { setViewDocType("RECEIPT"); setViewReceipt(o); }} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-black text-slate-700 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"><FileText size={14} /> Receipt</button>
+                              {o.status !== "PENDING" && <button type="button" onClick={() => { setViewDocType("RECEIPT"); setViewReceipt(o); }} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-black text-slate-700 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"><FileText size={14} /> Receipt</button>}
                               <button type="button" onClick={() => { setViewDocType("QUOTATION"); setViewReceipt(o); }} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-black text-amber-800 transition-colors hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"><FileText size={14} /> Quotation</button>
                               {paymentProofReference && <button type="button" onClick={() => openPaymentProof(o)} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-black text-slate-700 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"><Eye size={14} /> Payment proof</button>}
                             </div>

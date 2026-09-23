@@ -19,6 +19,31 @@ test("meeting scheduling keeps timezone, notice, duration, and overlap rules in 
   assert.match(helper, /isMeetingStartBookable/);
 });
 
+test("owner and customer chats expose the current schedule and cancellation action", () => {
+  const ownerMessages = source("app/owner/messages/page.jsx");
+  const customerMessages = source("app/messages/page.jsx");
+  const modal = source("components/MeetingBookingModal.jsx");
+
+  assert.match(ownerMessages, /ownerActiveMeeting/);
+  assert.match(ownerMessages, /View schedule/);
+  assert.match(ownerMessages, /setShowMeetingView\(true\)/);
+  assert.match(ownerMessages, /cancelVideoCall\(ownerActiveMeeting\.id, \{ skipConfirm: true \}\)/);
+  assert.match(customerMessages, /activeMeeting/);
+  assert.match(customerMessages, /setShowMeetingView\(true\)/);
+  assert.match(customerMessages, /cancelVideoCall\(call\.id\)/);
+  assert.match(customerMessages, /View schedule/);
+  assert.match(ownerMessages, /message_type !== "video_call"/);
+  assert.match(customerMessages, /message_type !== "video_call"/);
+  assert.match(modal, /readOnly = false/);
+  assert.match(modal, /onCancelMeeting/);
+  assert.match(modal, /Cancel this meeting\?/);
+  assert.match(modal, /Yes, cancel meeting/);
+  assert.match(modal, /This meeting cannot be changed until it is cancelled/);
+  assert.match(modal, /To choose another time, cancel this meeting first/);
+  assert.match(customerMessages, /skipConfirm: true/);
+  assert.match(ownerMessages, /skipConfirm: true/);
+});
+
 test("meeting booking uses a customizable 20-minute default notice", async () => {
   const { isMeetingStartBookable } = await import("../lib/meetingScheduling.js");
   const now = "2026-09-13T01:00:00.000Z";
@@ -152,7 +177,7 @@ test("customer selection directly schedules an owner-published open slot", () =>
   assert.doesNotMatch(ownerCalendar, /Require owner confirmation/);
   assert.match(ownerCalendar, /Customer choices book immediately/i);
   assert.match(customer, /meetingButtonLabel/);
-  assert.match(customer, /Meeting scheduled/);
+  assert.match(customer, /View schedule/);
   assert.match(customer, /getVideoCallWindow\(call\)\.expired/);
 });
 
@@ -184,6 +209,7 @@ test("owners have three secure meeting choices in messages", () => {
   assert.match(owner, /videoCallAction\("start_now"/);
   assert.match(owner, /videoCallAction\("invite_to_schedule"/);
   assert.match(modal, /ownerAction === "propose"/);
+  assert.match(modal, /existingCall \? "reschedule" : "propose"/);
   assert.match(route, /video_call_owner_start_now/);
   assert.match(route, /video_call_owner_invite/);
   assert.match(route, /video_call_owner_propose/);

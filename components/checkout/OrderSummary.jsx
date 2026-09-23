@@ -17,6 +17,8 @@ export default function OrderSummary({
   downpaymentAmount,
   balanceAmount,
   paymentMethod,
+  refundPolicyAgreed,
+  setRefundPolicyAgreed,
   isProcessing,
   isReadyToExecute,
   handleExecuteOrder,
@@ -57,9 +59,10 @@ export default function OrderSummary({
                         <p className="font-bold text-slate-900">{item.name || item.item_name || item.service_name || "Print item"}</p>
                         <p className="text-[11px] text-slate-500">Quantity: {item.quantity || 1}</p>
 
-                        {item.selected_specs && (item.selected_specs.size || item.selected_specs.material || item.selected_specs.quality || item.selected_specs.notes) && (
+                        {item.selected_specs && (item.selected_specs.size || item.selected_specs.size_breakdown?.length || item.selected_specs.material || item.selected_specs.quality || item.selected_specs.notes) && (
                           <div className="mt-1 space-y-0.5 rounded-lg border border-slate-200 bg-slate-50 p-2 text-[10px] text-slate-600">
                             {item.selected_specs.size && <div>• Size: <span className="font-semibold text-slate-800">{item.selected_specs.size}</span></div>}
+                            {item.selected_specs.size_breakdown?.length > 0 && <div>• Sizes: <span className="font-semibold text-slate-800">{item.selected_specs.size_breakdown.map((row) => `${row.size} × ${row.quantity}`).join(", ")}</span></div>}
                             {item.selected_specs.material && <div>• Material: <span className="font-semibold text-slate-800">{item.selected_specs.material}</span></div>}
                             {item.selected_specs.quality && <div>• Quality: <span className="font-semibold text-slate-800">{item.selected_specs.quality}</span></div>}
                             {item.selected_specs.requested_quantity && <div>• Requested quantity: <span className="font-semibold text-slate-800">{item.selected_specs.requested_quantity}</span></div>}
@@ -140,9 +143,21 @@ export default function OrderSummary({
             </div>
           )}
 
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">
+            <input
+              type="checkbox"
+              checked={refundPolicyAgreed}
+              onChange={(event) => setRefundPolicyAgreed(event.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-[#EC008C]"
+            />
+            <span>
+              I agree to the order policy: I can cancel or request a refund while the order is <strong>Pending</strong>. After it becomes <strong>Order Placed</strong>, cancellation is no longer available, but I may request a refund for shop review. Refunds are not automatic.
+            </span>
+          </label>
+
           <div className="flex gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3 text-[11px] leading-relaxed text-amber-950" role="note">
             <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-700" aria-hidden="true" />
-            <p><strong>Final-order notice:</strong> Once placed, this order cannot be cancelled or refunded by the customer. Review all items, specifications, fulfillment details, and payment amounts before continuing.</p>
+            <p><strong>Order policy:</strong> Pending orders can be cancelled or submitted for refund review. Once the shop places the order, it cannot be cancelled, but a refund request can still be submitted for the shop to review.</p>
           </div>
 
           <button
@@ -160,7 +175,7 @@ export default function OrderSummary({
 
           {!isReadyToExecute && (
             <p className="mt-2 text-center text-[11px] text-slate-400">
-              Please complete all required fields{effectiveDownpaymentPercent > 0 ? " and upload payment proof" : ""} to submit order.
+              Please complete all required fields{effectiveDownpaymentPercent > 0 ? " and upload payment proof" : ""}{!refundPolicyAgreed ? " and agree to the order policy" : ""} to submit order.
             </p>
           )}
         </div>

@@ -310,7 +310,7 @@ export default function OwnerOverviewPage() {
           <Link href="/owner/calendar" className="flex items-center gap-2 text-xs hover:text-[#EC008C]"><CalendarDays size={15} className="text-[#008F91]" /><span><strong>{kpis.upcomingMeetings ?? 0}</strong> upcoming meetings</span></Link>
           <Link href="/owner/reviews" className="flex items-center gap-2 text-xs hover:text-[#EC008C]"><Star size={15} className="fill-[#FFF200] text-[#756D00]" /><span><strong>{kpis.averageRating == null ? "—" : Number(kpis.averageRating).toFixed(1)}</strong> average rating</span></Link>
           <Link href="/owner/services" className="flex items-center gap-2 text-xs hover:text-[#EC008C]"><Layers3 size={15} className="text-[#EC008C]" /><span><strong>{kpis.activeServices ?? 0}</strong> active services</span></Link>
-          <Link href="/owner/services" className="flex items-center gap-2 text-xs hover:text-[#EC008C]"><AlertTriangle size={15} className="text-[#756D00]" /><span><strong>{kpis.lowStockServices ?? 0}</strong> low-stock products</span></Link>
+          <Link href="/owner/services" className="flex items-center gap-2 text-xs hover:text-[#EC008C]"><AlertTriangle size={15} className="text-[#756D00]" /><span><strong>{kpis.lowStockServices ?? 0}</strong> low-stock catalog items</span></Link>
         </div>
 
         <section className="border border-[#D8D6CE] bg-white p-4 sm:p-5" aria-labelledby="owner-action-center">

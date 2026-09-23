@@ -83,6 +83,7 @@ export default function OwnerMessagesPage() {
   const [pendingVideoRequests, setPendingVideoRequests] = useState([]);
   const [videoCallRequestAlert, setVideoCallRequestAlert] = useState(false);
   const [showMeetingBooking, setShowMeetingBooking] = useState(false);
+  const [showMeetingView, setShowMeetingView] = useState(false);
   const [viewImagePopup, setViewImagePopup] = useState(null); // { url, label }
   const [showQuestionEditor, setShowQuestionEditor] = useState(false);
   const [questionDrafts, setQuestionDrafts] = useState([]);
@@ -567,17 +568,19 @@ export default function OwnerMessagesPage() {
     }
   };
 
-  const cancelVideoCall = async (callId) => {
-    if (!window.confirm("Cancel this video call? The customer will see the update in chat.")) return;
+  const cancelVideoCall = async (callId, { skipConfirm = false } = {}) => {
+    if (!skipConfirm && !window.confirm("Cancel this video call? The customer will see the update in chat.")) return null;
     try {
       const result = await videoCallAction("cancel", { callId, reason: "Cancelled by shop" });
       if (result.call) {
         setVideoCalls((current) => current.map((call) => call.id === result.call.id ? result.call : call));
         setPendingVideoRequests((current) => current.filter((call) => call.id !== result.call.id));
+        return result.call;
       }
     } catch (error) {
       window.alert(error.message || "Could not cancel the video call.");
     }
+    return null;
   };
 
   const openFirstMeetingRequest = () => {
@@ -967,6 +970,7 @@ export default function OwnerMessagesPage() {
     if (!["REQUESTED", "SCHEDULED", "LIVE"].includes(call.status) || call.id === ownerMeetingDraft?.id) return false;
     return !(call.status === "SCHEDULED" && getVideoCallWindow(call).expired);
   }) || null;
+  const ownerActiveMeeting = ["SCHEDULED", "LIVE"].includes(ownerBlockingMeeting?.status) ? ownerBlockingMeeting : null;
 
   return (
     <div data-tour="owner-messages" className="owner-messages-page flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 md:h-[100dvh]">
@@ -1039,6 +1043,12 @@ export default function OwnerMessagesPage() {
                   </p>
                   <p className="mt-1 truncate text-[11px] text-slate-500">{activeConv._biz_name} · Reply from your shop</p>
                 </div>
+                {ownerActiveMeeting && (
+                  <button type="button" onClick={() => setShowMeetingView(true)} className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-[#00aeb5] bg-[#e8ffff] px-3 py-2 text-[10px] font-black uppercase text-slate-900 transition-colors hover:bg-[#c8f5f5]" title="View the scheduled meeting" aria-label="View the scheduled meeting">
+                    <Video size={16} className="text-[#00aeb5]" />
+                    <span>View schedule</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={openQuestionEditor}
@@ -1121,7 +1131,7 @@ export default function OwnerMessagesPage() {
                     <p className="font-mono text-[10px] uppercase font-black tracking-widest">Start the conversation.</p>
                   </div>
                 ) : (
-                  messages.map((msg) => {
+                  messages.filter((msg) => msg.message_type !== "video_call" && !String(msg.content || "").startsWith("[VIDEO_CALL_")).map((msg) => {
                     const isMine = msg.sender_id === user.id;
                     const isEditing = editingId === msg.id;
                     const meta = msg.metadata || {};
@@ -1355,6 +1365,7 @@ export default function OwnerMessagesPage() {
                               <div className="my-2 grid grid-cols-2 gap-x-4 gap-y-1 border-y border-white/15 py-2 font-mono text-[9px] uppercase">
                                 <span className="opacity-60">Quantity</span><span className="text-right font-black">{msg.metadata?.quantity || 1}</span>
                                 {msg.metadata?.selected_specs?.size && <><span className="opacity-60">Size</span><span className="text-right font-black">{msg.metadata.selected_specs.size}</span></>}
+                                {msg.metadata?.selected_specs?.size_breakdown?.length > 0 && <><span className="opacity-60">Sizes</span><span className="text-right font-black">{msg.metadata.selected_specs.size_breakdown.map((row) => `${row.size} × ${row.quantity}`).join(", ")}</span></>}
                                 {msg.metadata?.selected_specs?.material && <><span className="opacity-60">Material</span><span className="text-right font-black">{msg.metadata.selected_specs.material}</span></>}
                                 {msg.metadata?.selected_specs?.quality && <><span className="opacity-60">Quality</span><span className="text-right font-black">{msg.metadata.selected_specs.quality}</span></>}
                                 <span className="opacity-60">Attachments</span><span className="text-right font-black">{msg.metadata?.attachment_count || 0}</span>
@@ -1801,6 +1812,17 @@ export default function OwnerMessagesPage() {
             setMeetingActionMode("manage");
             setShowMeetingBooking(false);
           }}
+        />
+      )}
+      {showMeetingView && activeConv && ownerActiveMeeting && (
+        <MeetingBookingModal
+          businessId={activeConv.business_id}
+          conversationId={activeConv.id}
+          existingCall={ownerActiveMeeting}
+          isOwner
+          readOnly
+          onClose={() => setShowMeetingView(false)}
+          onCancelMeeting={() => cancelVideoCall(ownerActiveMeeting.id, { skipConfirm: true })}
         />
       )}
     </div>

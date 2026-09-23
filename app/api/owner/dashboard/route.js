@@ -190,7 +190,7 @@ function buildActionItems({ business, pendingOrders, readyOrders, unreadMessages
   if (pendingMeetings > 0) items.push({ key: "meeting-requests", title: `${pendingMeetings} meeting ${pendingMeetings === 1 ? "request" : "requests"}`, detail: "Choose a time or respond to the customer.", href: "/owner/messages", tone: "magenta" });
   if (upcomingMeetings > 0) items.push({ key: "upcoming-meetings", title: `${upcomingMeetings} upcoming ${upcomingMeetings === 1 ? "meeting" : "meetings"}`, detail: "Open your calendar to prepare for the next call.", href: "/owner/calendar", tone: "cyan" });
   if (rejectedDocuments > 0) items.push({ key: "verification-documents", title: `${rejectedDocuments} document ${rejectedDocuments === 1 ? "needs" : "need"} attention`, detail: "Review admin feedback and submit a replacement.", href: "/owner/documents", tone: "magenta" });
-  if (lowStockServices > 0) items.push({ key: "low-stock", title: `${lowStockServices} low-stock ${lowStockServices === 1 ? "product" : "products"}`, detail: "Check inventory before accepting more orders.", href: "/owner/services", tone: "yellow" });
+  if (lowStockServices > 0) items.push({ key: "low-stock", title: `${lowStockServices} low-stock ${lowStockServices === 1 ? "catalog item" : "catalog items"}`, detail: "Check quantity or capacity before accepting more requests.", href: "/owner/services", tone: "yellow" });
   return items.slice(0, 8);
 }
 
@@ -273,7 +273,7 @@ export async function GET(request) {
     const averageRating = visibleReviews.length ? Number((visibleReviews.reduce((sum, order) => sum + safeNumber(order.rating), 0) / visibleReviews.length).toFixed(1)) : null;
     const ratingDistribution = [5, 4, 3, 2, 1].map((rating) => ({ rating, count: visibleReviews.filter((order) => Number(order.rating) === rating).length }));
     const activeServices = services.filter((service) => service.available !== false).length;
-    const lowStockServices = services.filter((service) => service.item_type === "product" && safeNumber(service.stock_qty) <= safeNumber(service.low_stock_threshold || 10)).length;
+    const lowStockServices = services.filter((service) => (service.item_type === "product" || safeNumber(service.stock_qty) > 0) && safeNumber(service.stock_qty) <= safeNumber(service.low_stock_threshold || 10)).length;
     const pendingMeetings = calls.filter((call) => call.status === "REQUESTED").length;
     const upcomingMeetings = calls.filter((call) => ["SCHEDULED", "LIVE"].includes(call.status) && safeDate(call.scheduled_at)?.getTime() >= now.getTime()).length;
     const rejectedDocuments = documents.filter((document) => ["REJECTED", "NEEDS_CHANGES", "ACTION_REQUIRED"].includes(String(document.status || "").toUpperCase())).length;

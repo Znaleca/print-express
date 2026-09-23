@@ -72,8 +72,8 @@ test("customer and owner order surfaces expose remaining payment lifecycle actio
   assert.match(sql, /OWNER_MANUAL/);
   assert.match(checkout, /Upload Downpayment Proof/);
   assert.match(checkout, /paymentMethod=\{paymentMethod\}/);
-  assert.match(orderSummary, /Final-order notice:/);
-  assert.match(orderSummary, /cannot be cancelled or refunded by the customer/);
+  assert.match(orderSummary, /I agree to the order policy/);
+  assert.match(orderSummary, /Pending orders can be cancelled or submitted for refund review/);
   assert.match(route, /method !== selectedMethod/);
   assert.match(lockMigration, /normalized_method <> checkout_method/);
   assert.match(lockMigration, /Use the remaining payment method selected at checkout/);

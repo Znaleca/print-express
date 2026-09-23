@@ -68,6 +68,7 @@ function MessagesInner() {
   const [videoCallSession, setVideoCallSession] = useState(null);
   const [videoCalls, setVideoCalls] = useState([]);
   const [showMeetingBooking, setShowMeetingBooking] = useState(false);
+  const [showMeetingView, setShowMeetingView] = useState(false);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
   const [showDesignUpload, setShowDesignUpload] = useState(false);
   const [designVersion, setDesignVersion] = useState("1");
@@ -510,11 +511,11 @@ function MessagesInner() {
   const pendingOwnerConfirmation = videoCalls.find((call) => call.status === "REQUESTED" && call.requested_slot_at && (call.confirmation_required_by === "BUSINESS_OWNER" || (!call.confirmation_required_by && Number(call.reschedule_count || 0) > 0)));
   const pendingCustomerConfirmation = videoCalls.find((call) => call.status === "REQUESTED" && call.requested_slot_at && call.confirmation_required_by === "CUSTOMER");
   const activeMeeting = ["SCHEDULED", "LIVE"].includes(blockingMeeting?.status) ? blockingMeeting : null;
-  const meetingButtonLabel = pendingMeetingRequest ? "Request pending" : activeMeeting ? "Meeting scheduled" : "Schedule meeting";
+  const meetingButtonLabel = pendingMeetingRequest ? "Request pending" : activeMeeting ? "View schedule" : "Schedule meeting";
   const meetingButtonHelp = pendingMeetingRequest
     ? "This meeting request is awaiting confirmation."
     : activeMeeting
-      ? "A meeting is already scheduled. Use its meeting card to reschedule or cancel it."
+      ? "A meeting is already scheduled. View it from the chat header."
       : "Choose an available day and time.";
 
   useEffect(() => {
@@ -536,14 +537,18 @@ function MessagesInner() {
     }
   };
 
-  const cancelVideoCall = async (callId) => {
-    if (!window.confirm("Cancel this video call? The shop will be notified in chat.")) return;
+  const cancelVideoCall = async (callId, { skipConfirm = false } = {}) => {
+    if (!skipConfirm && !window.confirm("Cancel this video call? The shop will be notified in chat.")) return null;
     try {
       const result = await videoCallAction("cancel", { callId, reason: "Cancelled by customer" });
-      if (result.call) setVideoCalls((current) => current.map((call) => call.id === result.call.id ? result.call : call));
+      if (result.call) {
+        setVideoCalls((current) => current.map((call) => call.id === result.call.id ? result.call : call));
+        return result.call;
+      }
     } catch (error) {
       window.alert(error.message || "Could not cancel the video call.");
     }
+    return null;
   };
 
   const confirmProposedMeetingTime = async (callId) => {
@@ -667,8 +672,11 @@ function MessagesInner() {
                     <p className="text-[11px] text-slate-500">Live chat & proofing thread</p>
                   </div>
                 </div>
-
                 <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => activeMeeting ? setShowMeetingView(true) : setShowMeetingBooking(true)} disabled={sending || Boolean(pendingMeetingRequest)} className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-[#00aeb5] bg-[#e8ffff] px-3 py-2 text-[10px] font-black uppercase text-slate-900 transition-colors hover:bg-[#c8f5f5] disabled:cursor-not-allowed disabled:opacity-50" title={meetingButtonHelp} aria-label={meetingButtonLabel}>
+                    <Video size={16} className="text-[#00aeb5]" />
+                    <span>{activeMeeting ? "View schedule" : meetingButtonLabel}</span>
+                  </button>
                   <button
                     onClick={() => setShowQuickReplies(!showQuickReplies)}
                     className="px-3 py-2 rounded-lg border border-slate-200 bg-[#F6F6F2] text-slate-700 text-xs font-bold hover:border-[#EC008C] hover:text-[#EC008C] flex items-center gap-1.5"
@@ -710,15 +718,6 @@ function MessagesInner() {
                      {pendingCustomerConfirmation && <div className="flex shrink-0 flex-col gap-2"><button type="button" onClick={() => confirmProposedMeetingTime(pendingCustomerConfirmation.id)} disabled={sending} className="rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-black uppercase text-white hover:bg-[#EC008C] disabled:opacity-40">Accept time</button><button type="button" onClick={() => setShowMeetingBooking(true)} disabled={sending} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-[10px] font-black uppercase text-slate-700 hover:border-[#EC008C] disabled:opacity-40">Choose another</button></div>}
                    </div>
                  )}
-                {activeMeeting && (
-                  <div role="status" className="sticky top-0 z-20 flex items-start gap-3 rounded-xl border border-[#00aeb5] bg-[#e8ffff] px-4 py-3 text-slate-900 shadow-sm">
-                    <Calendar size={18} className="mt-0.5 shrink-0 text-[#00aeb5]" />
-                    <div>
-                      <p className="text-xs font-black uppercase tracking-wide">{getMeetingStatusLabel(activeMeeting.status)}</p>
-                      <p className="mt-1 text-[11px] leading-relaxed text-slate-600">{activeMeeting.scheduled_at ? formatMeetingDateTime(activeMeeting.scheduled_at, activeMeeting.booking_timezone || "Asia/Manila") : "Your online meeting is ready."}</p>
-                    </div>
-                  </div>
-                )}
                 {loadingMsgs ? (
                   <div className="p-12 text-center text-xs text-slate-400">
                     <Loader2 className="animate-spin mx-auto mb-2 text-[#00FFFF]" size={24} />
@@ -738,7 +737,7 @@ function MessagesInner() {
                         </button>
                       </div>
                     )}
-                    {messages.map((m) => {
+                    {messages.filter((m) => m.message_type !== "video_call" && !String(m.content || "").startsWith("[VIDEO_CALL_")).map((m) => {
                     const isMe = m.sender_id === user?.id;
                     const meta = m.metadata || {};
                     const uploadName = meta.file_name || "Uploaded file";
@@ -879,6 +878,7 @@ function MessagesInner() {
                               <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
                                 <dt className="text-slate-500">Quantity</dt><dd className="text-right font-semibold">{meta.quantity || 1}</dd>
                                 {meta.selected_specs?.size && <><dt className="text-slate-500">Size</dt><dd className="text-right font-semibold">{meta.selected_specs.size}</dd></>}
+                                {meta.selected_specs?.size_breakdown?.length > 0 && <><dt className="text-slate-500">Sizes</dt><dd className="text-right font-semibold">{meta.selected_specs.size_breakdown.map((row) => `${row.size} × ${row.quantity}`).join(", ")}</dd></>}
                                 {meta.selected_specs?.material && <><dt className="text-slate-500">Material</dt><dd className="text-right font-semibold">{meta.selected_specs.material}</dd></>}
                                 {meta.selected_specs?.quality && <><dt className="text-slate-500">Quality</dt><dd className="text-right font-semibold">{meta.selected_specs.quality}</dd></>}
                                 <dt className="text-slate-500">Files</dt><dd className="text-right font-semibold">{meta.attachment_count || 0}</dd>
@@ -1029,17 +1029,6 @@ function MessagesInner() {
                   </button>
                 </div>
                 <button
-                  type="button"
-                  onClick={() => setShowMeetingBooking(true)}
-                  disabled={sending || Boolean(blockingMeeting)}
-                  title={meetingButtonHelp}
-                  aria-label={meetingButtonHelp}
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-3 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Video size={18} />
-                  <span className="hidden text-[10px] font-black uppercase tracking-wide sm:inline">{meetingButtonLabel}</span>
-                </button>
-                <button
                   type="submit"
                   disabled={!input.trim() || sending}
                   className="p-3 bg-slate-900 text-white rounded-xl hover:bg-[#EC008C] transition-colors disabled:opacity-50"
@@ -1075,6 +1064,16 @@ function MessagesInner() {
             if (call) setVideoCalls((current) => [call, ...current.filter((item) => item.id !== call.id)]);
             setShowMeetingBooking(false);
           }}
+        />
+      )}
+      {showMeetingView && activeConv && activeMeeting && (
+        <MeetingBookingModal
+          businessId={activeConv.business_id}
+          conversationId={activeConv.id}
+          existingCall={activeMeeting}
+          readOnly
+          onClose={() => setShowMeetingView(false)}
+          onCancelMeeting={() => cancelVideoCall(activeMeeting.id, { skipConfirm: true })}
         />
       )}
     </main>

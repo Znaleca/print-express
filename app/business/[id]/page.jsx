@@ -155,6 +155,26 @@ function getVisibleSizeChart(specs, service) {
   return allowedSizes.length > 0 ? chart.filter((row) => allowedSizes.includes(row.size)) : chart;
 }
 
+function getProductImages(item) {
+  const specs = parseSpecs(item?.specs_json);
+  return [...new Set([item?.image_url, ...(Array.isArray(specs.image_urls) ? specs.image_urls : [])]
+    .map((url) => String(url || "").trim())
+    .filter(Boolean))];
+}
+
+function getProductVariants(item) {
+  const specs = parseSpecs(item?.specs_json);
+  return (Array.isArray(specs.variants) ? specs.variants : [])
+    .map((variant, index) => ({
+      id: String(variant?.id || `variant-${index + 1}`),
+      name: String(variant?.name || "").trim(),
+      sku: String(variant?.sku || "").trim(),
+      price: Number(variant?.price || 0),
+      stock_qty: Math.max(0, Number(variant?.stock_qty || 0)),
+    }))
+    .filter((variant) => variant.name);
+}
+
 function getVisibleReviewStats(reviewRows) {
   const allReviews = Array.isArray(reviewRows) ? reviewRows : [];
   const visibleReviews = allReviews;
@@ -212,13 +232,16 @@ export default function BusinessDetailsPage({ params }) {
 
   // Form & Cart state
   const [selectedServices, setSelectedServices] = useState([]);
+  const [checkedCartItemKeys, setCheckedCartItemKeys] = useState([]);
   const [cartInitialized, setCartInitialized] = useState(false);
 
   useEffect(() => {
     if (cartInitialized && typeof window !== "undefined") {
       localStorage.setItem(`cart_${id}`, JSON.stringify(selectedServices));
+      localStorage.setItem(`cart_checked_${id}`, JSON.stringify(checkedCartItemKeys));
+      localStorage.removeItem(`checkout_cart_${id}`);
     }
-  }, [selectedServices, cartInitialized, id]);
+  }, [selectedServices, checkedCartItemKeys, cartInitialized, id]);
 
   const [previewImage, setPreviewImage] = useState(null);
   const [quantityInput, setQuantityInput] = useState("1");
@@ -226,8 +249,11 @@ export default function BusinessDetailsPage({ params }) {
   // Printing Specs Customizer Modal State
   const [specModalItem, setSpecModalItem] = useState(null);
   const [selectedSize, setSelectedSize] = useState("");
+  const [sizeQuantities, setSizeQuantities] = useState({});
   const [selectedMaterial, setSelectedMaterial] = useState("");
   const [selectedQuality, setSelectedQuality] = useState("");
+  const [selectedVariantId, setSelectedVariantId] = useState("");
+  const [selectedProductImageIndex, setSelectedProductImageIndex] = useState(0);
   const [customNotes, setCustomNotes] = useState("");
   const [designFiles, setDesignFiles] = useState([]);
   const [designUploadError, setDesignUploadError] = useState("");
@@ -242,14 +268,23 @@ export default function BusinessDetailsPage({ params }) {
     const defaultQual = specs.default_quality || (specs.quality_levels && specs.quality_levels[0]) || "";
 
     setSelectedSize(defaultSz);
+    setSizeQuantities(defaultSz ? { [defaultSz]: 1 } : {});
     setSelectedMaterial(defaultMat);
     setSelectedQuality(defaultQual);
+    setSelectedVariantId(getProductVariants(svc)[0]?.id || "");
+    setSelectedProductImageIndex(0);
     setCustomNotes("");
     setDesignFiles([]);
     setDesignUploadError("");
     
     const existing = selectedServices.find(s => s.id === svc.id);
     setQuantityInput(String(existing?.quantity || 1));
+  };
+
+  const updateSizeQuantity = (size, value) => {
+    const nextQuantity = Math.max(0, Number.parseInt(value, 10) || 0);
+    setSelectedSize(size);
+    setSizeQuantities((current) => ({ ...current, [size]: nextQuantity }));
   };
 
   useEffect(() => {
@@ -345,6 +380,19 @@ export default function BusinessDetailsPage({ params }) {
             };
           }).filter((item) => item.item_type === "product" || item.isQuotedCheckout === true);
 
+          let checkedKeys = existingCart.map((item) => getCartItemKey(item));
+          if (typeof window !== "undefined") {
+            const savedCheckedKeys = localStorage.getItem(`cart_checked_${id}`);
+            if (savedCheckedKeys) {
+              try {
+                const parsedKeys = JSON.parse(savedCheckedKeys);
+                if (Array.isArray(parsedKeys)) checkedKeys = parsedKeys.filter((key) => checkedKeys.includes(key));
+              } catch (e) {
+                // Default to all cart items checked when the selection snapshot is invalid.
+              }
+            }
+          }
+
           if (checkoutServiceId && quoteId && user) {
             const svc = data.services.find(s => s.id === checkoutServiceId);
             const { data: quoteMessage } = await supabase
@@ -365,7 +413,7 @@ export default function BusinessDetailsPage({ params }) {
             if (svc && quoteIsValid) {
               const exists = existingCart.some(item => item.id === svc.id && item.isQuotedCheckout && item.sourceMessageId === quoteId);
               if (!exists) {
-                existingCart.push({ 
+                const quotedCartItem = {
                   ...svc, 
                   quantity: 1, 
                   price: verifiedQuoteAmount,
@@ -377,7 +425,9 @@ export default function BusinessDetailsPage({ params }) {
                   },
                   designUrl: designUrl,
                   designVersion: designVersion
-                });
+                };
+                existingCart.push(quotedCartItem);
+                checkedKeys.push(getCartItemKey(quotedCartItem));
               }
             }
 
@@ -392,6 +442,7 @@ export default function BusinessDetailsPage({ params }) {
             }
           }
           setSelectedServices(existingCart);
+          setCheckedCartItemKeys(checkedKeys);
           setCartInitialized(true);
         }
       }
@@ -458,10 +509,33 @@ export default function BusinessDetailsPage({ params }) {
     [selectedServices]
   );
 
-  const cartSubtotal = useMemo(
-    () => selectedServices.reduce((total, item) => total + Number(item.price || 0) * (Number(item.quantity) || 0), 0),
-    [selectedServices]
+  const checkedServices = useMemo(
+    () => selectedServices.filter((item) => checkedCartItemKeys.includes(getCartItemKey(item))),
+    [selectedServices, checkedCartItemKeys]
   );
+
+  const checkedCartItemCount = useMemo(
+    () => checkedServices.reduce((total, item) => total + (Number(item.quantity) || 0), 0),
+    [checkedServices]
+  );
+
+  const cartSubtotal = useMemo(
+    () => checkedServices.reduce((total, item) => total + Number(item.price || 0) * (Number(item.quantity) || 0), 0),
+    [checkedServices]
+  );
+
+  const allCartItemsChecked = selectedServices.length > 0 && checkedServices.length === selectedServices.length;
+
+  const toggleCartItem = (item) => {
+    const itemKey = getCartItemKey(item);
+    setCheckedCartItemKeys((current) => current.includes(itemKey)
+      ? current.filter((key) => key !== itemKey)
+      : [...current, itemKey]);
+  };
+
+  const toggleSelectAllCartItems = () => {
+    setCheckedCartItemKeys(allCartItemsChecked ? [] : selectedServices.map((item) => getCartItemKey(item)));
+  };
 
   const getSelectedQty = (serviceId) =>
     selectedServices
@@ -471,14 +545,22 @@ export default function BusinessDetailsPage({ params }) {
   const upsertServiceQuantity = (svc, qty) => {
     setSelectedServices((prev) => {
       const matchKey = getCartItemKey(svc);
+      const variants = svc.item_type === "product" ? getProductVariants(svc) : [];
+      const selectedVariant = variants.find((variant) => variant.id === svc.selected_specs?.variant_id);
       const maxQuantity = svc.item_type === "product"
-        ? Math.max(0, Number(svc.stock_qty || 0))
+        ? (variants.length > 0 ? Math.max(0, Number(selectedVariant?.stock_qty || 0)) : Math.max(0, Number(svc.stock_qty || 0)))
         : Infinity;
       const nextQuantity = Math.min(maxQuantity, Math.max(0, Number(qty) || 0));
       const existing = prev.find((s) => getCartItemKey(s) === matchKey);
       
-      if (nextQuantity <= 0) return prev.filter((s) => getCartItemKey(s) !== matchKey);
-      if (!existing) return [...prev, { ...svc, quantity: nextQuantity, cart_item_id: matchKey }];
+      if (nextQuantity <= 0) {
+        setCheckedCartItemKeys((current) => current.filter((key) => key !== matchKey));
+        return prev.filter((s) => getCartItemKey(s) !== matchKey);
+      }
+      if (!existing) {
+        setCheckedCartItemKeys((current) => current.includes(matchKey) ? current : [...current, matchKey]);
+        return [...prev, { ...svc, quantity: nextQuantity, cart_item_id: matchKey }];
+      }
       
       return prev.map((s) => getCartItemKey(s) === matchKey ? { ...s, quantity: nextQuantity } : s);
     });
@@ -488,7 +570,14 @@ export default function BusinessDetailsPage({ params }) {
     if (selectedServices.length === 0) return;
     if (window.confirm("Clear all items from this cart?")) {
       setSelectedServices([]);
+      setCheckedCartItemKeys([]);
     }
+  };
+
+  const proceedToCheckout = () => {
+    if (checkedServices.length === 0 || isClosed) return;
+    localStorage.setItem(`checkout_cart_${id}`, JSON.stringify(checkedServices));
+    router.push(`/checkout/${business.id}`);
   };
 
   const handleDesignFileChange = (event) => {
@@ -543,23 +632,57 @@ export default function BusinessDetailsPage({ params }) {
 
     const uploadedPaths = [];
     try {
-      const specs = specModalItem.specs_json || {};
+      const specs = parseSpecs(specModalItem.specs_json);
       const optionConfig = getCategoryOptionConfig(getServiceOptionKey(specModalItem));
       const modifiers = specs.price_modifiers || {};
+      const productVariants = isProduct ? getProductVariants(specModalItem) : [];
+      const selectedVariant = productVariants.find((variant) => variant.id === selectedVariantId) || productVariants[0] || null;
       const basePrice = Number(specModalItem.price || 0);
-      const sizeAddon = Number(modifiers[selectedSize] || 0);
+      const sizeChart = Array.isArray(specs.size_chart) ? specs.size_chart : [];
+      const getSizeAddon = (size) => Number(modifiers[size] ?? sizeChart.find((row) => row.size === size)?.price_modifier ?? 0);
+      const sizeRows = !isProduct && Array.isArray(specs.allowed_sizes)
+        ? specs.allowed_sizes
+          .map((size) => ({ size, quantity: Math.max(0, Number.parseInt(sizeQuantities[size], 10) || 0) }))
+          .filter((row) => row.quantity > 0)
+        : [];
+      const sizeQuantityTotal = sizeRows.reduce((total, row) => total + row.quantity, 0);
+      const hasSizeQuantityControls = !isProduct && Array.isArray(specs.allowed_sizes) && specs.allowed_sizes.length > 0;
+      if (hasSizeQuantityControls && sizeRows.length === 0) {
+        throw new Error("Choose at least one size and enter its quantity.");
+      }
+      const sizeAddon = getSizeAddon(selectedSize);
       const materialAddon = Number(modifiers[selectedMaterial] || 0);
       const qualityAddon = Number(modifiers[selectedQuality] || 0);
-      const unitPrice = basePrice + sizeAddon + materialAddon + qualityAddon;
-      const requestedQty = Math.max(1, parseInt(quantityInput, 10) || 1);
-      const stockLimit = isProduct ? Math.max(1, Number(specModalItem.stock_qty || 0)) : Infinity;
+      const unitPrice = isProduct && selectedVariant
+        ? selectedVariant.price
+        : basePrice + sizeAddon + materialAddon + qualityAddon;
+      const requestedQty = hasSizeQuantityControls ? sizeQuantityTotal : Math.max(1, parseInt(quantityInput, 10) || 1);
+      const stockLimit = isProduct
+        ? (productVariants.length > 0 ? Math.max(0, Number(selectedVariant?.stock_qty || 0)) : Math.max(0, Number(specModalItem.stock_qty || 0)))
+        : Infinity;
+      if (isProduct && productVariants.length > 0 && !selectedVariant) {
+        throw new Error("Choose a product variant first.");
+      }
+      if (isProduct && stockLimit <= 0) {
+        throw new Error("This product variant is out of stock.");
+      }
       const qty = Math.min(stockLimit, requestedQty);
       const noteValue = customNotes.trim() || null;
+      const sizeBreakdown = sizeRows.map((row) => ({
+        size: row.size,
+        quantity: row.quantity,
+        unit_price: Number((basePrice + getSizeAddon(row.size) + materialAddon + qualityAddon).toFixed(2)),
+      }));
       const selectedSpecs = Object.fromEntries(
         Object.entries({
-          size: selectedSize || null,
+          size: sizeBreakdown.length === 1 ? sizeBreakdown[0].size : null,
+          size_breakdown: sizeBreakdown.length > 0 ? sizeBreakdown : null,
           material: selectedMaterial || null,
           quality: selectedQuality || null,
+          variant_id: selectedVariant?.id || null,
+          variant_name: selectedVariant?.name || null,
+          variant_sku: selectedVariant?.sku || null,
+          requested_quantity: !isProduct ? requestedQty : null,
           notes: noteValue,
         }).filter(([, value]) => value)
       );
@@ -628,12 +751,16 @@ export default function BusinessDetailsPage({ params }) {
         }
 
         const selectedDetails = [
-          selectedSpecs.size && `Size: ${selectedSpecs.size}`,
+          selectedSpecs.size_breakdown?.length && `Sizes: ${selectedSpecs.size_breakdown.map((row) => `${row.size} × ${row.quantity}`).join(", ")}`,
+          !selectedSpecs.size_breakdown?.length && selectedSpecs.size && `Size: ${selectedSpecs.size}`,
           selectedSpecs.material && `${optionConfig.materialLabel}: ${selectedSpecs.material}`,
           selectedSpecs.quality && `${optionConfig.qualityLabel}: ${selectedSpecs.quality}`,
           selectedSpecs.notes && `Notes: ${selectedSpecs.notes}`,
         ].filter(Boolean);
-        const estimatedUnitPrice = basePrice + sizeAddon + materialAddon + qualityAddon;
+        const estimatedTotal = sizeBreakdown.length > 0
+          ? sizeBreakdown.reduce((total, row) => total + row.unit_price * row.quantity, 0)
+          : (basePrice + sizeAddon + materialAddon + qualityAddon) * qty;
+        const estimatedUnitPrice = qty > 0 ? estimatedTotal / qty : basePrice + sizeAddon + materialAddon + qualityAddon;
         const messageRows = [
           {
             conversation_id: conversation.id,
@@ -653,7 +780,7 @@ export default function BusinessDetailsPage({ params }) {
               quantity: qty,
               selected_specs: selectedSpecs,
               catalog_estimate_unit: estimatedUnitPrice,
-              catalog_estimate_total: estimatedUnitPrice * qty,
+              catalog_estimate_total: estimatedTotal,
               attachment_count: uploadedDesigns.length,
               requires_seller_quote: true,
             },
@@ -689,7 +816,7 @@ export default function BusinessDetailsPage({ params }) {
 
       const cartItem = {
         ...specModalItem,
-        price: unitPrice,
+         price: unitPrice,
         base_price: basePrice,
         quantity: qty,
         selected_specs: selectedSpecs,
@@ -701,7 +828,7 @@ export default function BusinessDetailsPage({ params }) {
         designVersion: null,
       };
 
-      const matchKey = `${specModalItem.id}-product-${JSON.stringify(selectedSpecs)}`;
+       const matchKey = `${specModalItem.id}-product-${JSON.stringify(selectedSpecs)}`;
       cartItem.cart_item_id = matchKey;
 
       setSelectedServices((prev) => {
@@ -1024,7 +1151,11 @@ export default function BusinessDetailsPage({ params }) {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {business.services.filter(s => s.item_type === "product").map((svc) => {
                     const isSelected = selectedServices.some((s) => s.id === svc.id);
-                    const stockLeft = Math.max(0, Number(svc.stock_qty || 0));
+                    const productImages = getProductImages(svc);
+                    const productVariants = getProductVariants(svc);
+                    const stockLeft = productVariants.length > 0
+                      ? productVariants.reduce((total, variant) => total + variant.stock_qty, 0)
+                      : Math.max(0, Number(svc.stock_qty || 0));
                     const outOfStock = stockLeft <= 0;
                     const serviceRating = business.serviceRatingStats?.[svc.id];
 
@@ -1058,15 +1189,15 @@ export default function BusinessDetailsPage({ params }) {
                             {svc.name}
                           </h3>
 
-                          <p className="text-sm font-extrabold text-slate-900 mb-3">
-                            ₱{Number(svc.price).toFixed(2)}
+                           <p className="text-sm font-extrabold text-slate-900 mb-3">
+                             {productVariants.length > 0 ? "From " : ""}₱{(productVariants.length > 0 ? Math.min(...productVariants.map((variant) => variant.price)) : Number(svc.price)).toFixed(2)}
                           </p>
                           <div className="mb-3"><ServiceRating stats={serviceRating} /></div>
 
-                          {svc.image_url ? (
+                          {productImages[0] ? (
                             <div className="relative h-40 w-full overflow-hidden rounded-2xl border border-[#ECECE8] bg-[#F6F6F2] p-2">
                               <Image
-                                src={svc.image_url}
+                                src={productImages[0]}
                                 alt={svc.name}
                                 fill
                                 sizes="(max-width: 640px) 100vw, 360px"
@@ -1078,6 +1209,7 @@ export default function BusinessDetailsPage({ params }) {
                               <Package size={28} />
                             </div>
                           )}
+                          {productVariants.length > 0 && <p className="mt-2 text-[10px] font-bold text-slate-500">{productVariants.length} variants · {stockLeft} total available</p>}
                         </div>
 
                       </div>
@@ -1090,13 +1222,13 @@ export default function BusinessDetailsPage({ params }) {
             {/* REVIEWS */}
             <section className="rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
               <h3 className="mb-6 flex items-center gap-2 text-xl font-black text-slate-900">
-                <Star size={18} className="fill-[#FFF200] text-[#D6C900]" /> Customer reviews ({business.writtenReviewCount || 0})
+                <Star size={18} className="fill-[#FFF200] text-[#D6C900]" /> Customer ratings ({business.reviewCount || 0})
               </h3>
 
               {(business.reviews || []).length > 0 ? (
                 <div className="space-y-4">
-                  {business.reviews.slice(0, 6).map((review) => (
-                    <article key={review.order_id} className="p-4 rounded-xl bg-slate-50 border border-slate-100">
+                  {business.reviews.slice(0, 6).map((review, reviewIndex) => (
+                    <article key={`${review.order_id}-${review.review_service_id || "order"}-${reviewIndex}`} className="p-4 rounded-xl bg-slate-50 border border-slate-100">
                       <div className="flex items-center justify-between gap-2 mb-2">
                         <span className="font-bold text-xs text-slate-900">{review.customer_name || "Customer"}</span>
                         <div className="flex items-center gap-1">
@@ -1109,7 +1241,7 @@ export default function BusinessDetailsPage({ params }) {
                           ))}
                         </div>
                       </div>
-                      <p className="text-xs text-slate-600 italic">"{review.feedback}"</p>
+                      {review.feedback && <p className="text-xs text-slate-600 italic">"{review.feedback}"</p>}
                     </article>
                   ))}
                 </div>
@@ -1130,16 +1262,27 @@ export default function BusinessDetailsPage({ params }) {
               <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
                 <div>
                   <h2 className="text-base font-bold text-slate-900">Products &amp; accepted quotes</h2>
-                  <p className="mt-0.5 text-[11px] text-slate-500">{cartItemCount} {cartItemCount === 1 ? "item" : "items"}</p>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    {cartItemCount} {cartItemCount === 1 ? "item" : "items"} · {checkedCartItemCount} selected
+                  </p>
                 </div>
                 {selectedServices.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={clearCart}
-                    className="text-[10px] font-bold uppercase tracking-wider text-slate-400 transition-colors hover:text-rose-500"
-                  >
-                    Clear cart
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={toggleSelectAllCartItems}
+                      className="text-[10px] font-bold uppercase tracking-wider text-[#009FA0] transition-colors hover:text-[#EC008C]"
+                    >
+                      {allCartItemsChecked ? "Deselect all" : "Select all"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearCart}
+                      className="text-[10px] font-bold uppercase tracking-wider text-slate-400 transition-colors hover:text-rose-500"
+                    >
+                      Clear cart
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -1158,8 +1301,19 @@ export default function BusinessDetailsPage({ params }) {
                       </h3>
                       <div className="space-y-4">
                         {group.items.map((s) => (
-                    <div key={getCartItemKey(s)} className="flex justify-between items-start text-xs pb-3 border-b border-slate-100 last:border-0">
-                      <div className={`flex min-w-0 items-start ${s.item_type === "product" ? "gap-3" : ""}`}>
+                    <div
+                      key={getCartItemKey(s)}
+                      className={`flex justify-between items-start text-xs pb-3 border-b border-slate-100 last:border-0 ${checkedCartItemKeys.includes(getCartItemKey(s)) ? "" : "opacity-60"}`}
+                    >
+                      <div className="flex min-w-0 items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={checkedCartItemKeys.includes(getCartItemKey(s))}
+                          onChange={() => toggleCartItem(s)}
+                          aria-label={`Select ${s.name || s.item_name || s.service_name || "item"} for checkout`}
+                          className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-[#EC008C]"
+                        />
+                        <div className={`flex min-w-0 items-start ${s.item_type === "product" ? "gap-3" : ""}`}>
                         {s.item_type === "product" && (
                           <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
                             {s.image_url ? (
@@ -1173,15 +1327,6 @@ export default function BusinessDetailsPage({ params }) {
                           <p className="font-semibold text-slate-900">{s.name || s.item_name || s.service_name || "Print item"}</p>
                         <p className="text-slate-400 text-[11px]">{s.isQuotedCheckout ? "Quoted custom job" : `Qty: ${s.quantity || 1}`}</p>
                         
-                        {s.selected_specs && (s.selected_specs.size || s.selected_specs.material || s.selected_specs.quality || s.selected_specs.notes) && (
-                          <div className="text-[10px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-200 mt-1 space-y-0.5">
-                            {s.selected_specs.size && <div>• Size: <span className="font-semibold text-slate-800">{s.selected_specs.size}</span></div>}
-                            {s.selected_specs.material && <div>• Material: <span className="font-semibold text-slate-800">{s.selected_specs.material}</span></div>}
-                            {s.selected_specs.quality && <div>• Quality: <span className="font-semibold text-slate-800">{s.selected_specs.quality}</span></div>}
-                            {s.selected_specs.requested_quantity && <div>• Requested quantity: <span className="font-semibold text-slate-800">{s.selected_specs.requested_quantity}</span></div>}
-                            {s.selected_specs.notes && <div className="text-amber-800 italic truncate">"Notes: {s.selected_specs.notes}"</div>}
-                          </div>
-                        )}
                         {getDesignFiles(s).length > 0 && (
                           <button
                             type="button"
@@ -1192,6 +1337,7 @@ export default function BusinessDetailsPage({ params }) {
                           </button>
                         )}
                         </div>
+                      </div>
                       </div>
                       <div className="flex flex-col items-end gap-2 shrink-0">
                         <span className="font-bold text-slate-900">₱{(Number(s.price) * (s.quantity || 1)).toFixed(2)}</span>
@@ -1232,15 +1378,21 @@ export default function BusinessDetailsPage({ params }) {
 
               <div className="pt-4 border-t border-slate-200 space-y-4">
                 <div className="flex justify-between items-center">
-                  <span className="text-xs font-semibold text-slate-600">Cart total</span>
+                  <span className="text-xs font-semibold text-slate-600">Selected total</span>
                   <span className="text-2xl font-extrabold text-slate-900">
                     ₱{cartSubtotal.toFixed(2)}
                   </span>
                 </div>
 
+                {selectedServices.length > 0 && checkedServices.length === 0 && (
+                  <p className="text-center text-[11px] font-medium text-amber-700">
+                    Select at least one item to continue.
+                  </p>
+                )}
+
                 <button
-                  onClick={() => router.push(`/checkout/${business.id}`)}
-                  disabled={selectedServices.length === 0 || isClosed}
+                  onClick={proceedToCheckout}
+                  disabled={checkedServices.length === 0 || isClosed}
                   className="w-full bg-slate-900 text-white py-3.5 px-4 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-[#EC008C] transition-all shadow-md disabled:opacity-50"
                 >
                   Proceed to Checkout <ArrowRight size={16} />
@@ -1270,6 +1422,9 @@ export default function BusinessDetailsPage({ params }) {
               const specs = parseSpecs(specModalItem.specs_json);
               const optionConfig = getCategoryOptionConfig(getServiceOptionKey(specModalItem));
               const modifiers = specs.price_modifiers || {};
+              const productImages = isProduct ? getProductImages(specModalItem) : [];
+              const productVariants = isProduct ? getProductVariants(specModalItem) : [];
+              const selectedVariant = productVariants.find((variant) => variant.id === selectedVariantId) || productVariants[0] || null;
               const visibleSizeChart = getVisibleSizeChart(specs, specModalItem);
               const selectedSizeChartRow = visibleSizeChart.find((row) => row.size === selectedSize);
               const basePrice = Number(specModalItem.price || 0);
@@ -1278,18 +1433,35 @@ export default function BusinessDetailsPage({ params }) {
               const qualityAddon = Number(modifiers[selectedQuality] || 0);
               const getChartAddon = (row) => Number(modifiers[row.size] ?? row.price_modifier ?? 0);
 
-              const unitPrice = basePrice + sizeAddon + materialAddon + qualityAddon;
-              const stockLimit = isProduct ? Math.max(1, Number(specModalItem.stock_qty || 0)) : Infinity;
-              const qty = Math.min(stockLimit, Math.max(1, parseInt(quantityInput, 10) || 1));
-              const totalPrice = unitPrice * qty;
+               const unitPrice = isProduct && selectedVariant
+                 ? selectedVariant.price
+                 : basePrice + sizeAddon + materialAddon + qualityAddon;
+               const hasSizeQuantityControls = !isProduct && Array.isArray(specs.allowed_sizes) && specs.allowed_sizes.length > 0;
+               const sizeRows = hasSizeQuantityControls
+                 ? specs.allowed_sizes
+                   .map((size) => ({ size, quantity: Math.max(0, Number.parseInt(sizeQuantities[size], 10) || 0) }))
+                   .filter((row) => row.quantity > 0)
+                 : [];
+               const sizeQuantityTotal = sizeRows.reduce((total, row) => total + row.quantity, 0);
+               const sizeEstimatedTotal = sizeRows.reduce((total, row) => {
+                 const rowAddon = Number(modifiers[row.size] ?? visibleSizeChart.find((chartRow) => chartRow.size === row.size)?.price_modifier ?? 0);
+                 return total + (basePrice + rowAddon + materialAddon + qualityAddon) * row.quantity;
+               }, 0);
+               const stockLimit = isProduct
+                 ? (productVariants.length > 0 ? Math.max(0, Number(selectedVariant?.stock_qty || 0)) : Math.max(0, Number(specModalItem.stock_qty || 0)))
+                 : Infinity;
+               const qty = hasSizeQuantityControls
+                 ? sizeQuantityTotal
+                 : Math.min(stockLimit, Math.max(1, parseInt(quantityInput, 10) || 1));
+              const totalPrice = isProduct ? unitPrice * qty : (hasSizeQuantityControls ? sizeEstimatedTotal : unitPrice * qty);
               const requiresDesignUpload = !isProduct && specModalItem.is_customizable !== false;
 
               return (
                 <div className="p-6 sm:p-7 space-y-5">
                   <div className={`flex items-start ${isProduct ? "gap-4" : ""}`}>
-                    {isProduct && (
-                      specModalItem.image_url ? (
-                        <Image src={specModalItem.image_url} alt={specModalItem.name} width={64} height={64} className="h-16 w-16 shrink-0 rounded-xl border border-slate-200 object-cover" />
+                     {isProduct && (
+                       productImages[0] ? (
+                         <Image src={productImages[selectedProductImageIndex] || productImages[0]} alt={specModalItem.name} width={64} height={64} className="h-16 w-16 shrink-0 rounded-xl border border-slate-200 object-cover" />
                       ) : (
                         <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-400">
                           <Package size={24} />
@@ -1307,12 +1479,27 @@ export default function BusinessDetailsPage({ params }) {
 
                   {isProduct && (
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      {productImages.length > 1 && <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+                        {productImages.map((image, index) => <button key={`${image}-${index}`} type="button" onClick={() => setSelectedProductImageIndex(index)} className={`h-12 w-12 shrink-0 overflow-hidden rounded-lg border-2 bg-white ${selectedProductImageIndex === index ? "border-[#EC008C]" : "border-slate-200"}`} aria-label={`View product image ${index + 1}`}><Image src={image} alt="" width={48} height={48} className="h-full w-full object-cover" /></button>)}
+                      </div>}
                       <p className="text-xs leading-relaxed text-slate-600">
                         {specModalItem.description || "A ready-made product you can add directly to your cart."}
                       </p>
                       <p className="mt-2 text-[11px] font-semibold text-slate-500">
-                        {Math.max(0, Number(specModalItem.stock_qty || 0))} available in stock
+                        {productVariants.length > 0 ? `${productVariants.reduce((total, variant) => total + variant.stock_qty, 0)} total available across variants` : `${Math.max(0, Number(specModalItem.stock_qty || 0))} available in stock`}
                       </p>
+                    </div>
+                  )}
+
+                  {isProduct && productVariants.length > 0 && (
+                    <div>
+                      <label className="mb-1.5 block text-xs font-bold text-slate-800">Choose a variant</label>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {productVariants.map((variant) => {
+                          const isSelected = selectedVariant?.id === variant.id;
+                          return <button key={variant.id} type="button" onClick={() => { setSelectedVariantId(variant.id); setQuantityInput("1"); }} disabled={variant.stock_qty <= 0} className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors ${isSelected ? "border-[#EC008C] bg-[#FFF0F8]" : "border-slate-200 bg-white hover:border-[#EC008C]/50"} disabled:cursor-not-allowed disabled:opacity-45`}><span className="min-w-0"><span className="block truncate text-xs font-bold text-slate-900">{variant.name}</span>{variant.sku && <span className="mt-0.5 block text-[10px] text-slate-400">SKU {variant.sku}</span>}</span><span className="shrink-0 text-right"><span className="block text-xs font-black text-slate-900">₱{variant.price.toFixed(2)}</span><span className="block text-[10px] text-slate-500">{variant.stock_qty > 0 ? `${variant.stock_qty} left` : "Out of stock"}</span></span></button>;
+                        })}
+                      </div>
                     </div>
                   )}
 
@@ -1430,28 +1617,47 @@ export default function BusinessDetailsPage({ params }) {
                     </div>
                   )}
 
-                  {/* Size Selection */}
+                  {/* Size quantities */}
                   {specs.allowed_sizes && specs.allowed_sizes.length > 0 && (
                     <div>
-                      <label className="block text-xs font-bold text-slate-800 mb-1.5">Select Print Size</label>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="mb-2 flex items-end justify-between gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-800">Choose sizes and quantities</label>
+                          <p className="mt-1 text-[10px] text-slate-500">Set the quantity for every size you need before sending one quote request.</p>
+                        </div>
+                        {!isProduct && <span className="shrink-0 rounded-full bg-[#FFF0F8] px-2.5 py-1 text-[10px] font-black text-[#EC008C]">{sizeQuantityTotal} total</span>}
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                         {specs.allowed_sizes.map((sz) => {
                           const isSel = selectedSize === sz;
+                          const sizeQty = Math.max(0, Number.parseInt(sizeQuantities[sz], 10) || 0);
                           const addon = Number(modifiers[sz] ?? visibleSizeChart.find((row) => row.size === sz)?.price_modifier ?? 0);
                           return (
-                            <button
-                              key={sz}
-                              type="button"
-                              onClick={() => setSelectedSize(sz)}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
-                                isSel ? "bg-slate-900 text-white border-slate-900 shadow-sm" : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
-                              }`}
-                            >
-                              {sz} {addon > 0 && <span className="text-[#00FFFF] font-bold">(+₱{addon})</span>}
-                            </button>
+                            <div key={sz} className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition-colors ${sizeQty > 0 ? "border-[#EC008C] bg-[#FFF0F8]" : "border-slate-200 bg-white"}`}>
+                              <button type="button" onClick={() => { setSelectedSize(sz); if (sizeQty === 0) updateSizeQuantity(sz, 1); }} className="min-w-0 text-left">
+                                <span className={`block text-xs font-black ${isSel || sizeQty > 0 ? "text-slate-900" : "text-slate-700"}`}>{sz}</span>
+                                <span className="block text-[10px] text-slate-500">{addon > 0 ? `+₱${addon.toFixed(2)}` : "Base price"}</span>
+                              </button>
+                              {!isProduct ? (
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                  <button type="button" onClick={() => updateSizeQuantity(sz, sizeQty - 1)} aria-label={`Decrease ${sz} quantity`} className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-700 hover:border-[#EC008C]">
+                                    <Minus size={12} />
+                                  </button>
+                                  <input type="number" min="0" step="1" value={sizeQty} onChange={(event) => updateSizeQuantity(sz, event.target.value)} aria-label={`${sz} quantity`} className="w-14 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center text-xs font-black outline-none focus:border-[#EC008C]" />
+                                  <button type="button" onClick={() => updateSizeQuantity(sz, sizeQty + 1)} aria-label={`Increase ${sz} quantity`} className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-700 hover:border-[#EC008C]">
+                                    <Plus size={12} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <button type="button" onClick={() => setSelectedSize(sz)} className={`rounded-xl px-3 py-1.5 text-xs font-semibold ${isSel ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700"}`}>
+                                  Select
+                                </button>
+                              )}
+                            </div>
                           );
                         })}
                       </div>
+                      {!isProduct && sizeQuantityTotal === 0 && <p className="mt-2 text-[10px] font-semibold text-rose-600">Add at least one size quantity to continue.</p>}
                     </div>
                   )}
 
@@ -1524,21 +1730,24 @@ export default function BusinessDetailsPage({ params }) {
                   </div>
 
                   {/* Product price or non-binding service estimate */}
-                  <div className={`space-y-1.5 rounded-xl border p-4 text-xs ${isProduct ? "border-slate-200 bg-slate-50" : "border-amber-200 bg-amber-50"}`}>
-                    <div className="flex justify-between text-slate-600">
-                      <span>{isProduct ? "Base unit price:" : "Catalog starting price:"}</span>
-                      <span>₱{basePrice.toFixed(2)}</span>
-                    </div>
-                    {(sizeAddon > 0 || materialAddon > 0 || qualityAddon > 0) && (
+                    <div className={`space-y-1.5 rounded-xl border p-4 text-xs ${isProduct ? "border-slate-200 bg-slate-50" : "border-amber-200 bg-amber-50"}`}>
+                      <div className="flex justify-between text-slate-600">
+                        <span>{isProduct ? "Base unit price:" : "Catalog starting price:"}</span>
+                        <span>₱{basePrice.toFixed(2)}</span>
+                      </div>
+                    {!hasSizeQuantityControls && (sizeAddon > 0 || materialAddon > 0 || qualityAddon > 0) && (
                       <div className="flex justify-between text-[#EC008C] font-semibold">
                         <span>Selected Options Modifiers:</span>
                         <span>+₱{(sizeAddon + materialAddon + qualityAddon).toFixed(2)}</span>
                       </div>
                     )}
                     <div className="flex justify-between text-slate-900 font-extrabold text-sm pt-2 border-t border-slate-200">
-                      <span>{isProduct ? "Calculated unit price:" : "Estimated configuration:"}</span>
-                      <span>₱{unitPrice.toFixed(2)}</span>
+                      <span>{isProduct ? "Calculated unit price:" : hasSizeQuantityControls ? "Estimated total:" : "Estimated configuration:"}</span>
+                      <span>₱{(hasSizeQuantityControls ? sizeEstimatedTotal : unitPrice).toFixed(2)}</span>
                     </div>
+                    {hasSizeQuantityControls && sizeQuantityTotal > 0 && (
+                      <p className="pt-1 text-right text-[10px] font-semibold text-slate-500">{sizeQuantityTotal} total pieces across {sizeRows.length} size{sizeRows.length === 1 ? "" : "s"}</p>
+                    )}
                     {!isProduct && (
                       <p className="pt-2 text-[10px] leading-relaxed text-amber-800">
                         This is not the final charge. The shop will check your files, quantity, material, finishing, and deadline before sending a formal quote.
@@ -1548,40 +1757,47 @@ export default function BusinessDetailsPage({ params }) {
 
                   {/* Quantity & Cart Action */}
                   <div className="flex flex-col gap-4 pt-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-slate-700">Qty:</span>
-                      <button
-                        type="button"
-                        onClick={() => setQuantityInput(String(Math.max(1, (parseInt(quantityInput, 10) || 1) - 1)))}
-                        className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100"
-                      >
-                        <Minus size={14} />
-                      </button>
-                      <input
-                        type="number"
-                        min="1"
-                        value={quantityInput}
-                        onChange={(e) => setQuantityInput(e.target.value)}
-                        className="w-14 text-center border border-slate-200 rounded-lg py-1 text-xs font-bold"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setQuantityInput(String(Math.min(stockLimit, (parseInt(quantityInput, 10) || 1) + 1)))}
-                        className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100"
-                      >
-                        <Plus size={14} />
-                      </button>
-                    </div>
+                    {hasSizeQuantityControls ? (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                        <span className="font-bold text-slate-700">Total quantity: </span>
+                        <span className="font-black text-[#EC008C]">{sizeQuantityTotal}</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-700">Qty:</span>
+                        <button
+                          type="button"
+                          onClick={() => setQuantityInput(String(Math.max(1, (parseInt(quantityInput, 10) || 1) - 1)))}
+                          className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100"
+                        >
+                          <Minus size={14} />
+                        </button>
+                        <input
+                          type="number"
+                          min="1"
+                          value={quantityInput}
+                          onChange={(e) => setQuantityInput(e.target.value)}
+                          className="w-14 text-center border border-slate-200 rounded-lg py-1 text-xs font-bold"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setQuantityInput(String(Math.min(stockLimit, (parseInt(quantityInput, 10) || 1) + 1)))}
+                          className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100"
+                        >
+                          <Plus size={14} />
+                        </button>
+                      </div>
+                    )}
 
                     <button
                       type="button"
                       onClick={handleAddCustomizedService}
-                      disabled={designUploading}
+                      disabled={designUploading || (hasSizeQuantityControls && sizeQuantityTotal <= 0) || (isProduct && (!selectedVariant && productVariants.length > 0 || stockLimit <= 0))}
                       className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-6 py-3 text-xs font-bold text-white shadow-md transition-all hover:bg-[#EC008C] disabled:cursor-wait disabled:opacity-60 sm:w-auto"
                     >
                       {designUploading
                         ? (isProduct ? "Adding product…" : "Sending request…")
-                        : (isProduct ? `Add to Cart (₱${totalPrice.toFixed(2)})` : "Send quote request")}
+                        : (isProduct ? (stockLimit <= 0 ? "Out of stock" : `Add to Cart (₱${totalPrice.toFixed(2)})`) : "Send quote request")}
                       {isProduct ? <ArrowRight size={16} /> : <MessageSquare size={16} />}
                     </button>
                   </div>

@@ -70,6 +70,8 @@ test("review visibility and public reads are protected by the canonical migratio
 test("all map consumers normalize coordinates and keep Leaflet client-only", async () => {
   const coordinates = await source("lib/coordinates.js");
   const map = await source("components/MapComponent.jsx");
+  const roadRoute = await source("components/RoadRoute.jsx");
+  const roadRouteHelper = await source("lib/roadRoute.js");
   const picker = await source("components/owner/LocationPicker.jsx");
   const browse = await source("app/browse/page.jsx");
   const checkout = await source("app/checkout/[id]/page.jsx");
@@ -80,6 +82,13 @@ test("all map consumers normalize coordinates and keep Leaflet client-only", asy
   assert.match(map, /normalizeCoordinates\(business\?\.lat, business\?\.lng\)/);
   assert.match(map, /ResizeObserver/);
   assert.match(map, /clearTimeout\(moveTimer\)/);
+  assert.match(map, /RoadRoute/);
+  assert.doesNotMatch(map, /<Polyline/);
+  assert.match(roadRoute, /AbortController/);
+  assert.match(roadRoute, /fitBounds\(nextPositions/);
+  assert.match(roadRouteHelper, /router\.project-osrm\.org/);
+  assert.match(roadRouteHelper, /geometries=geojson/);
+  assert.match(roadRouteHelper, /parseRoadRoutePositions/);
   assert.match(map, /No verified shop locations are available yet/);
   assert.match(picker, /normalizeCoordinates/);
   assert.match(picker, /markerRef\.current\?\.remove\(\)/);

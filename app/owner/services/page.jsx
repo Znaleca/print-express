@@ -65,7 +65,6 @@ export default function OwnerServicesPage() {
 
     const draftMap = Object.fromEntries(
       (servicesData || [])
-        .filter((s) => s.item_type === "product")
         .map((s) => [s.id, String(Math.max(0, Number(s.stock_qty || 0)))])
     );
     setStockDrafts(draftMap);
@@ -117,9 +116,7 @@ export default function OwnerServicesPage() {
       throw new Error("No active shop profile found for your account. Please register your shop first.");
     }
 
-    const safeStockQty = values.item_type === "product"
-      ? Math.max(0, Number.parseInt(values.stock_qty || "0", 10))
-      : 0;
+    const safeStockQty = Math.max(0, Number.parseInt(values.stock_qty || "0", 10));
 
     // Save main service row without modifying existing table structure
     const mainPayload = {
@@ -135,7 +132,7 @@ export default function OwnerServicesPage() {
       specs_json: values.specs_json || {},
       image_url: values.image_url,
       stock_qty: safeStockQty,
-      low_stock_threshold: values.item_type === "product" ? Math.max(0, Number.parseInt(values.low_stock_threshold || "10", 10)) : 10,
+      low_stock_threshold: Math.max(0, Number.parseInt(values.low_stock_threshold || "10", 10)),
     };
 
     let serviceId = modal.item?.id;
@@ -149,14 +146,14 @@ export default function OwnerServicesPage() {
 
       if (insertErr) throw new Error(insertErr.message || "Failed to create service");
       serviceId = created.id;
-      if (values.item_type === "product" && safeStockQty > 0) {
+      if (safeStockQty > 0) {
         await supabase.from("inventory_movements").insert({
           business_id: businessId,
           service_id: serviceId,
           qty_change: safeStockQty,
           new_stock_qty: safeStockQty,
           reason: "RESTOCK",
-          note: "Initial stock on product creation",
+          note: "Initial quantity on catalog creation",
         });
       }
     } else {
@@ -271,7 +268,7 @@ export default function OwnerServicesPage() {
 
   const serviceCount = items.filter((item) => item.item_type === "service").length;
   const productCount = items.filter((item) => item.item_type === "product").length;
-  const lowStockCount = items.filter((item) => item.item_type === "product" && Number(item.stock_qty || 0) <= Number(item.low_stock_threshold || 10)).length;
+  const lowStockCount = items.filter((item) => Number(item.stock_qty || 0) > 0 && Number(item.stock_qty || 0) <= Number(item.low_stock_threshold || 10)).length;
   const normalizedSearch = searchQuery.trim().toLowerCase();
 
   const filteredItems = items.filter((item) => {
@@ -347,7 +344,7 @@ export default function OwnerServicesPage() {
           <History size={18} className="mt-0.5 shrink-0 text-[#009FA0]" />
           <div>
             <p className="font-black text-slate-900">How stock works</p>
-            <p className="mt-1 max-w-4xl leading-relaxed"><strong>Products</strong> use stock quantity and low-stock thresholds. Each successful order deducts the ordered quantity. <strong>Services</strong> are made to order and do not deduct stock.</p>
+            <p className="mt-1 max-w-4xl leading-relaxed"><strong>Products</strong> use stock quantity and low-stock thresholds; each successful checkout deducts the ordered quantity. <strong>Services</strong> can also have an available quantity or capacity for planning while quotes are reviewed. Set quantity to 0 for no fixed limit.</p>
           </div>
         </div>
 
@@ -407,7 +404,7 @@ export default function OwnerServicesPage() {
             {filteredItems.map((item) => {
               const isService = item.item_type === "service";
               const stock = Number(item.stock_qty || 0);
-              const lowStock = stock <= (item.low_stock_threshold || 10);
+              const lowStock = stock > 0 && stock <= (item.low_stock_threshold || 10);
               const specs = typeof item.specs_json === 'string' ? JSON.parse(item.specs_json) : (item.specs_json || {});
               const hasModifiers = Object.keys(specs.price_modifiers || {}).length > 0;
 
@@ -439,18 +436,20 @@ export default function OwnerServicesPage() {
                       <p className="text-xs text-slate-600 line-clamp-2">{item.description}</p>
                     )}
 
-                    {/* Stock Management for Products */}
-                    {!isService && (
+                    {/* Stock / Capacity Management */}
+                    {
                       <div className="p-3 rounded-xl bg-[#FCFCFA] border border-[#D8D6CE] space-y-2 text-xs">
                         <div className="flex items-center justify-between">
-                          <span className="font-semibold text-slate-700">Stock Inventory:</span>
+                          <span className="font-semibold text-slate-700">{isService ? "Available Capacity:" : "Stock Inventory:"}</span>
                           <span className={`font-bold ${lowStock ? "text-rose-600" : "text-emerald-600"}`}>
-                            {stock} units {lowStock && "(Low Stock)"}
+                            {stock > 0 ? `${stock} units ${lowStock ? "(Low Stock)" : ""}` : "No fixed limit"}
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
                           <input
                             type="number"
+                            min="0"
+                            step="1"
                             value={stockDrafts[item.id] ?? stock}
                             onChange={(e) => setStockDrafts((p) => ({ ...p, [item.id]: e.target.value }))}
                             className="w-20 px-2 py-1 bg-white border border-[#D8D6CE] rounded text-xs font-bold"
@@ -464,8 +463,8 @@ export default function OwnerServicesPage() {
                           </button>
                         </div>
                         <p className="text-[11px] text-slate-500">
-                          Products are ready to sell from stock. Services are made to order and do not use inventory.
-                        </p>
+                          {isService ? "Set a quantity or capacity for planning service requests. Use 0 for no fixed limit." : "Products are ready to sell from stock and deduct after checkout."}
+                          </p>
                         {(inventoryMovements[item.id] || []).length > 0 && (
                           <div className="pt-2 border-t border-[#D8D6CE] space-y-1">
                             <p className="flex items-center gap-1 text-[11px] font-bold text-slate-700">
@@ -480,7 +479,7 @@ export default function OwnerServicesPage() {
                           </div>
                         )}
                       </div>
-                    )}
+                    }
 
                     {/* Specs Summary Badges */}
                     {isService && (
