@@ -49,10 +49,14 @@ test("browse location permission states never create a fake customer marker", as
   assert.match(map, /routePoints = useMemo\(/);
   assert.match(map, /safeUserLocation && routeTarget/);
   assert.match(map, /safeUserLocation\.lat, safeUserLocation\.lng/);
-  assert.match(map, /const routeTarget = selected;/);
+  assert.match(map, /const nearest = mapBusinesses\.find\(\(business\) => business\.id === nearestBusinessId\)/);
+  assert.match(map, /const routeTarget = selected \|\| \(safeUserLocation \? nearest : null\)/);
+  assert.match(map, /Road route/);
   assert.match(map, /hasUserLocation/);
   assert.match(map, /shopPoints\?\.length > 1/);
   assert.match(map, /shopPoints\?\.length === 1/);
   assert.match(map, /center=\{center\}/);
   assert.match(browse, /setSelectedId\(null\);\s+navigator\.geolocation\.getCurrentPosition/);
+  assert.match(browse, /maximumAge: 0/);
+  assert.match(browse, /See nearby shops/);
 });

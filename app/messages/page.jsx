@@ -59,6 +59,14 @@ const getDesignProofMessages = (messages = []) => {
     });
 };
 
+const formatCatalogPriceRange = (minimum, maximum = minimum) => {
+  const lower = Number(minimum);
+  const upper = Math.max(lower, Number(maximum));
+  if (!Number.isFinite(lower) || !Number.isFinite(upper)) return null;
+  const format = (value) => `₱${value.toFixed(2)}`;
+  return upper > lower ? `${format(lower)}–${format(upper)}` : format(lower);
+};
+
 function MessagesInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -1083,6 +1091,18 @@ function MessagesInner() {
                                 {meta.selected_specs?.quality && <><dt className="text-slate-500">Quality</dt><dd className="text-right font-semibold">{meta.selected_specs.quality}</dd></>}
                                 <dt className="text-slate-500">Files</dt><dd className="text-right font-semibold">{meta.attachment_count || 0}</dd>
                               </dl>
+                              {formatCatalogPriceRange(
+                                meta.catalog_price_min_total ?? meta.catalog_estimate_total,
+                                meta.catalog_price_max_total ?? meta.catalog_estimate_total
+                              ) && (
+                                <div className="mt-3 rounded-lg border border-cyan-200 bg-white p-2 text-[10px]">
+                                  <div className="flex items-center justify-between gap-3 font-bold text-cyan-700">
+                                    <span>Catalog estimate</span>
+                                    <span>{formatCatalogPriceRange(meta.catalog_price_min_total ?? meta.catalog_estimate_total, meta.catalog_price_max_total ?? meta.catalog_estimate_total)} total</span>
+                                  </div>
+                                  <p className="mt-1 text-slate-500">Reference range only. The shop will verify your requirements and send the final quote.</p>
+                                </div>
+                              )}
                               {meta.selected_specs?.notes && <p className="mt-2 rounded-lg bg-white p-2 text-[11px] text-slate-600">{meta.selected_specs.notes}</p>}
                               {!meta.requires_seller_quote && m.content && (
                                 <p className="mt-3 whitespace-pre-wrap text-[11px] text-slate-600">{m.content}</p>

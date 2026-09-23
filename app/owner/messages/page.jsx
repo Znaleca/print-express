@@ -68,6 +68,14 @@ const getDesignProofMessages = (messages = []) => {
     });
 };
 
+const formatCatalogPriceRange = (minimum, maximum = minimum) => {
+  const lower = Number(minimum);
+  const upper = Math.max(lower, Number(maximum));
+  if (!Number.isFinite(lower) || !Number.isFinite(upper)) return null;
+  const format = (value) => `₱${value.toFixed(2)}`;
+  return upper > lower ? `${format(lower)}–${format(upper)}` : format(lower);
+};
+
 export default function OwnerMessagesPage() {
   const [user, setUser] = useState(null);
   const [conversations, setConversations] = useState([]);
@@ -1425,15 +1433,27 @@ export default function OwnerMessagesPage() {
                               {msg.metadata?.service_name && (
                                 <p className="font-black uppercase text-sm mb-1">{msg.metadata.service_name}</p>
                               )}
-                              <div className="my-2 grid grid-cols-2 gap-x-4 gap-y-1 border-y border-white/15 py-2 font-mono text-[9px] uppercase">
-                                <span className="opacity-60">Quantity</span><span className="text-right font-black">{msg.metadata?.quantity || 1}</span>
+                               <div className="my-2 grid grid-cols-2 gap-x-4 gap-y-1 border-y border-white/15 py-2 font-mono text-[9px] uppercase">
+                                 <span className="opacity-60">Quantity</span><span className="text-right font-black">{msg.metadata?.quantity || 1}</span>
                                 {msg.metadata?.selected_specs?.size && <><span className="opacity-60">Size</span><span className="text-right font-black">{msg.metadata.selected_specs.size}</span></>}
                                 {msg.metadata?.selected_specs?.size_breakdown?.length > 0 && <><span className="opacity-60">Sizes</span><span className="text-right font-black">{msg.metadata.selected_specs.size_breakdown.map((row) => `${row.size} × ${row.quantity}`).join(", ")}</span></>}
                                 {msg.metadata?.selected_specs?.material && <><span className="opacity-60">Material</span><span className="text-right font-black">{msg.metadata.selected_specs.material}</span></>}
                                 {msg.metadata?.selected_specs?.quality && <><span className="opacity-60">Quality</span><span className="text-right font-black">{msg.metadata.selected_specs.quality}</span></>}
-                                <span className="opacity-60">Attachments</span><span className="text-right font-black">{msg.metadata?.attachment_count || 0}</span>
-                              </div>
-                              {msg.metadata?.selected_specs?.notes && <p className="mb-2 border border-white/15 bg-white/5 p-2 text-xs font-bold">{msg.metadata.selected_specs.notes}</p>}
+                                 <span className="opacity-60">Attachments</span><span className="text-right font-black">{msg.metadata?.attachment_count || 0}</span>
+                               </div>
+                               {formatCatalogPriceRange(
+                                 msg.metadata?.catalog_price_min_total ?? msg.metadata?.catalog_estimate_total,
+                                 msg.metadata?.catalog_price_max_total ?? msg.metadata?.catalog_estimate_total
+                               ) && (
+                                 <div className="mb-2 rounded-lg border border-[#FFF200]/40 bg-[#FFF200]/10 p-2 font-mono text-[9px] uppercase">
+                                   <div className="flex items-center justify-between gap-3">
+                                     <span className="text-[#FFF200]">Catalog range to verify</span>
+                                     <span className="font-black text-[#FFF200]">{formatCatalogPriceRange(msg.metadata?.catalog_price_min_total ?? msg.metadata?.catalog_estimate_total, msg.metadata?.catalog_price_max_total ?? msg.metadata?.catalog_estimate_total)} total</span>
+                                   </div>
+                                   <p className="mt-1 opacity-70">Unit estimate: {formatCatalogPriceRange(msg.metadata?.catalog_price_min_unit ?? msg.metadata?.catalog_estimate_unit, msg.metadata?.catalog_price_max_unit ?? msg.metadata?.catalog_estimate_unit)} · Reference only; confirm requirements before sending the final quote.</p>
+                                 </div>
+                               )}
+                               {msg.metadata?.selected_specs?.notes && <p className="mb-2 border border-white/15 bg-white/5 p-2 text-xs font-bold">{msg.metadata.selected_specs.notes}</p>}
                               <p className="whitespace-pre-wrap text-sm font-bold italic opacity-80">{msg.content}</p>
                             </div>
                           ) : msg.message_type === 'refund_dispute' ? (

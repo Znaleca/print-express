@@ -770,6 +770,25 @@ export default function BusinessDetailsPage({ params }) {
           ? sizeBreakdown.reduce((total, row) => total + row.unit_price * row.quantity, 0)
           : (basePrice + sizeAddon + materialAddon + qualityAddon) * qty;
         const estimatedUnitPrice = qty > 0 ? estimatedTotal / qty : basePrice + sizeAddon + materialAddon + qualityAddon;
+        const catalogMaxBasePrice = Math.max(basePrice, Number(specModalItem.price_max || basePrice));
+        const catalogPriceRange = sizeBreakdown.length > 0
+          ? sizeBreakdown.reduce((range, row) => ({
+            unitMin: range.unitMin,
+            unitMax: range.unitMax,
+            totalMin: range.totalMin + row.unit_price * row.quantity,
+            totalMax: range.totalMax + (catalogMaxBasePrice + getSizeAddon(row.size) + materialAddon + qualityAddon) * row.quantity,
+          }), {
+            unitMin: Math.min(...sizeBreakdown.map((row) => row.unit_price)),
+            unitMax: Math.max(...sizeBreakdown.map((row) => catalogMaxBasePrice + getSizeAddon(row.size) + materialAddon + qualityAddon)),
+            totalMin: 0,
+            totalMax: 0,
+          })
+          : {
+            unitMin: basePrice + sizeAddon + materialAddon + qualityAddon,
+            unitMax: catalogMaxBasePrice + sizeAddon + materialAddon + qualityAddon,
+            totalMin: (basePrice + sizeAddon + materialAddon + qualityAddon) * qty,
+            totalMax: (catalogMaxBasePrice + sizeAddon + materialAddon + qualityAddon) * qty,
+          };
         const messageRows = [
           {
             conversation_id: conversation.id,
@@ -790,6 +809,10 @@ export default function BusinessDetailsPage({ params }) {
               selected_specs: selectedSpecs,
               catalog_estimate_unit: estimatedUnitPrice,
               catalog_estimate_total: estimatedTotal,
+              catalog_price_min_unit: catalogPriceRange.unitMin,
+              catalog_price_max_unit: catalogPriceRange.unitMax,
+              catalog_price_min_total: catalogPriceRange.totalMin,
+              catalog_price_max_total: catalogPriceRange.totalMax,
               attachment_count: uploadedDesigns.length,
               requires_seller_quote: true,
             },
@@ -821,7 +844,8 @@ export default function BusinessDetailsPage({ params }) {
         setSpecModalItem(null);
         setDesignFiles([]);
         setDesignUploadError("");
-        setQuoteRequestNotice(`Quote request sent for ${specModalItem.name}. You can keep browsing while the shop reviews it.`);
+        setQuoteRequestNotice(`Quote request sent for ${specModalItem.name}.`);
+        router.push(`/messages?business=${business.id}&conversation=${conversation.id}`);
         return;
       }
 

@@ -16,7 +16,9 @@ test("quote requests and acceptance stay in context and expose the cart action",
   const ownerMessages = await source("app/owner/messages/page.jsx");
 
   assert.match(shop, /Quote request sent for/);
-  assert.doesNotMatch(shop, /router\.push\(`\/messages\?business=\$\{business\.id\}`\)/);
+  assert.match(shop, /router\.push\(`\/messages\?business=\$\{business\.id\}&conversation=\$\{conversation\.id\}`\)/);
+  assert.match(shop, /catalog_price_min_total/);
+  assert.match(shop, /catalog_price_max_total/);
 
   assert.match(ownerMessages, /selectedQuoteProofId/);
   assert.match(ownerMessages, /Design version for this quote/);
@@ -31,10 +33,12 @@ test("quote requests and acceptance stay in context and expose the cart action",
   assert.match(customerMessages, /designVersions\.length > 0 && !selectedDesign/);
   assert.match(customerMessages, /\.subscribe\(\(status\) =>/);
   assert.match(customerMessages, /fetchMessages\(activeConv\.id, true, msgLimitRef\.current\)/);
+  assert.match(customerMessages, /Catalog estimate/);
   assert.doesNotMatch(customerMessages, /Accept quote &amp; continue to checkout/);
 
   assert.match(ownerMessages, /Customer accepted quote/);
   assert.match(ownerMessages, /Customer accepted · added to cart/);
+  assert.match(ownerMessages, /Catalog range to verify/);
   assert.match(ownerMessages, /\.subscribe\(\(status\) =>/);
   assert.match(ownerMessages, /fetchMessages\(activeConv\.id, true\)/);
 });

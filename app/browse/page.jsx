@@ -80,7 +80,7 @@ function BrowsePageContent() {
         setLocationLoading(false);
         setLocationStatus(error?.code === 1 ? "denied" : error?.code === 3 ? "timeout" : "unavailable");
       },
-      { enableHighAccuracy: true, timeout: 7000 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   };
 
@@ -500,11 +500,12 @@ function BrowsePageContent() {
               onClick={requestLocation}
               disabled={locationLoading}
               aria-busy={locationLoading}
-              title={locationLoading ? "Finding your location" : "Use your device location to sort shops by distance"}
+              title={locationLoading ? "Finding your location" : "Use your current device location to find nearby shops"}
+              aria-label={locationLoading ? "Finding your current location" : userLocation ? "Refresh nearby shops using my current location" : "See nearby shops using my current location"}
               className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] font-bold text-white/75 transition-colors hover:border-[#00FFFF]/50 hover:text-white disabled:cursor-wait disabled:opacity-60"
             >
               <UserRound size={13} className="text-[#FFF200]" aria-hidden="true" />
-              {locationLoading ? "Finding your location..." : userLocation ? "Showing nearby shops" : "Use my location"}
+              {locationLoading ? "Finding your location..." : userLocation ? "Refresh nearby" : "See nearby shops"}
             </button>
             {nearestBusiness && (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-[#FFF200]/45 bg-[#FFF200]/10 px-3 py-1.5 text-[11px] font-bold text-[#FFF200]">

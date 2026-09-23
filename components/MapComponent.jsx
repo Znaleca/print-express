@@ -223,10 +223,10 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
     })
   ), [mapBusinesses, nearestBusinessId, selectedBusinessId]);
   const selected = mapBusinesses.find((b) => b.id === selectedBusinessId);
-  // The user's location is the map's anchor after location lookup. Do not
-  // automatically fit to the nearest shop on the first location update: that
-  // makes the viewport jump away from the customer's real position.
-  const routeTarget = selected;
+  // With a real user location, always show a road route to the nearest mapped
+  // shop. A manually selected shop still takes priority for its own route.
+  const nearest = mapBusinesses.find((business) => business.id === nearestBusinessId);
+  const routeTarget = selected || (safeUserLocation ? nearest : null);
   const routePoints = useMemo(
     () => (safeUserLocation && routeTarget
       ? [[safeUserLocation.lat, safeUserLocation.lng], [routeTarget.lat, routeTarget.lng]]
@@ -366,6 +366,7 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <span className="inline-flex items-center gap-1.5"><UserRound size={17} strokeWidth={2.5} className="rounded-full bg-[#FFF200] p-0.5 text-[#1A1A1A]" aria-hidden="true" /> Your location</span>
             <span className="inline-flex items-center gap-1.5"><MapPin size={17} strokeWidth={2.5} className="text-[#00AFC0]" aria-hidden="true" /> Printing shop</span>
+            {routePoints && <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-5 rounded-full bg-[#EC008C]" aria-hidden="true" /> Road route</span>}
           </div>
         </div>
       </div>
