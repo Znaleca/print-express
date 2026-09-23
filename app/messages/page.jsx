@@ -737,7 +737,7 @@ function MessagesInner() {
                         </button>
                       </div>
                     )}
-                    {messages.filter((m) => m.message_type !== "video_call" && !String(m.content || "").startsWith("[VIDEO_CALL_")).map((m) => {
+                    {messages.filter((m) => !String(m.content || "").startsWith("[VIDEO_CALL_")).map((m) => {
                     const isMe = m.sender_id === user?.id;
                     const meta = m.metadata || {};
                     const uploadName = meta.file_name || "Uploaded file";
@@ -791,7 +791,7 @@ function MessagesInner() {
                                    {isSchedulingInvite && <p className="mt-1 text-[11px] opacity-80">The shop invited you to choose any open time from its calendar.</p>}
                                    {isRescheduleRequested && <p className="mt-1 text-[11px] opacity-80">The shop asked you to choose another available time.</p>}
                                    {isPendingOwnerConfirmation && <p className="mt-1 text-[11px] opacity-80">Requested for {formatMeetingDateTime(call.requested_slot_at, call.booking_timezone || "Asia/Manila")}. Waiting for the owner to confirm.</p>}
-                                   {isPendingCustomerConfirmation && <p className="mt-1 text-[11px] opacity-80">The owner proposed {formatMeetingDateTime(call.requested_slot_at, call.booking_timezone || "Asia/Manila")}.</p>}
+                                    {isPendingCustomerConfirmation && <p className="mt-1 text-[11px] opacity-80">The shop confirmed this time and is waiting for you to accept it: {formatMeetingDateTime(call.requested_slot_at, call.booking_timezone || "Asia/Manila")}.</p>}
                                   {isScheduled && call?.scheduled_at && <p className="mt-1 text-[11px] opacity-80">{new Date(call.scheduled_at).toLocaleString()}</p>}
                                   {isScheduled && <p className="mt-1 text-[11px] opacity-60">Join from 15 minutes before the scheduled time. The secure room closes 30 minutes after.</p>}
                                    {isScheduled && call && (

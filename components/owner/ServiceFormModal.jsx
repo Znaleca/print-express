@@ -277,6 +277,17 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
       const categoryAllowedSizes = initialCategoryPreset
         ? initialAllowedSizes.filter((size) => !SIZE_PRESETS.includes(size) || initialCategoryPreset.options.includes(size))
         : initialAllowedSizes;
+      const initialSizeChart = Array.isArray(existingSpecs.size_chart) ? existingSpecs.size_chart : [];
+      const chartSizes = initialSizeChart.map((row) => String(row?.size || "").trim()).filter(Boolean);
+      const apparelSizes = initialCategoryPreset?.key === "apparel"
+        ? [
+          ...initialCategoryPreset.options.filter((size) => categoryAllowedSizes.includes(size) || chartSizes.includes(size)),
+          ...new Set([
+            ...categoryAllowedSizes.filter((size) => !initialCategoryPreset.options.includes(size)),
+            ...chartSizes.filter((size) => !initialCategoryPreset.options.includes(size)),
+          ]),
+        ]
+        : categoryAllowedSizes;
       const hasConfiguredMaterials = Array.isArray(existingSpecs.allowed_materials) && existingSpecs.allowed_materials.length > 0;
       const hasConfiguredQualities = Array.isArray(existingSpecs.quality_levels) && existingSpecs.quality_levels.length > 0;
       const initialMaterials = hasConfiguredMaterials
@@ -302,14 +313,16 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
         low_stock_threshold: initialValues.low_stock_threshold != null ? String(initialValues.low_stock_threshold) : "10",
         is_customizable:      initialValues.is_customizable !== false,
         specs: {
-          allowed_sizes:     categoryAllowedSizes,
+          allowed_sizes:     apparelSizes,
           allowed_materials: initialMaterials,
           quality_levels:    initialQualities,
           price_modifiers:   existingSpecs.price_modifiers || {},
-          default_size:      categoryAllowedSizes.includes(existingSpecs.default_size) ? existingSpecs.default_size : null,
+          default_size:      apparelSizes.includes(existingSpecs.default_size) ? existingSpecs.default_size : (apparelSizes[0] || null),
           default_material:  initialMaterials.includes(existingSpecs.default_material) ? existingSpecs.default_material : (initialMaterials[0] || null),
           default_quality:   initialQualities.includes(existingSpecs.default_quality) ? existingSpecs.default_quality : (initialQualities[0] || null),
-          size_chart:        Array.isArray(existingSpecs.size_chart) ? existingSpecs.size_chart : [],
+          size_chart:        initialCategoryPreset?.key === "apparel"
+            ? mergeSizeChartRows(apparelSizes, initialSizeChart, existingSpecs.price_modifiers || {})
+            : initialSizeChart,
           image_urls:        Array.isArray(existingSpecs.image_urls) ? existingSpecs.image_urls : [],
           variants:          normalizeProductVariants(existingSpecs.variants),
           is_customizable:   existingSpecs.is_customizable !== false,
@@ -436,14 +449,22 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
       const previous = chart[index] || {};
       chart[index] = { ...previous, [key]: value };
       const modifiers = { ...(f.specs?.price_modifiers || {}) };
+      const nextSpecs = { ...(f.specs || {}), size_chart: chart, price_modifiers: modifiers };
       if (key === "size") {
-        if (previous.size) delete modifiers[previous.size];
-        if (value.trim()) modifiers[value.trim()] = previous.price_modifier || "0";
+        const previousSize = String(previous.size || "").trim();
+        const nextSize = String(value || "").trim();
+        if (previousSize) delete modifiers[previousSize];
+        if (nextSize) modifiers[nextSize] = previous.price_modifier || "0";
+
+        const nextAllowedSizes = (f.specs?.allowed_sizes || []).filter((size) => size !== previousSize);
+        if (nextSize && !nextAllowedSizes.includes(nextSize)) nextAllowedSizes.push(nextSize);
+        nextSpecs.allowed_sizes = nextAllowedSizes;
+        if (f.specs?.default_size === previousSize) nextSpecs.default_size = nextSize || nextAllowedSizes[0] || "";
       }
       if (key === "price_modifier" && chart[index].size) {
         modifiers[chart[index].size] = value;
       }
-      return { ...f, specs: { ...(f.specs || {}), size_chart: chart, price_modifiers: modifiers } };
+      return { ...f, specs: nextSpecs };
     });
   };
 
@@ -463,14 +484,17 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
   const applyTshirtSizeChart = () => {
     setForm((f) => {
       const currentSizes = f.specs?.allowed_sizes || [];
+      const customSizes = currentSizes.filter((size) => !SIZE_PRESETS.includes(size));
+      const nextSizes = [...TSHIRT_SIZE_CHART.map((row) => row.size), ...customSizes]
+        .filter((size, index, list) => list.indexOf(size) === index);
       const modifiers = { ...(f.specs?.price_modifiers || {}) };
       TSHIRT_SIZE_CHART.forEach((row) => { modifiers[row.size] = row.price_modifier; });
       return {
         ...f,
         specs: {
           ...(f.specs || {}),
-          allowed_sizes: [...currentSizes, ...TSHIRT_SIZE_CHART.map((row) => row.size)].filter((size, index, list) => list.indexOf(size) === index),
-          size_chart: TSHIRT_SIZE_CHART.map((row) => ({ ...row })),
+          allowed_sizes: nextSizes,
+          size_chart: mergeSizeChartRows(nextSizes, f.specs?.size_chart || [], modifiers),
           price_modifiers: modifiers,
           default_size: f.specs?.default_size || "S",
         },
@@ -670,6 +694,27 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
         ].slice(0, MAX_PRODUCT_VARIANTS),
       },
     }));
+  };
+
+  const removeSizeChartRow = (index) => {
+    setForm((f) => {
+      const chart = [...(f.specs?.size_chart || [])];
+      const removedSize = String(chart[index]?.size || "").trim();
+      const nextChart = chart.filter((_, rowIndex) => rowIndex !== index);
+      const nextModifiers = { ...(f.specs?.price_modifiers || {}) };
+      if (removedSize) delete nextModifiers[removedSize];
+      const nextAllowedSizes = (f.specs?.allowed_sizes || []).filter((size) => size !== removedSize);
+      return {
+        ...f,
+        specs: {
+          ...(f.specs || {}),
+          allowed_sizes: nextAllowedSizes,
+          default_size: f.specs?.default_size === removedSize ? (nextAllowedSizes[0] || "") : f.specs?.default_size,
+          size_chart: nextChart,
+          price_modifiers: nextModifiers,
+        },
+      };
+    });
   };
 
   const updateVariant = (variantId, key, value) => {
@@ -1017,7 +1062,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
             </div>
           </div>
 
-          {hasConfigurableOptions && (
+          {hasConfigurableOptions && !isApparel && (
             <div id="category-size-selection" className="scroll-mt-6 rounded-2xl border-2 border-[#00AFC0]/30 bg-[#F3FFFF] p-4 sm:p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -1235,7 +1280,7 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
                   <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-900 text-xs font-black text-[#00FFFF]">4</span>
                   <div>
                     <p className="flex items-center gap-1.5 text-sm font-black text-slate-900"><Sparkles size={15} className="text-[#EC008C]" /> Other customer choices</p>
-                    <p className="mt-1 text-[10px] text-slate-500">Optional {categoryOptionConfig.materialLabel.toLowerCase()} and {categoryOptionConfig.qualityLabel.toLowerCase()}. Sizes are configured above.</p>
+                    <p className="mt-1 text-[10px] text-slate-500">Optional {categoryOptionConfig.materialLabel.toLowerCase()} and {categoryOptionConfig.qualityLabel.toLowerCase()}. {isApparel ? "Clothing sizes are configured once in the chart below." : "Sizes are configured above."}</p>
                   </div>
                 </div>
                 {isService && (
@@ -1255,14 +1300,17 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
                 <div className="rounded-xl border border-fuchsia-200 bg-fuchsia-50/60 p-3 space-y-3">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
-                      <p className="text-[11px] font-bold text-slate-900">T-shirt size chart & size pricing</p>
-                      <p className="mt-1 text-[10px] leading-relaxed text-slate-500">Checked clothing sizes are added here automatically. Edit measurements and add-on prices before saving.</p>
+                      <p className="text-[11px] font-bold text-slate-900">Available clothing sizes</p>
+                      <p className="mt-1 text-[10px] leading-relaxed text-slate-500">Add each size once. The rows below control what customers can order and any size add-on price.</p>
                     </div>
-                    <button type="button" onClick={applyTshirtSizeChart} className="rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-bold text-white hover:bg-[#EC008C]">
-                      Use standard clothing chart
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-[#C40075] ring-1 ring-fuchsia-200">{(form.specs?.allowed_sizes || []).length} selected</span>
+                      <button type="button" onClick={applyTshirtSizeChart} className="rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-bold text-white hover:bg-[#EC008C]">
+                        Use all standard sizes
+                      </button>
+                    </div>
                   </div>
-                  {(form.specs?.size_chart || []).length > 0 && (
+                  {(form.specs?.size_chart || []).length > 0 ? (
                     <div className="overflow-x-auto rounded-lg border border-fuchsia-200 bg-white">
                       <table className="min-w-[680px] w-full text-left text-[10px]">
                         <thead className="bg-slate-900 text-white">
@@ -1293,17 +1341,30 @@ export default function ServiceFormModal({ mode, initialValues, onSave, onClose,
                                 </td>
                               ))}
                               <td className="px-2 py-2 text-center">
-                                <button type="button" onClick={() => setForm((f) => ({ ...f, specs: { ...(f.specs || {}), size_chart: (f.specs?.size_chart || []).filter((_, rowIndex) => rowIndex !== index) } }))} className="rounded-md p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" aria-label={`Remove size row ${index + 1}`}>
-                                  <Trash2 size={13} />
-                                </button>
+                                  <button type="button" onClick={() => removeSizeChartRow(index)} className="rounded-md p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" aria-label={`Remove size row ${index + 1}`}>
+                                    <Trash2 size={13} />
+                                  </button>
                               </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-fuchsia-200 bg-white p-3 text-[10px] leading-relaxed text-slate-500">
+                      No clothing sizes yet. Use all standard sizes or add a custom row below.
+                    </div>
                   )}
                   <button type="button" onClick={addSizeChartRow} className="inline-flex items-center gap-1.5 rounded-lg border border-fuchsia-200 bg-white px-3 py-2 text-[10px] font-bold text-slate-700 hover:border-[#EC008C] hover:text-[#EC008C]"><Plus size={13} /> Add size row</button>
+                  {(form.specs?.allowed_sizes || []).length > 0 && (
+                    <label className="block max-w-sm text-[10px] font-bold text-slate-600">
+                      Default size
+                      <select value={form.specs?.default_size || ""} onChange={(event) => setDefaultSpec("default_size", event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium outline-none focus:border-[#EC008C]">
+                        <option value="">Select default size</option>
+                        {(form.specs?.allowed_sizes || []).map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    </label>
+                  )}
                 </div>
               )}
 

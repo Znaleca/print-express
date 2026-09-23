@@ -11,7 +11,7 @@ import { calculateDeliveryFeeFromDistance, DEFAULT_DELIVERY_SETTINGS, DELIVERY_R
 import { formatPesoAmount } from "@/lib/paymentSummary";
 import { startMinuteAlignedRefresh } from "@/lib/openStateRefresh";
 import {
-  Store, Save, Loader2, UploadCloud, QrCode, Power, MapPin, MapPinned, Truck,
+  Store, Save, Loader2, UploadCloud, QrCode, Power, MapPin, MapPinned, LocateFixed, Truck,
   CheckCircle2, ShieldCheck, Phone, Mail, ExternalLink, Info, Clock, RotateCcw
 } from "lucide-react";
 
@@ -75,6 +75,7 @@ export default function ShopProfilePage() {
   const [profileValidationError, setProfileValidationError] = useState("");
   const [deliveryValidationErrors, setDeliveryValidationErrors] = useState({});
   const [addressLookupStatus, setAddressLookupStatus] = useState("idle");
+  const [locatingCurrentLocation, setLocatingCurrentLocation] = useState(false);
   const addressLookupControllerRef = useRef(null);
   const addressEditVersionRef = useRef(0);
   const addressLookupIdRef = useRef(0);
@@ -436,6 +437,36 @@ export default function ShopProfilePage() {
       clearTimeout(timeoutId);
       if (addressLookupControllerRef.current === controller) addressLookupControllerRef.current = null;
     }
+  };
+
+  const handleUseCurrentLocation = () => {
+    if (locatingCurrentLocation) return;
+    if (!navigator.geolocation) {
+      setAddressLookupStatus("error");
+      showToast("Your browser does not support location access.", "error");
+      return;
+    }
+
+    setLocatingCurrentLocation(true);
+    setAddressLookupStatus("loading");
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        handleLocationChange(coords.latitude, coords.longitude).finally(() => {
+          setLocatingCurrentLocation(false);
+        });
+      },
+      (error) => {
+        setLocatingCurrentLocation(false);
+        setAddressLookupStatus("error");
+        const message = error.code === 1
+          ? "Location access was blocked. Allow it in your browser, then try again."
+          : error.code === 3
+            ? "We could not get your location in time. Try again."
+            : "We could not get your current location. Try again.";
+        showToast(message, "error");
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
   };
 
   const hasUnsavedChanges = Boolean(initialForm) && (
@@ -999,9 +1030,20 @@ export default function ShopProfilePage() {
                     <h2 className="mt-1 text-xl font-black text-slate-900">Help customers find you</h2>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">Add a clear address and place the marker at your shop entrance.</p>
                   </div>
-                  <span className={`inline-flex items-center gap-1.5 self-start rounded-full px-3 py-1.5 text-[10px] font-bold ${hasMapCoordinates ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-                    <MapPin size={12} /> {hasMapCoordinates ? "Map pin ready" : "Map pin needed"}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleUseCurrentLocation}
+                      disabled={locatingCurrentLocation || saving}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-[#00AFC0]/40 bg-[#EFFFFF] px-3 py-1.5 text-[10px] font-black text-[#007F8A] transition-colors hover:border-[#00AFC0] hover:bg-[#00FFFF]/30 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {locatingCurrentLocation ? <Loader2 size={12} className="animate-spin" /> : <LocateFixed size={12} />}
+                      {locatingCurrentLocation ? "Locating…" : "Use my current location"}
+                    </button>
+                    <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[10px] font-bold ${hasMapCoordinates ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                      <MapPin size={12} /> {hasMapCoordinates ? "Map pin ready" : "Map pin needed"}
+                    </span>
+                  </div>
                 </div>
                 <label className="mt-5 block">
                   <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Address <span className="text-[#EC008C]">*</span></span>

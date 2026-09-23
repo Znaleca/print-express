@@ -241,9 +241,13 @@ export async function POST(request) {
     const call = Array.isArray(data) ? data[0] : data;
     if (!call) return NextResponse.json({ error: "The meeting was not saved. Please choose the time again." }, { status: 500 });
     let notification = null;
-    let notificationType = { book: "BOOKED", start_now: "BOOKED", invite_to_schedule: "SCHEDULING_INVITE", confirm: "CONFIRMED", schedule: "CONFIRMED", reschedule: "RESCHEDULED", request_reschedule: "RESCHEDULE_REQUESTED", cancel: "CANCELLED" }[action];
+    // Scheduling invites and proposals are chat-first. The chat card is the
+    // action surface; email is sent only after a meeting is actually booked
+    // or both sides have completed a confirmation flow.
+    let notificationType = { book: "BOOKED", start_now: "BOOKED", confirm: "CONFIRMED", schedule: "CONFIRMED", reschedule: "RESCHEDULED", request_reschedule: "RESCHEDULE_REQUESTED", cancel: "CANCELLED" }[action];
     if (action === "reschedule" && call.status === "REQUESTED") notificationType = null;
-    if (["schedule", "confirm"].includes(action) && (previousCall?.rescheduled_from_at || Number(previousCall?.reschedule_count || 0) > 0)) notificationType = "RESCHEDULED";
+    if (["confirm", "schedule"].includes(action) && call.status !== "SCHEDULED") notificationType = null;
+    if (["schedule", "confirm"].includes(action) && call.status === "SCHEDULED" && (previousCall?.rescheduled_from_at || Number(previousCall?.reschedule_count || 0) > 0)) notificationType = "RESCHEDULED";
     if (call && notificationType) notification = await sendMeetingNotification({ admin: auth.admin, call, eventType: notificationType });
     return NextResponse.json({
       success: true,

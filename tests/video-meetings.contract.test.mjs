@@ -32,8 +32,8 @@ test("owner and customer chats expose the current schedule and cancellation acti
   assert.match(customerMessages, /setShowMeetingView\(true\)/);
   assert.match(customerMessages, /cancelVideoCall\(call\.id\)/);
   assert.match(customerMessages, /View schedule/);
-  assert.match(ownerMessages, /message_type !== "video_call"/);
-  assert.match(customerMessages, /message_type !== "video_call"/);
+  assert.match(ownerMessages, /message_type === "video_call"/);
+  assert.match(customerMessages, /message_type === "video_call"/);
   assert.match(modal, /readOnly = false/);
   assert.match(modal, /onCancelMeeting/);
   assert.match(modal, /Cancel this meeting\?/);
@@ -224,7 +224,7 @@ test("customer scheduling invites and accepted proposals use the correct email t
   const email = source("lib/meetingEmail.js");
   const customer = source("app/messages/page.jsx");
 
-  assert.match(route, /invite_to_schedule: "SCHEDULING_INVITE"/);
+  assert.doesNotMatch(route, /invite_to_schedule: "SCHEDULING_INVITE"/);
   assert.doesNotMatch(route, /propose: "CONFIRMED"/);
   assert.match(email, /eventType === "SCHEDULING_INVITE"/);
   assert.match(email, /schedule=1/);
@@ -234,6 +234,21 @@ test("customer scheduling invites and accepted proposals use the correct email t
   assert.match(migration, /source', 'accepted_owner_proposal'/i);
   assert.match(migration, /status = 'SCHEDULED'/i);
   assert.match(route, /confirm: "CONFIRMED"/);
+});
+
+test("owner scheduling choices stay chat-first and allow their newer message events", () => {
+  const migration = source("supabase/migrations/20260924120000_fix_video_call_chat_events.sql");
+  const route = source("app/api/video-calls/route.js");
+  const customer = source("app/messages/page.jsx");
+  const owner = source("app/owner/messages/page.jsx");
+
+  assert.doesNotMatch(route, /invite_to_schedule: "SCHEDULING_INVITE"/);
+  assert.match(route, /\["confirm", "schedule"\]\.includes\(action\) && call\.status !== "SCHEDULED"/);
+  assert.match(migration, /'scheduling_invite',\s*'proposed',\s*'rescheduled',\s*'reschedule_requested'/i);
+  assert.doesNotMatch(customer, /messages\.filter\(\(m\) => m\.message_type !== "video_call"/);
+  assert.doesNotMatch(owner, /messages\.filter\(\(msg\) => msg\.message_type !== "video_call"/);
+  assert.match(owner, /Send an open scheduling link in this chat/);
+  assert.match(owner, /Send the proposed time in chat/);
 });
 
 test("customer reschedules require owner confirmation before sending the reschedule email", () => {
