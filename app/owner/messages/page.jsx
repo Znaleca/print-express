@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import {
   MessageSquare, Send, Loader2,
   ChevronRight, ChevronLeft, ImagePlus, Pencil, Trash2, Check, X, MoreVertical, Video, Calendar, Banknote, FileText,
-  Sparkles, Plus, RotateCcw, Save
+  Sparkles, Plus, RotateCcw, Save, CheckCircle2
 } from "lucide-react";
 import {
   CHAT_IMAGES_BUCKET,
@@ -52,6 +52,22 @@ const getUploadProfile = (file) => {
   return { extension, mime, fileType, quality };
 };
 
+const getDesignProofMessages = (messages = []) => {
+  const seen = new Set();
+  return [...messages]
+    .filter((message) => (
+      message.message_type === "design_version"
+      && message.metadata?.proof_id
+      && message.metadata?.version
+    ))
+    .filter((message) => {
+      const proofId = String(message.metadata.proof_id);
+      if (seen.has(proofId)) return false;
+      seen.add(proofId);
+      return true;
+    });
+};
+
 export default function OwnerMessagesPage() {
   const [user, setUser] = useState(null);
   const [conversations, setConversations] = useState([]);
@@ -76,6 +92,7 @@ export default function OwnerMessagesPage() {
   const [quoteTax, setQuoteTax] = useState("");
   const [quoteDiscount, setQuoteDiscount] = useState("");
   const [quoteTerms, setQuoteTerms] = useState("Includes prepress review, proofing, print production, and standard finishing unless stated otherwise.");
+  const [selectedQuoteProofId, setSelectedQuoteProofId] = useState("");
   const [showDesign, setShowDesign] = useState(false);
   const [designVersion, setDesignVersion] = useState("1");
   const [videoCallSession, setVideoCallSession] = useState(null);
@@ -85,6 +102,7 @@ export default function OwnerMessagesPage() {
   const [showMeetingBooking, setShowMeetingBooking] = useState(false);
   const [showMeetingView, setShowMeetingView] = useState(false);
   const [viewImagePopup, setViewImagePopup] = useState(null); // { url, label }
+  const [realtimeStatus, setRealtimeStatus] = useState("OFFLINE");
   const [showQuestionEditor, setShowQuestionEditor] = useState(false);
   const [questionDrafts, setQuestionDrafts] = useState([]);
   const [questionEditorError, setQuestionEditorError] = useState("");
@@ -251,6 +269,7 @@ export default function OwnerMessagesPage() {
   const openConversation = (conv) => {
     setActiveConv(conv);
     setMessages([]);
+    setSelectedQuoteProofId("");
     setMsgLimit(20);
     setHasMoreMsgs(false);
     setUnreadByConv((prev) => ({ ...prev, [conv.id]: 0 }));
@@ -259,13 +278,17 @@ export default function OwnerMessagesPage() {
 
   /* ── 4. Load messages + subscribe realtime + poll fallback ── */
   useEffect(() => {
-    if (!activeConv) return;
+    if (!activeConv) {
+      setRealtimeStatus("OFFLINE");
+      return undefined;
+    }
 
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
     }
 
+    setRealtimeStatus("CONNECTING");
     fetchMessages(activeConv.id, false, msgLimit);
 
     const channel = supabase
@@ -288,12 +311,16 @@ export default function OwnerMessagesPage() {
           await loadConversations(true);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") setRealtimeStatus("LIVE");
+        if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) setRealtimeStatus("RECONNECTING");
+      });
 
     channelRef.current = channel;
 
     return () => {
       if (channelRef.current) supabase.removeChannel(channelRef.current);
+      setRealtimeStatus("OFFLINE");
     };
   }, [activeConv]);
 
@@ -339,24 +366,35 @@ export default function OwnerMessagesPage() {
 
     if (prepend) setLoadingOlderMsgs(true);
     else if (!isBg) setLoadingMsgs(true);
-    const { data, count } = await supabase
-      .from("chat_messages")
-      .select("*", { count: "exact" })
-      .eq("conversation_id", convId)
-      .order("created_at", { ascending: false })
-      .limit(limit);
+    const [{ data, count }, { data: designRows }] = await Promise.all([
+      supabase
+        .from("chat_messages")
+        .select("*", { count: "exact" })
+        .eq("conversation_id", convId)
+        .order("created_at", { ascending: false })
+        .limit(limit),
+      // Keep every design version available to the owner even when the rest
+      // of the conversation is limited to the latest messages.
+      supabase
+        .from("chat_messages")
+        .select("*")
+        .eq("conversation_id", convId)
+        .eq("message_type", "design_version")
+        .order("created_at", { ascending: false }),
+    ]);
       
     if (data) {
-      const resolvedData = await Promise.all(data.map(async (message) => ({
+      const messageRows = [...new Map([...(data || []), ...(designRows || [])].map((message) => [message.id, message])).values()];
+      const resolvedData = await Promise.all(messageRows.map(async (message) => ({
         ...message,
+        storage_ref: message.image_url || null,
         image_url: message.image_url ? await resolveStorageUrl(message.image_url) : null,
       })));
-      const orderedMessages = resolvedData.reverse();
+      const orderedMessages = resolvedData.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
       if (prepend) {
         setMessages((currentMessages) => {
-          const existingIds = new Set(currentMessages.map((message) => message.id));
-          const olderMessages = orderedMessages.filter((message) => !existingIds.has(message.id));
-          return [...olderMessages, ...currentMessages];
+          const merged = new Map([...currentMessages, ...orderedMessages].map((message) => [message.id, message]));
+          return [...merged.values()].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         });
       } else {
         setMessages(orderedMessages);
@@ -616,9 +654,13 @@ export default function OwnerMessagesPage() {
       window.alert("A customer service request is required before sending a checkout quotation.");
       return;
     }
-    const latestApprovedProof = [...messages].reverse().find(
-      (m) => m.message_type === "design_version" && m.metadata?.proof_status === "APPROVED"
+    const designProofs = getDesignProofMessages(messages);
+    const latestApprovedProof = [...designProofs].reverse().find(
+      (m) => m.metadata?.proof_status === "APPROVED"
     );
+    const selectedProof = selectedQuoteProofId === "__none__"
+      ? null
+      : designProofs.find((proof) => String(proof.metadata.proof_id) === selectedQuoteProofId) || latestApprovedProof || null;
     const subtotal = parseFloat(quoteAmount);
     const taxes = Math.max(0, parseFloat(quoteTax) || 0);
     const discount = Math.max(0, parseFloat(quoteDiscount) || 0);
@@ -645,8 +687,9 @@ export default function OwnerMessagesPage() {
         currency: "PHP",
         valid_until: validUntil,
         service_id: serviceId,
-        proof_id: latestApprovedProof?.metadata?.proof_id || null,
-        proof_version: latestApprovedProof?.metadata?.version || null,
+        proof_id: selectedProof?.metadata?.proof_id || null,
+        proof_version: selectedProof?.metadata?.version || null,
+        proof_status: selectedProof?.metadata?.proof_status || null,
         quotation_format: "formal_print_market",
         service_name: serviceName,
         inquiry_message_id: latestServiceInquiry.id,
@@ -666,6 +709,7 @@ export default function OwnerMessagesPage() {
     setQuoteAmount("");
     setQuoteTax("");
     setQuoteDiscount("");
+    setSelectedQuoteProofId("");
   };
 
   const sendDesignVersionMessage = async (file) => {
@@ -971,6 +1015,8 @@ export default function OwnerMessagesPage() {
     return !(call.status === "SCHEDULED" && getVideoCallWindow(call).expired);
   }) || null;
   const ownerActiveMeeting = ["SCHEDULED", "LIVE"].includes(ownerBlockingMeeting?.status) ? ownerBlockingMeeting : null;
+  const quoteDesignProofs = getDesignProofMessages(messages);
+  const defaultQuoteProofId = [...quoteDesignProofs].reverse().find((proof) => proof.metadata?.proof_status === "APPROVED")?.metadata?.proof_id || "";
 
   return (
     <div data-tour="owner-messages" className="owner-messages-page flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 md:h-[100dvh]">
@@ -1041,7 +1087,10 @@ export default function OwnerMessagesPage() {
                   <p className="break-words text-base font-extrabold leading-tight text-slate-900 sm:text-lg">
                     {convLabel(activeConv)}
                   </p>
-                  <p className="mt-1 truncate text-[11px] text-slate-500">{activeConv._biz_name} · Reply from your shop</p>
+                  <p className="mt-1 flex items-center gap-1.5 truncate text-[11px] text-slate-500">
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${realtimeStatus === "LIVE" ? "bg-emerald-500" : "bg-amber-400"}`} />
+                    {activeConv._biz_name} · {realtimeStatus === "LIVE" ? "Live updates on" : "Syncing updates…"}
+                  </p>
                 </div>
                 {ownerActiveMeeting && (
                   <button type="button" onClick={() => setShowMeetingView(true)} className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-[#00aeb5] bg-[#e8ffff] px-3 py-2 text-[10px] font-black uppercase text-slate-900 transition-colors hover:bg-[#c8f5f5]" title="View the scheduled meeting" aria-label="View the scheduled meeting">
@@ -1271,6 +1320,13 @@ export default function OwnerMessagesPage() {
                                 </div>
                               );
                             })()
+                          ) : msg.message_type === 'quote_acceptance' ? (
+                            <div className="flex min-w-[240px] flex-col border-2 border-emerald-400 bg-emerald-50 p-4 text-slate-900">
+                              <p className="font-mono text-[10px] font-black uppercase tracking-widest text-emerald-700">Customer accepted quote</p>
+                              <p className="mt-2 text-lg font-black">₱{Number(meta.total_cost || 0).toFixed(2)}</p>
+                              <p className="mt-2 text-[11px] leading-relaxed text-slate-700">The quote was accepted and added to the customer&apos;s cart. They can open the cart when ready to checkout.</p>
+                              {meta.design_version && <p className="mt-2 text-[10px] font-bold uppercase tracking-wide text-emerald-700">Design version {meta.design_version} selected</p>}
+                            </div>
                           ) : msg.message_type === 'quote' ? (
                             <div className="flex flex-col p-4 border-2 border-[#FFF200] bg-[#1A1A1A] text-white min-w-[200px]">
                               <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#FFF200] mb-2">Official Quote Sent</p>
@@ -1291,7 +1347,14 @@ export default function OwnerMessagesPage() {
                               </div>
                               {meta.terms && <p className="mb-3 text-[10px] font-mono uppercase leading-relaxed opacity-70">{meta.terms}</p>}
                               {msg.content && <p className="text-sm font-bold leading-relaxed mb-4">{msg.content}</p>}
-                              <p className="font-mono text-[9px] uppercase tracking-widest text-[#FFF200]/50">Waiting for customer to finalize...</p>
+                               {messages.some((candidate) => (
+                                 candidate.message_type === "quote_acceptance"
+                                 && String(candidate.metadata?.quote_id) === String(msg.id)
+                               )) ? (
+                                 <p className="flex items-center gap-2 font-mono text-[9px] font-black uppercase tracking-widest text-emerald-300"><CheckCircle2 size={13} /> Customer accepted · added to cart</p>
+                               ) : (
+                                 <p className="font-mono text-[9px] uppercase tracking-widest text-[#FFF200]/50">Waiting for customer to finalize...</p>
+                               )}
                             </div>
                           ) : msg.message_type === 'design_version' ? (
                             <div className="flex w-full max-w-md flex-col">
@@ -1602,6 +1665,23 @@ export default function OwnerMessagesPage() {
                             maxLength={500}
                             className="resize-none border-2 border-[#1A1A1A] px-2 py-2 text-xs font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
                           />
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span className="font-mono text-[9px] uppercase font-black opacity-60">Design version for this quote</span>
+                          <select
+                            value={selectedQuoteProofId || defaultQuoteProofId}
+                            onChange={(e) => setSelectedQuoteProofId(e.target.value)}
+                            className="border-2 border-[#1A1A1A] bg-white px-2 py-2 text-xs font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
+                          >
+                            <option value="">Use latest approved version</option>
+                            <option value="__none__">Send without a proof version</option>
+                            {quoteDesignProofs.map((proof) => (
+                              <option key={proof.metadata.proof_id} value={String(proof.metadata.proof_id)}>
+                                Version {proof.metadata.version} · {proof.metadata.proof_status || "PENDING"}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="font-mono text-[9px] uppercase opacity-50">Choose the exact design version the customer will see on this quote.</span>
                         </label>
                         <p className="font-mono text-[9px] uppercase opacity-60">Valid for 14 days · currency PHP · total = subtotal + tax − discount</p>
                         <div className="flex gap-2 mt-1">

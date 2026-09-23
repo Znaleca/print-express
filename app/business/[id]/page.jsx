@@ -236,6 +236,7 @@ export default function BusinessDetailsPage({ params }) {
   const [checkedCartItemKeys, setCheckedCartItemKeys] = useState([]);
   const [cartInitialized, setCartInitialized] = useState(false);
   const [catalogFilter, setCatalogFilter] = useState("all");
+  const [quoteRequestNotice, setQuoteRequestNotice] = useState("");
 
   useEffect(() => {
     if (cartInitialized && typeof window !== "undefined") {
@@ -818,7 +819,9 @@ export default function BusinessDetailsPage({ params }) {
         if (messageError) throw messageError;
 
         setSpecModalItem(null);
-        router.push(`/messages?business=${business.id}`);
+        setDesignFiles([]);
+        setDesignUploadError("");
+        setQuoteRequestNotice(`Quote request sent for ${specModalItem.name}. You can keep browsing while the shop reviews it.`);
         return;
       }
 
@@ -1092,6 +1095,15 @@ export default function BusinessDetailsPage({ params }) {
           </div>
         </div>
       </section>
+
+      {quoteRequestNotice && (
+        <div role="status" className="mb-6 flex items-start justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-800 shadow-sm">
+          <span>{quoteRequestNotice}</span>
+          <button type="button" onClick={() => setQuoteRequestNotice("")} className="shrink-0 font-bold text-emerald-700 hover:text-emerald-950" aria-label="Dismiss quote request notice">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div data-tour="catalog-items" className="grid grid-cols-1 gap-8 lg:grid-cols-4">
 

@@ -43,6 +43,22 @@ const getUploadProfile = (file) => {
   return { extension, mime, fileType, quality };
 };
 
+const getDesignProofMessages = (messages = []) => {
+  const seen = new Set();
+  return [...messages]
+    .filter((message) => (
+      message.message_type === "design_version"
+      && message.metadata?.proof_id
+      && message.metadata?.version
+    ))
+    .filter((message) => {
+      const proofId = String(message.metadata.proof_id);
+      if (seen.has(proofId)) return false;
+      seen.add(proofId);
+      return true;
+    });
+};
+
 function MessagesInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -72,6 +88,8 @@ function MessagesInner() {
   const [showQuickReplies, setShowQuickReplies] = useState(false);
   const [showDesignUpload, setShowDesignUpload] = useState(false);
   const [designVersion, setDesignVersion] = useState("1");
+  const [quoteDesignSelections, setQuoteDesignSelections] = useState({});
+  const [realtimeStatus, setRealtimeStatus] = useState("OFFLINE");
   const [viewImagePopup, setViewImagePopup] = useState(null);
   const bottomRef = useRef(null);
   const scrollContainerRef = useRef(null);
@@ -125,7 +143,7 @@ function MessagesInner() {
         id, created_at, business_id,
         businesses (
           name, logo_url, owner_id, description, products_summary, address, is_open, chat_suggested_questions,
-          services ( id, name, item_type, price, price_max, description, category, available, is_customizable, specs_json )
+           services ( id, name, item_type, price, price_max, description, category, available, image_url, stock_qty, is_customizable, specs_json )
         )
       `)
       .eq("customer_id", currentUser.id)
@@ -192,7 +210,10 @@ function MessagesInner() {
   };
 
   useEffect(() => {
-    if (!activeConv) return;
+    if (!activeConv) {
+      setRealtimeStatus("OFFLINE");
+      return undefined;
+    }
 
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
@@ -203,6 +224,7 @@ function MessagesInner() {
     setMsgLimit(20);
     setMessages([]);
     setHasMoreMsgs(false);
+    setRealtimeStatus("CONNECTING");
     fetchMessages(activeConv.id, false, 20);
 
     const channel = supabase
@@ -219,12 +241,16 @@ function MessagesInner() {
           await loadConversations();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") setRealtimeStatus("LIVE");
+        if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) setRealtimeStatus("RECONNECTING");
+      });
 
     channelRef.current = channel;
 
     return () => {
       if (channelRef.current) supabase.removeChannel(channelRef.current);
+      setRealtimeStatus("OFFLINE");
     };
   }, [activeConv]);
 
@@ -266,25 +292,36 @@ function MessagesInner() {
     if (prepend) setLoadingOlderMsgs(true);
     else if (!isBg) setLoadingMsgs(true);
 
-    const { data, count } = await supabase
-      .from("chat_messages")
-      .select("*", { count: "exact" })
-      .eq("conversation_id", convId)
-      .order("created_at", { ascending: false })
-      .limit(limit);
+    const [{ data, count }, { data: designRows }] = await Promise.all([
+      supabase
+        .from("chat_messages")
+        .select("*", { count: "exact" })
+        .eq("conversation_id", convId)
+        .order("created_at", { ascending: false })
+        .limit(limit),
+      // Design versions are selectable quote assets, so load all of them even
+      // when the rest of the thread is paginated to the latest 20 messages.
+      supabase
+        .from("chat_messages")
+        .select("*")
+        .eq("conversation_id", convId)
+        .eq("message_type", "design_version")
+        .order("created_at", { ascending: false }),
+    ]);
 
     if (data) {
-      const resolvedData = await Promise.all(data.map(async (message) => ({
+      const messageRows = [...new Map([...(data || []), ...(designRows || [])].map((message) => [message.id, message])).values()];
+      const resolvedData = await Promise.all(messageRows.map(async (message) => ({
         ...message,
+        storage_ref: message.image_url || null,
         image_url: message.image_url ? await resolveStorageUrl(message.image_url) : null,
       })));
-      const orderedMessages = resolvedData.reverse();
+      const orderedMessages = resolvedData.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
       if (prepend) {
         setMessages((currentMessages) => {
-          const existingIds = new Set(currentMessages.map((message) => message.id));
-          const olderMessages = orderedMessages.filter((message) => !existingIds.has(message.id));
-          return [...olderMessages, ...currentMessages];
+          const merged = new Map([...currentMessages, ...orderedMessages].map((message) => [message.id, message]));
+          return [...merged.values()].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         });
       } else {
         setMessages(orderedMessages);
@@ -487,6 +524,101 @@ function MessagesInner() {
     setSending(false);
   };
 
+  const acceptQuote = async (quoteMessage, selectedDesign = null) => {
+    if (!activeConv || !user || sending) return;
+
+    const meta = quoteMessage.metadata || {};
+    const totalCost = Number(meta.total_cost || meta.quote_amount || 0);
+    const service = activeConv.businesses?.services?.find((item) => String(item.id) === String(meta.service_id));
+    if (!service || !meta.service_id || !Number.isFinite(totalCost) || totalCost <= 0) {
+      window.alert("This quote is missing the service details needed to add it to your cart.");
+      return;
+    }
+    if (meta.valid_until && new Date(meta.valid_until) < new Date()) {
+      window.alert("This quotation has expired. Ask the shop to send a new quote.");
+      return;
+    }
+
+    const existingAcceptance = messages.find((message) => (
+      message.message_type === "quote_acceptance"
+      && String(message.metadata?.quote_id) === String(quoteMessage.id)
+    ));
+    const designReference = selectedDesign?.storage_ref || null;
+    const selectedVersion = selectedDesign?.metadata?.version || meta.proof_version || null;
+    const selectedSpecs = {
+      ...(meta.selected_specs || {}),
+      requested_quantity: Number(meta.requested_quantity || meta.quantity || 1),
+    };
+    const cartItemKey = `quote-${quoteMessage.id}`;
+    const cartItem = {
+      ...service,
+      price: totalCost,
+      base_price: totalCost,
+      quantity: 1,
+      isQuotedCheckout: true,
+      sourceMessageId: quoteMessage.id,
+      cart_item_id: cartItemKey,
+      selected_specs: selectedSpecs,
+      designUrl: designReference,
+      designVersion: selectedVersion,
+      designFiles: designReference
+        ? [{ url: designReference, name: selectedDesign?.metadata?.file_name || `Design version ${selectedVersion || "selected"}` }]
+        : [],
+    };
+
+    setSending(true);
+    try {
+      if (!existingAcceptance) {
+        const { error } = await supabase.from("chat_messages").insert({
+          conversation_id: activeConv.id,
+          sender_id: user.id,
+          sender_role: "CUSTOMER",
+          content: `Quote accepted for ${meta.service_name || service.name}. It was added to my cart${selectedVersion ? ` with design version ${selectedVersion}` : ""}.`,
+          message_type: "quote_acceptance",
+          metadata: {
+            quote_id: quoteMessage.id,
+            service_id: meta.service_id,
+            service_name: meta.service_name || service.name,
+            total_cost: totalCost,
+            design_version: selectedVersion,
+            proof_id: selectedDesign?.metadata?.proof_id || meta.proof_id || null,
+            proof_file_name: selectedDesign?.metadata?.file_name || null,
+            accepted_at: new Date().toISOString(),
+          },
+          is_read: false,
+        });
+        if (error) throw error;
+      }
+
+      const businessId = activeConv.business_id;
+      let cart = [];
+      try {
+        const storedCart = JSON.parse(localStorage.getItem(`cart_${businessId}`) || "[]");
+        if (Array.isArray(storedCart)) cart = storedCart;
+      } catch {
+        cart = [];
+      }
+      const existingIndex = cart.findIndex((item) => item.sourceMessageId === quoteMessage.id || item.cart_item_id === cartItemKey);
+      if (existingIndex >= 0) cart[existingIndex] = { ...cart[existingIndex], ...cartItem };
+      else cart.push(cartItem);
+
+      let checkedKeys = cart.map((item) => item.cart_item_id || item.sourceMessageId || item.id);
+      try {
+        const storedChecked = JSON.parse(localStorage.getItem(`cart_checked_${businessId}`) || "[]");
+        if (Array.isArray(storedChecked)) checkedKeys = [...new Set([...storedChecked, cartItemKey])].filter((key) => checkedKeys.includes(key));
+      } catch {
+        // Select the accepted quote when the previous cart selection is unavailable.
+      }
+      localStorage.setItem(`cart_${businessId}`, JSON.stringify(cart));
+      localStorage.setItem(`cart_checked_${businessId}`, JSON.stringify(checkedKeys));
+      await fetchMessages(activeConv.id, true);
+    } catch (error) {
+      window.alert(error.message || "The quote could not be accepted. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  };
+
   const requestVideoCall = async () => {
     if (!activeConv || !user || sending) return;
     const openMeeting = videoCalls.find((call) => ["REQUESTED", "SCHEDULED", "LIVE"].includes(call.status));
@@ -669,7 +801,10 @@ function MessagesInner() {
                   />
                   <div>
                     <h2 className="text-sm font-bold text-slate-900">{activeConv.businesses?.name || "Print Shop"}</h2>
-                    <p className="text-[11px] text-slate-500">Live chat & proofing thread</p>
+                    <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                      <span className={`h-1.5 w-1.5 rounded-full ${realtimeStatus === "LIVE" ? "bg-emerald-500" : "bg-amber-400"}`} />
+                      {realtimeStatus === "LIVE" ? "Live chat & proofing thread" : "Syncing chat updates…"}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -846,30 +981,95 @@ function MessagesInner() {
                               </div>
                               {meta.terms && <p className="mt-3 text-[11px] text-slate-600">{meta.terms}</p>}
                               {m.content && <p className="mt-3 whitespace-pre-wrap">{m.content}</p>}
-                              {meta.ordered ? (
-                                <div className="mt-3 flex items-center gap-2 rounded-lg bg-emerald-100 px-3 py-2 text-[11px] font-bold text-emerald-800">
-                                  <CheckCircle2 size={14} /> Order placed from this quote
-                                </div>
-                              ) : meta.valid_until && new Date(meta.valid_until) < new Date() ? (
-                                <p className="mt-3 rounded-lg bg-rose-100 px-3 py-2 text-[11px] font-bold text-rose-700">This quotation has expired. Ask the shop for a new one.</p>
-                              ) : meta.service_id && Number(meta.total_cost || meta.quote_amount || 0) > 0 ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const query = new URLSearchParams({
-                                      checkout_service: String(meta.service_id),
-                                      quote: String(meta.total_cost || meta.quote_amount),
-                                      quote_id: String(m.id),
-                                    });
-                                    router.push(`/business/${activeConv.business_id}?${query.toString()}`);
-                                  }}
-                                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-[11px] font-bold text-white transition-colors hover:bg-[#EC008C]"
-                                >
-                                  Accept quote &amp; continue to checkout <ArrowRight size={14} />
-                                </button>
-                              ) : (
-                                <p className="mt-3 rounded-lg bg-white px-3 py-2 text-[11px] text-slate-600">This quote is missing its service reference. Ask the shop to resend it from your service request.</p>
-                              )}
+                              {(() => {
+                                const designVersions = getDesignProofMessages(messages);
+                                const quoteAcceptance = messages.find((candidate) => (
+                                  candidate.message_type === "quote_acceptance"
+                                  && String(candidate.metadata?.quote_id) === String(m.id)
+                                ));
+                                const selectedProofId = quoteDesignSelections[m.id] || "";
+                                const selectedDesign = designVersions.find((candidate) => String(candidate.metadata.proof_id) === selectedProofId) || null;
+
+                                if (meta.ordered) {
+                                  return <div className="mt-3 flex items-center gap-2 rounded-lg bg-emerald-100 px-3 py-2 text-[11px] font-bold text-emerald-800"><CheckCircle2 size={14} /> Order placed from this quote</div>;
+                                }
+                                if (meta.valid_until && new Date(meta.valid_until) < new Date()) {
+                                  return <p className="mt-3 rounded-lg bg-rose-100 px-3 py-2 text-[11px] font-bold text-rose-700">This quotation has expired. Ask the shop for a new one.</p>;
+                                }
+                                if (!meta.service_id || Number(meta.total_cost || meta.quote_amount || 0) <= 0) {
+                                  return <p className="mt-3 rounded-lg bg-white px-3 py-2 text-[11px] text-slate-600">This quote is missing its service reference. Ask the shop to resend it from your service request.</p>;
+                                }
+                                return (
+                                  <>
+                                    {designVersions.length > 0 && !quoteAcceptance && (
+                                      <div className="mt-3 rounded-lg border border-cyan-200 bg-white p-3 text-[11px]">
+                                        <div className="flex items-start justify-between gap-2">
+                                          <div>
+                                            <p className="font-bold text-slate-800">Choose a design version</p>
+                                            <p className="mt-1 text-slate-500">Preview every version, then select the one you want included in this order.</p>
+                                          </div>
+                                          <span className="shrink-0 rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-bold text-cyan-700">{designVersions.length} available</span>
+                                        </div>
+                                        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                          {designVersions.map((design) => {
+                                            const proofId = String(design.metadata.proof_id);
+                                            const isSelected = selectedProofId === proofId;
+                                            const fileName = design.metadata.file_name || "Design proof";
+                                            const isImage = Boolean(design.image_url && (design.metadata.file_mime?.startsWith("image/") || /\.(png|jpe?g|webp|gif|svg)$/i.test(fileName)));
+                                            return (
+                                              <button
+                                                key={proofId}
+                                                type="button"
+                                                onClick={() => setQuoteDesignSelections((current) => ({ ...current, [m.id]: proofId }))}
+                                                aria-pressed={isSelected}
+                                                className={`overflow-hidden rounded-lg border text-left transition ${isSelected ? "border-cyan-500 bg-cyan-50 ring-2 ring-cyan-200" : "border-slate-200 bg-slate-50 hover:border-cyan-300"}`}
+                                              >
+                                                <div className="relative flex h-28 items-center justify-center overflow-hidden bg-slate-100">
+                                                  {isImage ? (
+                                                    // eslint-disable-next-line @next/next/no-img-element
+                                                    <img src={design.image_url} alt={`Design version ${design.metadata.version}`} className="h-full w-full object-contain" loading="lazy" />
+                                                  ) : (
+                                                    <div className="flex flex-col items-center gap-1 text-slate-500"><FileText size={28} /><span className="text-[10px] font-semibold">Preview unavailable</span></div>
+                                                  )}
+                                                  <span className="absolute left-2 top-2 rounded-full bg-slate-900/85 px-2 py-1 text-[10px] font-bold text-white">Version {design.metadata.version}</span>
+                                                  {isSelected && <span className="absolute right-2 top-2 rounded-full bg-cyan-500 px-2 py-1 text-[10px] font-bold text-white">Selected</span>}
+                                                </div>
+                                                <div className="p-2">
+                                                  <p className="truncate font-bold text-slate-800">{fileName}</p>
+                                                  <p className="mt-1 text-[10px] font-semibold uppercase text-slate-500">{design.metadata.proof_status || "PENDING"}</p>
+                                                </div>
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                        {!selectedDesign && <p className="mt-2 font-semibold text-amber-700">Select a design version before accepting this quote.</p>}
+                                      </div>
+                                    )}
+                                    {quoteAcceptance ? (
+                                      <div className="mt-3 rounded-lg bg-emerald-100 p-3 text-[11px] font-bold text-emerald-800">
+                                        <div className="flex items-center gap-2"><CheckCircle2 size={14} /> Quote accepted and added to your cart.</div>
+                                        {quoteAcceptance.metadata?.design_version && <p className="mt-1 font-normal">Design version {quoteAcceptance.metadata.design_version} selected.</p>}
+                                        <button
+                                          type="button"
+                                          onClick={() => router.push(`/business/${activeConv.business_id}`)}
+                                          className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-bold text-white hover:bg-[#EC008C]"
+                                        >
+                                          View in cart <ArrowRight size={13} />
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => acceptQuote(m, selectedDesign)}
+                                        disabled={sending || (designVersions.length > 0 && !selectedDesign)}
+                                        className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-[11px] font-bold text-white transition-colors hover:bg-[#EC008C] disabled:cursor-wait disabled:opacity-50"
+                                      >
+                                        {sending ? "Adding to cart…" : "Accept quote & add to cart"} <CheckCircle2 size={14} />
+                                      </button>
+                                    )}
+                                  </>
+                                );
+                              })()}
                             </div>
                           ) : m.message_type === "service_inquiry" ? (
                             <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-3 text-slate-900">
