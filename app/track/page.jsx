@@ -12,7 +12,13 @@ import {
   ChevronLeft, ChevronRight
 } from "lucide-react";
 import ReceiptModal from "@/components/ReceiptModal";
-import { resolveStorageUrl } from "@/lib/imageUpload";
+import {
+  getUploadExtension,
+  PRIVATE_ASSETS_BUCKET,
+  optimizeImageForUpload,
+  resolveStorageUrl,
+  toStorageRef,
+} from "@/lib/imageUpload";
 import { formatPesoAmount, getOrderPaymentSummary } from "@/lib/paymentSummary";
 
 const ORDERS_PER_PAGE = 5;
@@ -222,6 +228,7 @@ export default function TrackOrderPage() {
 
     setSubmittingRemainingPayment(true);
     setRemainingPaymentError("");
+    let uploadedPaymentPath = null;
     try {
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
       if (sessionError || !sessionData?.session?.access_token) throw new Error("Your customer session has expired. Please sign in again.");
@@ -229,11 +236,32 @@ export default function TrackOrderPage() {
       const headers = { Authorization: `Bearer ${sessionData.session.access_token}` };
       let body;
       if (method === "E-Wallet") {
-        body = new FormData();
-        body.append("orderId", order.id);
-        body.append("method", method);
-        body.append("note", remainingPaymentNote.trim());
-        body.append("file", remainingPaymentFile);
+        // Upload the proof directly from the browser to Supabase Storage so
+        // the file never consumes a Vercel/serverless request body.
+        const optimizedProof = await optimizeImageForUpload(remainingPaymentFile);
+        const extension = getUploadExtension(optimizedProof);
+        const uploadId = globalThis.crypto?.randomUUID?.()
+          || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        uploadedPaymentPath = `payments/${sessionData.session.user.id}/${order.id}/${uploadId}.${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from(PRIVATE_ASSETS_BUCKET)
+          .upload(uploadedPaymentPath, optimizedProof, {
+            cacheControl: "3600",
+            contentType: optimizedProof.type,
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+
+        headers["Content-Type"] = "application/json";
+        body = JSON.stringify({
+          orderId: order.id,
+          method,
+          note: remainingPaymentNote.trim(),
+          proofStoragePath: toStorageRef(PRIVATE_ASSETS_BUCKET, uploadedPaymentPath),
+          proofFileName: remainingPaymentFile.name,
+          proofContentType: optimizedProof.type,
+          proofSizeBytes: optimizedProof.size,
+        });
       } else {
         headers["Content-Type"] = "application/json";
         body = JSON.stringify({ orderId: order.id, method, note: remainingPaymentNote.trim() });
@@ -255,6 +283,9 @@ export default function TrackOrderPage() {
           : "The shop owner was notified that you paid in cash. Your balance remains pending until the shop confirms receipt.");
     } catch (error) {
       setRemainingPaymentError(error.message || "We could not submit the remaining payment.");
+      if (uploadedPaymentPath) {
+        await supabase.storage.from(PRIVATE_ASSETS_BUCKET).remove([uploadedPaymentPath]);
+      }
     } finally {
       setSubmittingRemainingPayment(false);
     }

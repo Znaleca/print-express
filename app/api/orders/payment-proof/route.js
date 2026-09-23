@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { getSupabaseAdminClient } from "@/lib/supabaseAdmin";
 import { requireAuthenticatedUser } from "@/lib/serverAuth";
 import { getAppUrl } from "@/lib/appUrl";
 import { formatPesoAmount, getOrderPaymentSummary } from "@/lib/paymentSummary";
@@ -15,13 +14,6 @@ const ALLOWED_PROOF_TYPES = new Set([
   "image/webp",
   "application/pdf",
 ]);
-const EXTENSIONS = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/webp": "webp",
-  "application/pdf": "pdf",
-};
-
 function jsonError(error, status = 400) {
   return NextResponse.json({ error }, { status });
 }
@@ -182,30 +174,18 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-  let uploadedPath = null;
   try {
     const auth = await requireAuthenticatedUser(request);
     if (auth.error) return jsonError(auth.error, auth.status);
     if (auth.profile.role !== "CUSTOMER") return jsonError("Customer access required", 403);
 
-    const contentType = request.headers.get("content-type") || "";
     let orderId = "";
     let method = null;
     let note = "";
-    let file = null;
-
-    if (contentType.toLowerCase().includes("multipart/form-data")) {
-      const form = await request.formData();
-      orderId = String(form.get("orderId") || "").trim();
-      method = normalizeMethod(form.get("method"));
-      note = String(form.get("note") || "").trim();
-      file = form.get("file");
-    } else {
-      const body = await request.json().catch(() => ({}));
-      orderId = String(body?.orderId || "").trim();
-      method = normalizeMethod(body?.method);
-      note = String(body?.note || "").trim();
-    }
+    const body = await request.json().catch(() => ({}));
+    orderId = String(body?.orderId || "").trim();
+    method = normalizeMethod(body?.method);
+    note = String(body?.note || "").trim();
 
     if (!orderId || !method) return jsonError("Choose a valid order and payment method");
     if (note.length > 500) return jsonError("Payment note must be 500 characters or fewer");
@@ -229,25 +209,19 @@ export async function POST(request) {
     let proofContentType = null;
     let proofSize = null;
     if (method === "E-Wallet") {
-      if (!file || typeof file.arrayBuffer !== "function") return jsonError("Upload an image or PDF payment proof");
-      proofContentType = String(file.type || "").toLowerCase();
-      proofSize = Number(file.size || 0);
-      proofName = String(file.name || "payment-proof").slice(0, 255);
+      proofReference = String(body?.proofStoragePath || "").trim();
+      const proofPath = getProofPath(proofReference);
+      const expectedPrefix = `payments/${auth.user.id}/${orderId}/`;
+      if (!proofPath || !proofPath.startsWith(expectedPrefix)) {
+        return jsonError("Upload your payment proof directly and try again");
+      }
+
+      proofContentType = String(body?.proofContentType || "").toLowerCase();
+      proofSize = Number(body?.proofSizeBytes || 0);
+      proofName = String(body?.proofFileName || "payment-proof").slice(0, 255);
       if (!ALLOWED_PROOF_TYPES.has(proofContentType)) return jsonError("Payment proof must be PNG, JPG, WebP, or PDF");
       if (!Number.isFinite(proofSize) || proofSize <= 0 || proofSize > MAX_PROOF_BYTES) return jsonError("Payment proof must be between 1 byte and 5 MB");
-
-      const extension = EXTENSIONS[proofContentType];
-      uploadedPath = `payments/${auth.user.id}/${orderId}/${crypto.randomUUID()}.${extension}`;
-      const { error: uploadError } = await auth.supabase.storage
-        .from(PRIVATE_ASSETS_BUCKET)
-        .upload(uploadedPath, Buffer.from(await file.arrayBuffer()), {
-          contentType: proofContentType,
-          cacheControl: "3600",
-          upsert: false,
-        });
-      if (uploadError) throw uploadError;
-      proofReference = `${PRIVATE_ASSETS_BUCKET}:${uploadedPath}`;
-    } else if (file) {
+    } else if (body?.proofStoragePath || body?.proofFileName || body?.proofContentType || body?.proofSizeBytes) {
       return jsonError("COD/offline payment does not need a proof file");
     }
 
@@ -285,9 +259,6 @@ export async function POST(request) {
 
     return NextResponse.json({ order: updatedOrder, notificationWarning });
   } catch (error) {
-    if (uploadedPath) {
-      try { await getSupabaseAdminClient().storage.from(PRIVATE_ASSETS_BUCKET).remove([uploadedPath]); } catch {}
-    }
     console.error("PAYMENT_PROOF_POST_ERROR:", error instanceof Error ? error.message : "UnknownError");
     const message = String(error?.message || "");
     if (/already under review|already confirmed|no remaining balance|no longer accepting|initial downpayment/i.test(message)) {

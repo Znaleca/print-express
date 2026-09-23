@@ -235,6 +235,7 @@ export default function BusinessDetailsPage({ params }) {
   const [selectedServices, setSelectedServices] = useState([]);
   const [checkedCartItemKeys, setCheckedCartItemKeys] = useState([]);
   const [cartInitialized, setCartInitialized] = useState(false);
+  const [catalogFilter, setCatalogFilter] = useState("all");
 
   useEffect(() => {
     if (cartInitialized && typeof window !== "undefined") {
@@ -906,6 +907,13 @@ export default function BusinessDetailsPage({ params }) {
   ]
     .map(([label, value]) => ({ label, url: getSafeExternalUrl(value) }))
     .filter((link) => link.url);
+  const catalogServices = (business.services || []).filter((service) => service.item_type !== "product");
+  const catalogProducts = (business.services || []).filter((service) => service.item_type === "product");
+  const catalogFilters = [
+    { key: "all", label: "All items", count: catalogServices.length + catalogProducts.length },
+    { key: "services", label: "Services", count: catalogServices.length },
+    { key: "products", label: "Products", count: catalogProducts.length },
+  ];
 
   return (
     <main className="business-page min-h-screen bg-[#F6F6F2] pb-24 font-sans">
@@ -1003,7 +1011,7 @@ export default function BusinessDetailsPage({ params }) {
       </section>
 
       {/* Main Content Layout */}
-      <div className="mx-auto max-w-6xl px-4 pt-8 sm:px-8 lg:px-12">
+      <div className="mx-auto max-w-7xl px-4 pt-8 sm:px-8 lg:px-10">
         
         {/* BEST SELLERS HIGHLIGHT */}
         {(() => {
@@ -1057,19 +1065,47 @@ export default function BusinessDetailsPage({ params }) {
           );
         })()}
 
-      <div data-tour="catalog-items" className="grid grid-cols-1 gap-8 lg:grid-cols-3">
+      <section aria-label="Shop catalog navigation" className="sticky top-3 z-20 mb-6 rounded-2xl border border-[#D8D6CE] bg-[#F6F6F2]/95 p-2 shadow-sm backdrop-blur sm:p-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="px-2">
+            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#676762]">Shop catalog</p>
+            <p className="mt-0.5 text-xs text-slate-500">Browse services or ready-made products.</p>
+          </div>
+          <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-200/70 p-1" role="tablist" aria-label="Catalog filter">
+            {catalogFilters.map((filter) => {
+              const isActive = catalogFilter === filter.key;
+              return (
+                <button
+                  key={filter.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setCatalogFilter(filter.key)}
+                  className={`rounded-lg px-3 py-2 text-[11px] font-bold transition-colors sm:min-w-24 ${
+                    isActive ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-900"
+                  }`}
+                >
+                  {filter.label} <span className={isActive ? "text-white/60" : "text-slate-400"}>({filter.count})</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <div data-tour="catalog-items" className="grid grid-cols-1 gap-8 lg:grid-cols-4">
 
           {/* LEFT COLUMN: SERVICES & PRODUCTS */}
-          <div className="lg:col-span-2 space-y-10">
+          <div className="flex flex-col gap-8 lg:col-span-3">
 
             {/* SERVICES */}
-            {business.services.filter(s => s.item_type !== "product").length > 0 && (
-              <section data-tour="custom-service">
+            {catalogFilter !== "products" && catalogServices.length > 0 && (
+              <section data-tour="custom-service" className="order-2">
                 <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                   <div>
                     <h2 className="flex items-center gap-2 text-xl font-black text-slate-900">
                       <span>Custom Printing Services</span>
-                      <span className="text-xs font-normal text-slate-400">({business.services.filter(s => s.item_type !== "product").length})</span>
+                      <span className="text-xs font-normal text-slate-400">({catalogServices.length})</span>
                     </h2>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">Made-to-order work is priced by the shop after reviewing your requirements.</p>
                   </div>
@@ -1090,8 +1126,8 @@ export default function BusinessDetailsPage({ params }) {
                   ))}
                 </div>
 
-                <div className="border-y border-[#D8D6CE]">
-                  {business.services.filter(s => s.item_type !== "product").map((svc) => {
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  {catalogServices.map((svc) => {
                     const hasAcceptedQuote = selectedServices.some((s) => s.id === svc.id && s.isQuotedCheckout);
                     const serviceRating = business.serviceRatingStats?.[svc.id];
                     return (
@@ -1099,12 +1135,12 @@ export default function BusinessDetailsPage({ params }) {
                         type="button"
                         key={svc.id}
                         onClick={() => openSpecCustomizer(svc)}
-                        className={`group flex w-full items-center gap-4 border-b border-[#D8D6CE] px-3 py-5 text-left transition-colors last:border-b-0 hover:bg-white/70 ${
+                        className={`group flex min-h-[238px] w-full flex-col rounded-2xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-[#EC008C]/50 hover:shadow-md ${
                           hasAcceptedQuote ? "bg-[#00FFFF]/[0.04]" : ""
                         }`}
                       >
-                        <div className="min-w-0 flex-1">
-                          <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1">
                             <span className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
                               {svc.category || "General"}
                             </span>
@@ -1115,31 +1151,29 @@ export default function BusinessDetailsPage({ params }) {
                             )}
                           </div>
 
-                          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                            <h3 className="truncate font-bold text-base text-slate-900 transition-colors group-hover:text-[#EC008C]">
+                          <div className="flex flex-col gap-2">
+                            <h3 className="line-clamp-2 font-bold text-base leading-tight text-slate-900 transition-colors group-hover:text-[#EC008C]">
                               {svc.name}
                             </h3>
-                            <div className="shrink-0 text-right">
+                            <div>
                               <p className="text-xs font-extrabold text-[#EC008C]">Quote required</p>
                               <p className="mt-0.5 text-[10px] font-semibold text-slate-500">
-                                {svc.price_max && parseFloat(svc.price_max) > parseFloat(svc.price)
-                                  ? `Catalog estimate ₱${Number(svc.price).toFixed(2)}–₱${Number(svc.price_max).toFixed(2)}`
-                                  : `Catalog estimate from ₱${Number(svc.price).toFixed(2)}`}
+                              {svc.price_max && parseFloat(svc.price_max) > parseFloat(svc.price)
+                                ? `Catalog estimate ₱${Number(svc.price).toFixed(2)}–₱${Number(svc.price_max).toFixed(2)}`
+                                : `Catalog estimate from ₱${Number(svc.price).toFixed(2)}`}
                               </p>
                             </div>
                           </div>
 
                           {svc.description && (
-                            <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500">{svc.description}</p>
+                            <p className="mt-3 line-clamp-3 text-xs leading-relaxed text-slate-500">{svc.description}</p>
                           )}
-                          <div className="mt-2"><ServiceRating stats={serviceRating} /></div>
-                          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          <div className="mt-auto pt-3"><ServiceRating stats={serviceRating} /></div>
+                          <div className="mt-3 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
                             <span className="inline-flex items-center gap-1.5"><MessageSquare size={14} className="text-[#009FA0]" /> Discuss details with the shop</span>
-                            <span className="text-[#009FA0]">Request a quote →</span>
+                            <ChevronRight size={16} className="shrink-0 text-[#009FA0] transition-transform group-hover:translate-x-1" />
                           </div>
                         </div>
-
-                        <ChevronRight size={18} className="shrink-0 text-slate-400 transition-transform group-hover:translate-x-1 group-hover:text-[#EC008C]" />
                       </button>
                     );
                   })}
@@ -1148,15 +1182,16 @@ export default function BusinessDetailsPage({ params }) {
             )}
 
             {/* PRODUCTS */}
-            {business.services.filter(s => s.item_type === "product").length > 0 && (
-              <section>
+            {catalogFilter !== "services" && catalogProducts.length > 0 && (
+              <section className="order-1">
                 <h2 className="mb-4 flex items-center gap-2 text-xl font-black text-slate-900">
                   <span>Available Products</span>
-                  <span className="text-xs text-slate-400 font-normal">({business.services.filter(s => s.item_type === "product").length})</span>
+                  <span className="text-xs text-slate-400 font-normal">({catalogProducts.length})</span>
                 </h2>
+                <p className="-mt-2 mb-4 text-xs text-slate-500">Ready-made items with visible prices. Choose a variant to add one to your cart.</p>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {business.services.filter(s => s.item_type === "product").map((svc) => {
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  {catalogProducts.map((svc) => {
                     const isSelected = selectedServices.some((s) => s.id === svc.id);
                     const productImages = getProductImages(svc);
                     const productVariants = getProductVariants(svc);
@@ -1172,7 +1207,7 @@ export default function BusinessDetailsPage({ params }) {
                         onClick={() => {
                           if (!outOfStock) openSpecCustomizer(svc);
                         }}
-                        className={`relative flex cursor-pointer flex-col justify-between rounded-3xl border bg-white p-5 transition-all group hover:-translate-y-1 hover:shadow-xl ${
+                        className={`group relative flex cursor-pointer flex-col justify-between rounded-2xl border bg-white p-4 transition-all hover:-translate-y-1 hover:shadow-xl ${
                           isSelected ? "border-[#EC008C] ring-2 ring-[#EC008C]/20 shadow-sm" : "border-slate-200 hover:border-slate-300 shadow-sm"
                         } ${outOfStock ? "cursor-not-allowed opacity-60" : ""}`}
                       >
@@ -1202,7 +1237,7 @@ export default function BusinessDetailsPage({ params }) {
                           <div className="mb-3"><ServiceRating stats={serviceRating} /></div>
 
                           {productImages[0] ? (
-                            <div className="relative h-40 w-full overflow-hidden rounded-2xl border border-[#ECECE8] bg-[#F6F6F2] p-2">
+                            <div className="relative h-32 w-full overflow-hidden rounded-xl border border-[#ECECE8] bg-[#F6F6F2] p-2">
                               <Image
                                 src={productImages[0]}
                                 alt={svc.name}
@@ -1212,7 +1247,7 @@ export default function BusinessDetailsPage({ params }) {
                               />
                             </div>
                           ) : (
-                            <div className="flex h-40 w-full items-center justify-center rounded-2xl border border-[#ECECE8] bg-[#F6F6F2] text-slate-400">
+                            <div className="flex h-32 w-full items-center justify-center rounded-xl border border-[#ECECE8] bg-[#F6F6F2] text-slate-400">
                               <Package size={28} />
                             </div>
                           )}
@@ -1227,7 +1262,7 @@ export default function BusinessDetailsPage({ params }) {
             )}
 
             {/* REVIEWS */}
-            <section className="rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
+            <section className="order-3 rounded-3xl border border-[#D8D6CE] bg-white p-6 shadow-sm sm:p-8">
               <h3 className="mb-6 flex items-center gap-2 text-xl font-black text-slate-900">
                 <Star size={18} className="fill-[#FFF200] text-[#D6C900]" /> Customer ratings ({business.reviewCount || 0})
               </h3>
@@ -1260,7 +1295,7 @@ export default function BusinessDetailsPage({ params }) {
           </div>
 
           {/* RIGHT COLUMN: CART & CHECKOUT SUMMARY */}
-          <aside className="space-y-6 lg:sticky lg:top-6 lg:h-fit">
+          <aside className="space-y-6 lg:col-span-1 lg:sticky lg:top-6 lg:h-fit">
 
             {/* Cart Summary Card */}
             <div data-tour="cart-summary" className="bg-white rounded-2xl border border-slate-200 p-6 shadow-md relative overflow-hidden">
@@ -1484,14 +1519,22 @@ export default function BusinessDetailsPage({ params }) {
                     </div>
                   </div>
 
+                  {(specModalItem.description || isProduct) && (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <p className="mb-1 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#009FA0]">
+                        {isProduct ? "Product description" : "Service description"}
+                      </p>
+                      <p className="whitespace-pre-line break-words text-sm leading-6 text-slate-600">
+                        {specModalItem.description || "A ready-made product you can add directly to your cart."}
+                      </p>
+                    </div>
+                  )}
+
                   {isProduct && (
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                       {productImages.length > 1 && <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
                         {productImages.map((image, index) => <button key={`${image}-${index}`} type="button" onClick={() => setSelectedProductImageIndex(index)} className={`h-12 w-12 shrink-0 overflow-hidden rounded-lg border-2 bg-white ${selectedProductImageIndex === index ? "border-[#EC008C]" : "border-slate-200"}`} aria-label={`View product image ${index + 1}`}><Image src={image} alt="" width={48} height={48} className="h-full w-full object-cover" /></button>)}
                       </div>}
-                      <p className="text-xs leading-relaxed text-slate-600">
-                        {specModalItem.description || "A ready-made product you can add directly to your cart."}
-                      </p>
                       <p className="mt-2 text-[11px] font-semibold text-slate-500">
                         {productVariants.length > 0 ? `${productVariants.reduce((total, variant) => total + variant.stock_qty, 0)} total available across variants` : `${Math.max(0, Number(specModalItem.stock_qty || 0))} available in stock`}
                       </p>

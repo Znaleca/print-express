@@ -28,6 +28,18 @@ test("products support a gallery, variants, and server-authoritative variant che
   assert.match(ownerForm, /stock_qty: cleanVariants\.length > 0/);
   assert.match(businessPage, /getProductImages/);
   assert.match(businessPage, /getProductVariants/);
+  assert.match(businessPage, /Service description/);
+  assert.match(businessPage, /whitespace-pre-line/);
+  assert.match(businessPage, /Shop catalog navigation/);
+  assert.match(businessPage, /catalogFilter/);
+  assert.match(businessPage, /catalogServices/);
+  assert.match(businessPage, /catalogProducts/);
+  assert.match(businessPage, /sm:grid-cols-2 xl:grid-cols-4/);
+  assert.match(businessPage, /min-h-\[238px\]/);
+  assert.match(businessPage, /max-w-7xl/);
+  assert.match(businessPage, /lg:grid-cols-4/);
+  assert.match(businessPage, /className="order-1"/);
+  assert.match(businessPage, /className="order-2"/);
   assert.match(businessPage, /selectedVariantId/);
   assert.match(businessPage, /variant_id: selectedVariant\?\.id/);
   assert.match(businessPage, /productImages\.map/);
