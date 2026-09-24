@@ -20,14 +20,17 @@ test("quote requests and acceptance stay in context and expose the cart action",
   assert.match(shop, /catalog_price_min_total/);
   assert.match(shop, /catalog_price_max_total/);
 
-  assert.match(ownerMessages, /selectedQuoteProofId/);
-  assert.match(ownerMessages, /Design version for this quote/);
-  assert.match(ownerMessages, /proof_version: selectedProof/);
+  assert.doesNotMatch(ownerMessages, /selectedQuoteProofId/);
+  assert.doesNotMatch(ownerMessages, /setSelectedQuoteProofId/);
+  assert.doesNotMatch(ownerMessages, /Design version for this quote/);
+  assert.match(ownerMessages, /proof_version: null/);
+  assert.match(ownerMessages, /placeholder=\{quotePriceRange \|\| "e\.g\. 1500"\}/);
+  assert.match(ownerMessages, /Catalog estimate for this request: \{quotePriceRange\}/);
 
   assert.match(customerMessages, /message_type: "quote_acceptance"/);
   assert.match(customerMessages, /localStorage\.setItem\(`cart_\$\{businessId\}`/);
   assert.match(customerMessages, /View in cart/);
-  assert.match(customerMessages, /getDesignProofMessages\(messages\)/);
+  assert.match(customerMessages, /getProofsForInquiry\(scopeMessages, meta\.inquiry_message_id/);
   assert.match(customerMessages, /Preview every version/);
   assert.match(customerMessages, /designVersions\.map\(\(design\)/);
   assert.match(customerMessages, /designVersions\.length > 0 && !selectedDesign/);

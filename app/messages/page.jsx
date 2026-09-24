@@ -21,9 +21,18 @@ import VideoCallModal from "@/components/VideoCallModal";
 import MeetingBookingModal from "@/components/MeetingBookingModal";
 import { getVideoCallWindow, videoCallAction } from "@/lib/videoCalls";
 import { formatMeetingDateTime, getMeetingStatusLabel } from "@/lib/meetingScheduling";
+import { getInquiryForMessage, getProofsForInquiry } from "@/lib/designProofScope.mjs";
 
 const DESIGN_FILE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,image/svg+xml,.ai,.psd,.eps,.tif,.tiff";
 const DESIGN_MAX_BYTES = 10 * 1024 * 1024;
+const MAX_DESIGN_VERSIONS = 10;
+
+const normalizeDesignVersion = (value) => {
+  const text = String(value ?? "").trim();
+  if (!/^[1-9]\d*$/.test(text)) return null;
+  const number = Number(text);
+  return Number.isSafeInteger(number) && number <= MAX_DESIGN_VERSIONS ? number : null;
+};
 
 const formatBytes = (bytes = 0) => {
   if (!Number.isFinite(Number(bytes)) || Number(bytes) <= 0) return "Not recorded";
@@ -78,6 +87,7 @@ function MessagesInner() {
   const [conversations, setConversations] = useState([]);
   const [activeConv, setActiveConv] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [allInquiries, setAllInquiries] = useState([]);
   const [msgLimit, setMsgLimit] = useState(20);
   const [hasMoreMsgs, setHasMoreMsgs] = useState(false);
   const [loadingOlderMsgs, setLoadingOlderMsgs] = useState(false);
@@ -105,6 +115,8 @@ function MessagesInner() {
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
   const scheduleLinkHandledRef = useRef(false);
+  const scopeMessages = useMemo(() => [...new Map([...messages, ...allInquiries].map((message) => [message.id, message])).values()], [messages, allInquiries]);
+  const latestInquiry = allInquiries[0] || [...messages].reverse().find((message) => message.message_type === "service_inquiry");
 
   const shopQuestions = useMemo(
     () => getShopQuestions(activeConv?.businesses),
@@ -231,6 +243,7 @@ function MessagesInner() {
     msgLimitRef.current = 20;
     setMsgLimit(20);
     setMessages([]);
+    setAllInquiries([]);
     setHasMoreMsgs(false);
     setRealtimeStatus("CONNECTING");
     fetchMessages(activeConv.id, false, 20);
@@ -300,7 +313,7 @@ function MessagesInner() {
     if (prepend) setLoadingOlderMsgs(true);
     else if (!isBg) setLoadingMsgs(true);
 
-    const [{ data, count }, { data: designRows }] = await Promise.all([
+    const [{ data, count }, { data: designRows }, { data: inquiryRows }] = await Promise.all([
       supabase
         .from("chat_messages")
         .select("*", { count: "exact" })
@@ -315,9 +328,16 @@ function MessagesInner() {
         .eq("conversation_id", convId)
         .eq("message_type", "design_version")
         .order("created_at", { ascending: false }),
+      supabase
+        .from("chat_messages")
+        .select("*")
+        .eq("conversation_id", convId)
+        .eq("message_type", "service_inquiry")
+        .order("created_at", { ascending: false }),
     ]);
 
     if (data) {
+      setAllInquiries(inquiryRows || []);
       const messageRows = [...new Map([...(data || []), ...(designRows || [])].map((message) => [message.id, message])).values()];
       const resolvedData = await Promise.all(messageRows.map(async (message) => ({
         ...message,
@@ -431,15 +451,18 @@ function MessagesInner() {
 
   const sendDesignUpload = async (file, requestedVersion = designVersion) => {
     if (!file || !activeConv || !user) return;
+    const latestServiceInquiry = latestInquiry;
     if (file.size > DESIGN_MAX_BYTES) {
       window.alert("Design files must be 10 MB or smaller.");
       return;
     }
     const normalizedVersion = String(requestedVersion || "").trim();
-    if (!normalizedVersion) {
-      window.alert("Enter a proof version before selecting the file.");
+    const numericVersion = normalizeDesignVersion(normalizedVersion);
+    if (!numericVersion) {
+      window.alert("Enter a whole-number proof version such as 1, 2, or 3.");
       return;
     }
+    const versionLabel = String(numericVersion);
 
     setSending(true);
     const uploadFile = file.type?.startsWith("image/")
@@ -455,7 +478,7 @@ function MessagesInner() {
 
     const uploadProfile = getUploadProfile(uploadFile);
     const ext = uploadFile.type?.startsWith("image/") ? getUploadExtension(uploadFile) : (uploadProfile.extension || "file");
-    const safeVersion = normalizedVersion.replace(/[^a-z0-9._-]/gi, "-").slice(0, 24) || "1";
+    const safeVersion = versionLabel;
     const filePath = `${activeConv.id}/${user.id}-customer-design-v${safeVersion}-${Date.now()}.${ext}`;
     const storageBucket = CHAT_IMAGES_BUCKET;
 
@@ -476,7 +499,7 @@ function MessagesInner() {
     const storageRef = toStorageRef(storageBucket, filePath);
     const proofPayload = {
       conversation_id: activeConv.id,
-      version_number: Number.parseInt(normalizedVersion, 10) || 1,
+      version_number: numericVersion,
       file_url: storageRef,
       file_name: file.name,
       file_size_bytes: uploadFile.size,
@@ -504,11 +527,13 @@ function MessagesInner() {
       conversation_id: activeConv.id,
       sender_id: user.id,
       sender_role: "CUSTOMER",
-      content: `Customer design proof version ${normalizedVersion} uploaded for review.`,
+      content: `Customer design proof version ${versionLabel} uploaded for review.`,
       message_type: "design_version",
       metadata: {
-        version: normalizedVersion,
+        version: versionLabel,
         proof_id: proofRow.id,
+        inquiry_message_id: latestServiceInquiry?.id || null,
+        service_id: latestServiceInquiry?.metadata?.service_id || null,
         proof_status: "PENDING",
         is_locked: false,
         file_name: file.name,
@@ -526,7 +551,7 @@ function MessagesInner() {
       window.alert(messageError.message || "The proof was registered, but could not be added to the conversation.");
     } else {
       setShowDesignUpload(false);
-      setDesignVersion((prev) => String((Number.parseInt(prev, 10) || 1) + 1));
+      setDesignVersion(numericVersion < MAX_DESIGN_VERSIONS ? String(numericVersion + 1) : "");
     }
 
     setSending(false);
@@ -902,7 +927,7 @@ function MessagesInner() {
                             ? "bg-slate-900 text-white rounded-br-none shadow-sm" 
                             : "bg-white border border-slate-200 text-slate-900 rounded-bl-none shadow-sm"
                         }`}>
-                          {m.image_url && (
+                          {m.image_url && !["design_version", "design_upload"].includes(m.message_type) && (
                             <div className="mb-3">
                               {isPreviewable ? (
                                 <a href={m.image_url} target="_blank" rel="noopener noreferrer">
@@ -985,12 +1010,12 @@ function MessagesInner() {
                                 <span className="text-slate-500">Discount</span><span className="text-right font-semibold">−PHP {Number(meta.discount || 0).toFixed(2)}</span>
                                 <span className="font-bold text-slate-800">Total</span><span className="text-right font-bold text-slate-800">PHP {Number(meta.total_cost || meta.quote_amount || 0).toFixed(2)}</span>
                                 <span className="text-slate-500">Valid until</span><span className="text-right font-semibold">{meta.valid_until ? new Date(meta.valid_until).toLocaleDateString() : "14 days"}</span>
-                                <span className="text-slate-500">Proof version</span><span className="text-right font-semibold">{meta.proof_version || "Not locked"}</span>
+                                <span className="text-slate-500">Proof version</span><span className="text-right font-semibold">{meta.proof_version || "Choose below"}</span>
                               </div>
                               {meta.terms && <p className="mt-3 text-[11px] text-slate-600">{meta.terms}</p>}
                               {m.content && <p className="mt-3 whitespace-pre-wrap">{m.content}</p>}
                               {(() => {
-                                const designVersions = getDesignProofMessages(messages);
+                                const designVersions = getDesignProofMessages(getProofsForInquiry(scopeMessages, meta.inquiry_message_id || getInquiryForMessage(scopeMessages, m)?.id));
                                 const quoteAcceptance = messages.find((candidate) => (
                                   candidate.message_type === "quote_acceptance"
                                   && String(candidate.metadata?.quote_id) === String(m.id)
@@ -1044,7 +1069,7 @@ function MessagesInner() {
                                                 </div>
                                                 <div className="p-2">
                                                   <p className="truncate font-bold text-slate-800">{fileName}</p>
-                                                  <p className="mt-1 text-[10px] font-semibold uppercase text-slate-500">{design.metadata.proof_status || "PENDING"}</p>
+                                                  <p className="mt-1 text-[10px] font-semibold uppercase text-slate-500">{design.metadata.proof_status === "APPROVED" && design.metadata.reviewed_by === user.id ? "Customer approved" : design.metadata.owner_ready ? "Ready to choose" : design.metadata.proof_status || "PENDING"}</p>
                                                 </div>
                                               </button>
                                             );
@@ -1117,9 +1142,26 @@ function MessagesInner() {
                                     <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#00FFFF]">Design proof</p>
                                     <p className="mt-1 text-sm font-extrabold">Version {meta.version || "1"}</p>
                                   </div>
-                                  <span className="rounded bg-[#FFF200] px-2 py-1 text-[9px] font-black uppercase text-slate-900">{meta.proof_status || "PENDING"}</span>
+                                  <span className="rounded bg-[#FFF200] px-2 py-1 text-[9px] font-black uppercase text-slate-900">{meta.proof_status === "APPROVED" && meta.reviewed_by === user.id ? "CUSTOMER APPROVED" : meta.owner_ready ? "READY TO CHOOSE" : meta.proof_status || "PENDING"}</span>
                                 </div>
                                 <div className="p-4">
+                                  {m.image_url && (
+                                    <a href={m.image_url} target="_blank" rel="noopener noreferrer" className="mb-4 block overflow-hidden rounded-xl border-2 border-cyan-200 bg-slate-50">
+                                      {isPreviewable ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img
+                                          src={m.image_url}
+                                          alt={`Design proof version ${meta.version || "1"}`}
+                                          className="max-h-72 w-full object-contain"
+                                        />
+                                      ) : (
+                                        <div className="flex items-center gap-3 p-4 text-xs font-bold text-slate-800">
+                                          <FileText size={24} className="shrink-0 text-[#EC008C]" />
+                                          <span className="break-all">Open {meta.file_name || "design proof"}</span>
+                                        </div>
+                                      )}
+                                    </a>
+                                  )}
                                   <div className="mb-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                                     <FileText size={15} className="shrink-0 text-[#EC008C]" />
                                     <span className="min-w-0 break-all text-[11px] font-bold">{meta.file_name || "Uploaded design proof"}</span>
@@ -1133,7 +1175,7 @@ function MessagesInner() {
                                   {meta.quality_notes && <p className="mt-3 rounded-lg bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-500">{meta.quality_notes}</p>}
                                   {!meta.is_locked && meta.proof_id && !isMe && (
                                   <div className="mt-4 flex flex-wrap gap-2">
-                                    <button type="button" onClick={() => updateProofStatus(m, "APPROVED")} disabled={sending || meta.proof_status === "APPROVED"} className="rounded-lg bg-emerald-600 px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40">Approve</button>
+                                    <button type="button" onClick={() => updateProofStatus(m, "APPROVED")} disabled={sending || (meta.proof_status === "APPROVED" && meta.reviewed_by === user.id)} className="rounded-lg bg-emerald-600 px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40">Approve</button>
                                     <button type="button" onClick={() => updateProofStatus(m, "NEEDS_CHANGES")} disabled={sending} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-[11px] font-bold text-slate-800 disabled:opacity-40">Request changes</button>
                                   </div>
                                 )}
@@ -1219,6 +1261,7 @@ function MessagesInner() {
                         <input
                           type="number"
                           min="1"
+                          max={MAX_DESIGN_VERSIONS}
                           step="1"
                           value={designVersion}
                           onChange={(e) => setDesignVersion(e.target.value)}

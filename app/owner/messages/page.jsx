@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
   MessageSquare, Send, Loader2,
@@ -30,9 +30,18 @@ import VideoCallModal from "@/components/VideoCallModal";
 import MeetingBookingModal from "@/components/MeetingBookingModal";
 import { getVideoCallWindow, videoCallAction, videoCallQuery } from "@/lib/videoCalls";
 import { findUpcomingMeetingWithin, formatMeetingCountdown, formatMeetingDateTime } from "@/lib/meetingScheduling";
+import { getInquiryForMessage, getProofsForInquiry } from "@/lib/designProofScope.mjs";
 
 const DESIGN_FILE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf,image/svg+xml,.ai,.psd,.eps,.tif,.tiff";
 const DESIGN_MAX_BYTES = 10 * 1024 * 1024;
+const MAX_DESIGN_VERSIONS = 10;
+
+const normalizeDesignVersion = (value) => {
+  const text = String(value ?? "").trim();
+  if (!/^[1-9]\d*$/.test(text)) return null;
+  const number = Number(text);
+  return Number.isSafeInteger(number) && number <= MAX_DESIGN_VERSIONS ? number : null;
+};
 
 const formatBytes = (bytes = 0) => {
   if (!Number.isFinite(Number(bytes)) || Number(bytes) <= 0) return "Not recorded";
@@ -81,6 +90,7 @@ export default function OwnerMessagesPage() {
   const [conversations, setConversations] = useState([]);
   const [activeConv, setActiveConv] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [allInquiries, setAllInquiries] = useState([]);
   const [msgLimit, setMsgLimit] = useState(20);
   const [hasMoreMsgs, setHasMoreMsgs] = useState(false);
   const [loadingOlderMsgs, setLoadingOlderMsgs] = useState(false);
@@ -93,6 +103,7 @@ export default function OwnerMessagesPage() {
   const [editingText, setEditingText] = useState("");
   const [unreadByConv, setUnreadByConv] = useState({});
   const [menuMessageId, setMenuMessageId] = useState(null);
+  const [versionPickerMessageId, setVersionPickerMessageId] = useState(null);
   const [showMeetingActions, setShowMeetingActions] = useState(false);
   const [meetingActionMode, setMeetingActionMode] = useState("manage");
   const [showQuote, setShowQuote] = useState(false);
@@ -100,7 +111,6 @@ export default function OwnerMessagesPage() {
   const [quoteTax, setQuoteTax] = useState("");
   const [quoteDiscount, setQuoteDiscount] = useState("");
   const [quoteTerms, setQuoteTerms] = useState("Includes prepress review, proofing, print production, and standard finishing unless stated otherwise.");
-  const [selectedQuoteProofId, setSelectedQuoteProofId] = useState("");
   const [showDesign, setShowDesign] = useState(false);
   const [designVersion, setDesignVersion] = useState("1");
   const [videoCallSession, setVideoCallSession] = useState(null);
@@ -119,6 +129,8 @@ export default function OwnerMessagesPage() {
   const scrollContainerRef = useRef(null);
   const channelRef = useRef(null);
   const fileInputRef = useRef(null);
+  const scopeMessages = useMemo(() => [...new Map([...messages, ...allInquiries].map((message) => [message.id, message])).values()], [messages, allInquiries]);
+  const latestInquiry = allInquiries[0] || [...messages].reverse().find((message) => message.message_type === "service_inquiry");
 
   const openProtectedImage = async (value, label) => {
     const url = await resolveStorageUrl(value);
@@ -245,6 +257,7 @@ export default function OwnerMessagesPage() {
     if (requestedConversation && activeConv?.id !== requestedConversation.id) {
       setActiveConv(requestedConversation);
       setMessages([]);
+      setAllInquiries([]);
       setMsgLimit(20);
       setHasMoreMsgs(false);
     }
@@ -277,7 +290,7 @@ export default function OwnerMessagesPage() {
   const openConversation = (conv) => {
     setActiveConv(conv);
     setMessages([]);
-    setSelectedQuoteProofId("");
+    setAllInquiries([]);
     setMsgLimit(20);
     setHasMoreMsgs(false);
     setUnreadByConv((prev) => ({ ...prev, [conv.id]: 0 }));
@@ -374,7 +387,7 @@ export default function OwnerMessagesPage() {
 
     if (prepend) setLoadingOlderMsgs(true);
     else if (!isBg) setLoadingMsgs(true);
-    const [{ data, count }, { data: designRows }] = await Promise.all([
+    const [{ data, count }, { data: designRows }, { data: inquiryRows }] = await Promise.all([
       supabase
         .from("chat_messages")
         .select("*", { count: "exact" })
@@ -389,9 +402,16 @@ export default function OwnerMessagesPage() {
         .eq("conversation_id", convId)
         .eq("message_type", "design_version")
         .order("created_at", { ascending: false }),
+      supabase
+        .from("chat_messages")
+        .select("*")
+        .eq("conversation_id", convId)
+        .eq("message_type", "service_inquiry")
+        .order("created_at", { ascending: false }),
     ]);
       
     if (data) {
+      setAllInquiries(inquiryRows || []);
       const messageRows = [...new Map([...(data || []), ...(designRows || [])].map((message) => [message.id, message])).values()];
       const resolvedData = await Promise.all(messageRows.map(async (message) => ({
         ...message,
@@ -654,7 +674,7 @@ export default function OwnerMessagesPage() {
     if (!quoteAmount || isNaN(quoteAmount) || !activeConv || !user) return;
     setSending(true);
     
-    const latestServiceInquiry = [...messages].reverse().find(m => m.message_type === 'service_inquiry');
+    const latestServiceInquiry = latestInquiry;
     const serviceId = latestServiceInquiry?.metadata?.service_id || "";
     const serviceName = latestServiceInquiry?.metadata?.service_name || "";
     if (!serviceId) {
@@ -662,13 +682,6 @@ export default function OwnerMessagesPage() {
       window.alert("A customer service request is required before sending a checkout quotation.");
       return;
     }
-    const designProofs = getDesignProofMessages(messages);
-    const latestApprovedProof = [...designProofs].reverse().find(
-      (m) => m.metadata?.proof_status === "APPROVED"
-    );
-    const selectedProof = selectedQuoteProofId === "__none__"
-      ? null
-      : designProofs.find((proof) => String(proof.metadata.proof_id) === selectedQuoteProofId) || latestApprovedProof || null;
     const subtotal = parseFloat(quoteAmount);
     const taxes = Math.max(0, parseFloat(quoteTax) || 0);
     const discount = Math.max(0, parseFloat(quoteDiscount) || 0);
@@ -684,7 +697,7 @@ export default function OwnerMessagesPage() {
       conversation_id: activeConv.id,
       sender_id: user.id,
       sender_role: "BUSINESS_OWNER",
-      content: `Formal quotation prepared. Subtotal PHP ${subtotal.toFixed(2)} + tax/VAT PHP ${taxes.toFixed(2)} − discount PHP ${discount.toFixed(2)} = total PHP ${amount.toFixed(2)}. Final cost can be locked after proof approval.`,
+      content: `Formal quotation prepared. Subtotal PHP ${subtotal.toFixed(2)} + tax/VAT PHP ${taxes.toFixed(2)} − discount PHP ${discount.toFixed(2)} = total PHP ${amount.toFixed(2)}. The customer can choose an available design version before accepting.`,
       message_type: 'quote',
       metadata: {
         quote_amount: amount,
@@ -695,9 +708,9 @@ export default function OwnerMessagesPage() {
         currency: "PHP",
         valid_until: validUntil,
         service_id: serviceId,
-        proof_id: selectedProof?.metadata?.proof_id || null,
-        proof_version: selectedProof?.metadata?.version || null,
-        proof_status: selectedProof?.metadata?.proof_status || null,
+        proof_id: null,
+        proof_version: null,
+        proof_status: null,
         quotation_format: "formal_print_market",
         service_name: serviceName,
         inquiry_message_id: latestServiceInquiry.id,
@@ -717,15 +730,28 @@ export default function OwnerMessagesPage() {
     setQuoteAmount("");
     setQuoteTax("");
     setQuoteDiscount("");
-    setSelectedQuoteProofId("");
   };
 
   const sendDesignVersionMessage = async (file) => {
     if (!file || !activeConv || !user) return;
+    const latestServiceInquiry = latestInquiry;
     if (file.size > DESIGN_MAX_BYTES) {
       window.alert("Design proof files must be 10 MB or smaller.");
       return;
     }
+    const numericVersion = normalizeDesignVersion(designVersion);
+    if (!numericVersion) {
+      window.alert("Choose a design version from 1 to 10.");
+      return;
+    }
+    const usedVersions = latestServiceInquiry
+      ? getProofsForInquiry(scopeMessages, latestServiceInquiry.id)
+      : getDesignProofMessages(messages);
+    if (usedVersions.some((proof) => normalizeDesignVersion(proof.metadata?.version) === numericVersion)) {
+      window.alert(`Version ${numericVersion} is already marked for this request. Choose another number.`);
+      return;
+    }
+    const versionLabel = String(numericVersion);
     setSending(true);
 
     const uploadFile = file.type?.startsWith("image/")
@@ -741,7 +767,7 @@ export default function OwnerMessagesPage() {
 
     const uploadProfile = getUploadProfile(uploadFile);
     const ext = uploadFile.type?.startsWith("image/") ? getUploadExtension(uploadFile) : (uploadProfile.extension || "file");
-    const filePath = `${activeConv.id}/${user.id}-design-v${designVersion}-${Date.now()}.${ext}`;
+    const filePath = `${activeConv.id}/${user.id}-design-v${versionLabel}-${Date.now()}.${ext}`;
     const storageBucket = CHAT_IMAGES_BUCKET;
 
     const { error: uploadErr } = await supabase.storage
@@ -752,82 +778,109 @@ export default function OwnerMessagesPage() {
         contentType: uploadFile.type,
       });
 
-    if (!uploadErr) {
-      const storageRef = toStorageRef(storageBucket, filePath);
-      let proofId = null;
-      const numericVersion = Number.parseInt(designVersion, 10) || 1;
-      const proofPayload = {
-        conversation_id: activeConv.id,
-        version_number: numericVersion,
-        file_url: storageRef,
+    if (uploadErr) {
+      window.alert(uploadErr.message || "Could not upload this design proof.");
+      setSending(false);
+      return;
+    }
+
+    const storageRef = toStorageRef(storageBucket, filePath);
+    let proofId = null;
+    const proofPayload = {
+      conversation_id: activeConv.id,
+      version_number: numericVersion,
+      file_url: storageRef,
+      file_name: file.name,
+      file_size_bytes: uploadFile.size,
+      file_type: uploadProfile.fileType,
+      file_format: ext,
+      quality_notes: uploadProfile.quality,
+      status: "APPROVED",
+      uploaded_by: user.id,
+      uploaded_role: "BUSINESS_OWNER",
+    };
+    let { data: proofRow, error: proofErr } = await supabase
+      .from("design_proofs")
+      .insert(proofPayload)
+      .select("id")
+      .maybeSingle();
+    if (proofErr) {
+      const fallbackPayload = {
+        conversation_id: proofPayload.conversation_id,
+        version_number: proofPayload.version_number,
+        file_url: proofPayload.file_url,
+        file_name: proofPayload.file_name,
+        file_size_bytes: proofPayload.file_size_bytes,
+        file_type: `${proofPayload.file_type} | ${proofPayload.file_format} | ${proofPayload.quality_notes}`,
+        status: proofPayload.status,
+        uploaded_by: proofPayload.uploaded_by,
+        uploaded_role: proofPayload.uploaded_role,
+      };
+      const retry = await supabase
+        .from("design_proofs")
+        .insert(fallbackPayload)
+        .select("id")
+        .maybeSingle();
+      proofRow = retry.data;
+    }
+    proofId = proofRow?.id || null;
+
+    if (!proofId) {
+      window.alert("The file uploaded, but the design proof could not be registered. Check the design-proofs database migration before trying again.");
+      setSending(false);
+      return;
+    }
+
+    const { error: messageError } = await supabase.from("chat_messages").insert({
+      conversation_id: activeConv.id,
+      sender_id: user.id,
+      sender_role: "BUSINESS_OWNER",
+      content: `Design proof version ${versionLabel} uploaded for review.`,
+      message_type: 'design_version',
+      metadata: {
+        version: versionLabel,
+        proof_id: proofId,
+        inquiry_message_id: latestServiceInquiry?.id || null,
+        service_id: latestServiceInquiry?.metadata?.service_id || null,
+        proof_status: "APPROVED",
+        owner_ready: true,
+        is_locked: false,
         file_name: file.name,
         file_size_bytes: uploadFile.size,
         file_type: uploadProfile.fileType,
         file_format: ext,
+        file_mime: uploadProfile.mime,
         quality_notes: uploadProfile.quality,
-        status: "PENDING",
-        uploaded_by: user.id,
-        uploaded_role: "BUSINESS_OWNER",
-      };
-      let { data: proofRow, error: proofErr } = await supabase
-        .from("design_proofs")
-        .insert(proofPayload)
-        .select("id")
-        .maybeSingle();
-      if (proofErr) {
-        const fallbackPayload = {
-          conversation_id: proofPayload.conversation_id,
-          version_number: proofPayload.version_number,
-          file_url: proofPayload.file_url,
-          file_name: proofPayload.file_name,
-          file_size_bytes: proofPayload.file_size_bytes,
-          file_type: `${proofPayload.file_type} | ${proofPayload.file_format} | ${proofPayload.quality_notes}`,
-          status: proofPayload.status,
-          uploaded_by: proofPayload.uploaded_by,
-          uploaded_role: proofPayload.uploaded_role,
-        };
-        const retry = await supabase
-          .from("design_proofs")
-          .insert(fallbackPayload)
-          .select("id")
-          .maybeSingle();
-        proofRow = retry.data;
-      }
-      proofId = proofRow?.id || null;
+      },
+      image_url: storageRef,
+      is_read: false,
+    });
 
-      await supabase.from("chat_messages").insert({
-        conversation_id: activeConv.id,
-        sender_id: user.id,
-        sender_role: "BUSINESS_OWNER",
-        content: `Design proof version ${designVersion} uploaded for review.`,
-        message_type: 'design_version',
-        metadata: {
-          version: designVersion,
-          proof_id: proofId,
-          proof_status: "PENDING",
-          is_locked: false,
-          file_name: file.name,
-          file_size_bytes: uploadFile.size,
-          file_type: uploadProfile.fileType,
-          file_format: ext,
-          file_mime: uploadProfile.mime,
-          quality_notes: uploadProfile.quality,
-        },
-        image_url: storageRef,
-        is_read: false,
-      });
+    if (messageError) {
+      window.alert(messageError.message || "The proof was registered, but could not be added to the conversation.");
+      setSending(false);
+      return;
     }
 
     setSending(false);
     setShowDesign(false);
-    setDesignVersion((prev) => String(Number(prev) + 1));
+    const nextVersion = Array.from({ length: MAX_DESIGN_VERSIONS }, (_, index) => index + 1)
+      .find((versionNumber) => versionNumber !== numericVersion && !usedVersions.some((proof) => normalizeDesignVersion(proof.metadata?.version) === versionNumber));
+    setDesignVersion(nextVersion ? String(nextVersion) : "");
   };
+
+  const getAcceptedQuoteForProof = (proofId) => [...messages].reverse().find((quote) => (
+      quote.message_type === "quote"
+      && messages.some((acceptance) => acceptance.message_type === "quote_acceptance"
+        && String(acceptance.metadata?.quote_id) === String(quote.id)
+        && String(acceptance.metadata?.proof_id || "") === String(proofId || ""))
+    ));
 
   const updateProofStatus = async (msg, status, lockCost = false) => {
     if (!activeConv || !user) return;
-    const latestQuote = [...messages].reverse().find((m) => m.message_type === "quote");
+    const latestQuote = getAcceptedQuoteForProof(msg.metadata?.proof_id);
     if (lockCost && (status !== "APPROVED" || !latestQuote)) {
-      window.alert("Approve a proof and send a formal quotation before locking the final cost.");
+      window.alert("Wait for the customer to accept a quote and choose this design version before locking the cost.");
       return;
     }
     if (lockCost && latestQuote?.metadata?.valid_until && new Date(latestQuote.metadata.valid_until) < new Date()) {
@@ -876,34 +929,134 @@ export default function OwnerMessagesPage() {
     setSending(false);
   };
 
-  const markAsDesignVersion = async (msg) => {
+  const markAsDesignVersion = async (msg, requestedVersion) => {
     if (!activeConv || !user || !msg.image_url) return;
-    const version = window.prompt("Enter version number or name:", "1");
-    if (!version) return;
+    const inquiry = getInquiryForMessage(scopeMessages, msg);
+    if (getProofsForInquiry(scopeMessages, inquiry?.id).some((proof) => proof.metadata?.source_message_id === msg.id)) {
+      window.alert("This file is already marked as a design version for this request.");
+      return;
+    }
+    const numericVersion = normalizeDesignVersion(requestedVersion);
+    if (!numericVersion) {
+      window.alert("Choose a design version from 1 to 10.");
+      return;
+    }
+    const version = String(numericVersion);
+    const duplicate = (inquiry ? getProofsForInquiry(scopeMessages, inquiry.id) : getDesignProofMessages(messages)).some((message) => (
+      message.id !== msg.id
+      && normalizeDesignVersion(message.metadata?.version) === numericVersion
+    ));
+    if (duplicate) {
+      window.alert(`Version ${version} is already marked for this request. Choose another version number.`);
+      return;
+    }
+
+    const sourceMetadata = msg.metadata || {};
+    const proofPayload = {
+      conversation_id: activeConv.id,
+      version_number: numericVersion,
+      file_url: msg.storage_ref || msg.image_url,
+      file_name: sourceMetadata.file_name || "Uploaded design proof",
+      file_size_bytes: sourceMetadata.file_size_bytes || null,
+      file_type: sourceMetadata.file_type || "Artwork image",
+      file_format: sourceMetadata.file_format || "image",
+      quality_notes: sourceMetadata.quality_notes || null,
+      status: "APPROVED",
+      uploaded_by: user.id,
+      uploaded_role: "BUSINESS_OWNER",
+    };
 
     setSending(true);
-    await supabase.from("chat_messages").update({
-      message_type: 'design_version',
-      metadata: { ...(msg.metadata || {}), version }
-    }).eq("id", msg.id);
+    let { data: proofRow, error: proofError } = await supabase
+      .from("design_proofs")
+      .insert(proofPayload)
+      .select("id")
+      .maybeSingle();
 
-    fetchMessages(activeConv.id, true);
+    if (proofError) {
+      const retry = await supabase
+        .from("design_proofs")
+        .insert({
+          conversation_id: proofPayload.conversation_id,
+          version_number: proofPayload.version_number,
+          file_url: proofPayload.file_url,
+          file_name: proofPayload.file_name,
+          file_size_bytes: proofPayload.file_size_bytes,
+          file_type: `${proofPayload.file_type} | ${proofPayload.file_format}`,
+          status: proofPayload.status,
+          uploaded_by: proofPayload.uploaded_by,
+          uploaded_role: proofPayload.uploaded_role,
+        })
+        .select("id")
+        .maybeSingle();
+      proofRow = retry.data;
+      proofError = retry.error;
+    }
+
+    if (proofError || !proofRow?.id) {
+      window.alert(proofError?.message || "The attachment could not be registered as a design proof.");
+      setSending(false);
+      return;
+    }
+
+    const metadata = {
+      ...sourceMetadata,
+      version,
+      proof_id: proofRow.id,
+      source_message_id: msg.id,
+      inquiry_message_id: inquiry?.id || null,
+      service_id: sourceMetadata.service_id || inquiry?.metadata?.service_id || null,
+      proof_status: "APPROVED",
+      owner_ready: true,
+      is_locked: Boolean(sourceMetadata.is_locked),
+      file_name: proofPayload.file_name,
+      file_size_bytes: proofPayload.file_size_bytes,
+      file_type: proofPayload.file_type,
+      file_format: proofPayload.file_format,
+    };
+    const { error: messageError } = await supabase.from("chat_messages").insert({
+      conversation_id: activeConv.id,
+      sender_id: user.id,
+      sender_role: "BUSINESS_OWNER",
+      message_type: 'design_version',
+      content: `Design proof version ${version} marked from ${proofPayload.file_name} for review.`,
+      metadata,
+      image_url: msg.storage_ref || msg.image_url,
+      is_read: false,
+    });
+
+    if (messageError) {
+      window.alert(messageError.message || "The proof was registered, but the design version could not be added to the chat.");
+      setSending(false);
+      return;
+    }
+
+    await fetchMessages(activeConv.id, true);
     setSending(false);
   };
 
   const unmarkDesignVersion = async (msg) => {
-    if (!activeConv || !user) return;
+    if (!activeConv || !user || msg.sender_id !== user.id || msg.metadata?.is_locked) return;
+    if ((msg.metadata?.proof_status === "APPROVED" && msg.metadata?.reviewed_by === activeConv.customer_id) || messages.some((candidate) => (
+      ["quote", "quote_acceptance"].includes(candidate.message_type)
+      && String(candidate.metadata?.proof_id || "") === String(msg.metadata?.proof_id || "")
+    ))) {
+      window.alert("This version is already approved or used by a quote and cannot be unmarked.");
+      return;
+    }
     setSending(true);
 
     const newMetadata = { ...(msg.metadata || {}) };
     delete newMetadata.version;
 
-    await supabase.from("chat_messages").update({
+    const { error } = await supabase.from("chat_messages").update({
       message_type: "text",
+      content: `Design version unmarked: ${newMetadata.file_name || "uploaded file"}.`,
       metadata: Object.keys(newMetadata).length > 0 ? newMetadata : null
     }).eq("id", msg.id);
 
-    fetchMessages(activeConv.id, true);
+    if (error) window.alert(error.message || "Could not unmark this design version.");
+    else await fetchMessages(activeConv.id, true);
     setSending(false);
   };
 
@@ -1023,8 +1176,16 @@ export default function OwnerMessagesPage() {
     return !(call.status === "SCHEDULED" && getVideoCallWindow(call).expired);
   }) || null;
   const ownerActiveMeeting = ["SCHEDULED", "LIVE"].includes(ownerBlockingMeeting?.status) ? ownerBlockingMeeting : null;
-  const quoteDesignProofs = getDesignProofMessages(messages);
-  const defaultQuoteProofId = [...quoteDesignProofs].reverse().find((proof) => proof.metadata?.proof_status === "APPROVED")?.metadata?.proof_id || "";
+  const quoteDesignProofs = latestInquiry ? getProofsForInquiry(scopeMessages, latestInquiry.id) : [];
+  const uploadMarkedVersions = new Set(
+    (latestInquiry ? quoteDesignProofs : getDesignProofMessages(messages))
+      .map((proof) => normalizeDesignVersion(proof.metadata?.version))
+      .filter(Boolean)
+  );
+  const quotePriceRange = latestInquiry && (latestInquiry.metadata?.catalog_price_min_total ?? latestInquiry.metadata?.catalog_estimate_total) != null && formatCatalogPriceRange(
+    latestInquiry.metadata?.catalog_price_min_total ?? latestInquiry.metadata?.catalog_estimate_total,
+    latestInquiry.metadata?.catalog_price_max_total ?? latestInquiry.metadata?.catalog_estimate_total
+  );
 
   return (
     <div data-tour="owner-messages" className="owner-messages-page flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col overflow-hidden bg-[#F6F6F2] font-sans text-slate-900 md:h-[100dvh]">
@@ -1192,8 +1353,18 @@ export default function OwnerMessagesPage() {
                     const isMine = msg.sender_id === user.id;
                     const isEditing = editingId === msg.id;
                     const meta = msg.metadata || {};
+                    const customerApproved = meta.proof_status === "APPROVED" && meta.reviewed_by === activeConv.customer_id;
                     const uploadName = meta.file_name || "Uploaded file";
                     const isPreviewable = Boolean(msg.image_url && (meta.file_mime?.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(uploadName)));
+                    const markedVersions = new Set(
+                      (getInquiryForMessage(scopeMessages, msg)
+                        ? getProofsForInquiry(scopeMessages, getInquiryForMessage(scopeMessages, msg).id)
+                        : getDesignProofMessages(messages))
+                        .map((candidate) => normalizeDesignVersion(candidate.metadata?.version))
+                        .filter(Boolean)
+                    );
+                    const markedSourceVersion = getProofsForInquiry(scopeMessages, getInquiryForMessage(scopeMessages, msg)?.id)
+                      .find((proof) => proof.metadata?.source_message_id === msg.id)?.metadata?.version;
                     return (
                       <div key={msg.id} className={`flex items-end gap-3 ${isMine ? "justify-end" : "justify-start"}`}>
                         {!isMine && (
@@ -1210,7 +1381,7 @@ export default function OwnerMessagesPage() {
                             ? "bg-[#1A1A1A] text-white border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(0,255,255,1)]"
                             : "bg-white text-[#1A1A1A] border-[#1A1A1A] shadow-[6px_6px_0px_0px_rgba(236,0,140,0.3)]"
                         }`}>
-                          {msg.image_url && (
+                          {msg.image_url && msg.message_type !== 'design_version' && (
                             <div className="relative group/img inline-block">
                               {isPreviewable ? (
                                 <a href={msg.image_url} target="_blank" rel="noopener noreferrer">
@@ -1244,17 +1415,50 @@ export default function OwnerMessagesPage() {
                                 {msg.message_type === 'design_version' ? (
                                   <button
                                     onClick={() => unmarkDesignVersion(msg)}
+                                    disabled={!isMine || sending || meta.is_locked || customerApproved || messages.some((candidate) => candidate.message_type === "quote" && String(candidate.metadata?.proof_id || "") === String(meta.proof_id || ""))}
                                     className="bg-[#EC008C] text-white font-black text-[9px] uppercase px-2 py-1 border-2 border-[#1A1A1A] hover:bg-[#1A1A1A] hover:text-[#EC008C] transition-all shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
                                   >
                                     Unmark
                                   </button>
+                                ) : markedSourceVersion ? (
+                                  <span className="border-2 border-[#1A1A1A] bg-white px-2 py-1 font-mono text-[9px] font-black uppercase text-[#1A1A1A]">
+                                    Version {markedSourceVersion} marked
+                                  </span>
                                 ) : (
-                                  <button
-                                    onClick={() => markAsDesignVersion(msg)}
-                                    className="bg-[#FFF200] text-[#1A1A1A] font-black text-[9px] uppercase px-2 py-1 border-2 border-[#1A1A1A] hover:bg-[#00FFFF] transition-all shadow-[2px_2px_0px_0px_rgba(26,26,26,1)]"
-                                  >
-                                    Mark as Version
-                                  </button>
+                                  <div className="relative">
+                                    <button
+                                      onClick={() => setVersionPickerMessageId((current) => current === msg.id ? null : msg.id)}
+                                      disabled={sending}
+                                      className="bg-[#FFF200] text-[#1A1A1A] font-black text-[9px] uppercase px-2 py-1 border-2 border-[#1A1A1A] hover:bg-[#00FFFF] transition-all shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      Mark as Version
+                                    </button>
+                                    {versionPickerMessageId === msg.id && (
+                                      <div className="absolute right-0 top-8 z-30 w-48 border-2 border-[#1A1A1A] bg-white p-2 text-[#1A1A1A] shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+                                        <p className="mb-2 font-mono text-[9px] font-black uppercase tracking-wide">Choose version · 1–10</p>
+                                        <div className="grid grid-cols-5 gap-1">
+                                          {Array.from({ length: MAX_DESIGN_VERSIONS }, (_, index) => index + 1).map((versionNumber) => {
+                                            const isUsed = markedVersions.has(versionNumber);
+                                            return (
+                                              <button
+                                                key={versionNumber}
+                                                type="button"
+                                                disabled={sending || isUsed}
+                                                onClick={() => {
+                                                  setVersionPickerMessageId(null);
+                                                  markAsDesignVersion(msg, versionNumber);
+                                                }}
+                                                className={`border-2 px-2 py-1 font-mono text-[10px] font-black transition-colors ${isUsed ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400" : "border-[#1A1A1A] bg-[#FFF200] text-[#1A1A1A] hover:bg-[#00FFFF]"}`}
+                                                title={isUsed ? `Version ${versionNumber} is already marked` : `Mark as version ${versionNumber}`}
+                                              >
+                                                {versionNumber}
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             </div>
@@ -1351,7 +1555,7 @@ export default function OwnerMessagesPage() {
                                 <span className="opacity-60">Valid Until</span>
                                 <span className="text-right">{meta.valid_until ? new Date(meta.valid_until).toLocaleDateString() : "14 days"}</span>
                                 <span className="opacity-60">Proof Version</span>
-                                <span className="text-right">{meta.proof_version || "Not locked"}</span>
+                                <span className="text-right">{meta.proof_version || "Customer chooses"}</span>
                               </div>
                               {meta.terms && <p className="mb-3 text-[10px] font-mono uppercase leading-relaxed opacity-70">{meta.terms}</p>}
                               {msg.content && <p className="text-sm font-bold leading-relaxed mb-4">{msg.content}</p>}
@@ -1373,10 +1577,27 @@ export default function OwnerMessagesPage() {
                                     <p className="mt-1 text-sm font-black">Version {meta.version || "1"}</p>
                                   </div>
                                   <span className="bg-[#1A1A1A] px-2 py-1 font-mono text-[9px] font-black uppercase text-white">
-                                    {meta.proof_status || "PENDING"}
+                                    {customerApproved ? "CUSTOMER APPROVED" : meta.proof_status === "APPROVED" ? "READY FOR CUSTOMER" : meta.proof_status || "PENDING"}
                                   </span>
                                 </div>
                                 <div className="p-4">
+                                  {msg.image_url && (
+                                    <a href={msg.image_url} target="_blank" rel="noopener noreferrer" className="mb-4 block overflow-hidden rounded-xl border-2 border-[#FFF200] bg-white/10">
+                                      {isPreviewable ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img
+                                          src={msg.image_url}
+                                          alt={`Design proof version ${meta.version || "1"}`}
+                                          className="max-h-72 w-full object-contain"
+                                        />
+                                      ) : (
+                                        <div className="flex items-center gap-3 p-4 text-xs font-black uppercase text-white">
+                                          <FileText size={24} className="shrink-0 text-[#00FFFF]" />
+                                          <span className="break-all">Open {meta.file_name || "design proof"}</span>
+                                        </div>
+                                      )}
+                                    </a>
+                                  )}
                                   <div className="mb-3 flex items-center gap-2 rounded-lg border border-white/15 bg-white/10 px-3 py-2">
                                     <FileText size={15} className="shrink-0 text-[#00FFFF]" />
                                     <span className="min-w-0 break-all text-[11px] font-bold">{meta.file_name || "Uploaded design proof"}</span>
@@ -1391,14 +1612,16 @@ export default function OwnerMessagesPage() {
                                     <p className="mt-3 rounded-lg border border-white/10 bg-white/5 p-2 font-mono text-[9px] uppercase leading-relaxed text-white/70">{meta.quality_notes}</p>
                                   )}
                                   <div className="mt-4 flex flex-wrap gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => updateProofStatus(msg, "APPROVED")}
-                                    disabled={sending || meta.proof_status === "APPROVED"}
-                                    className="bg-[#00FFFF] px-3 py-2 font-black uppercase text-[9px] text-[#1A1A1A] border-2 border-[#1A1A1A] disabled:opacity-40"
-                                  >
-                                    Approve Proof
-                                  </button>
+                                  {meta.proof_status !== "APPROVED" && (
+                                    <button
+                                      type="button"
+                                      onClick={() => updateProofStatus(msg, "APPROVED")}
+                                      disabled={sending}
+                                      className="bg-[#00FFFF] px-3 py-2 font-black uppercase text-[9px] text-[#1A1A1A] border-2 border-[#1A1A1A] disabled:opacity-40"
+                                    >
+                                      Mark ready for customer
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     onClick={() => updateProofStatus(msg, "NEEDS_CHANGES")}
@@ -1410,11 +1633,21 @@ export default function OwnerMessagesPage() {
                                   <button
                                     type="button"
                                     onClick={() => updateProofStatus(msg, "APPROVED", true)}
-                                    disabled={sending || meta.is_locked || meta.proof_status !== "APPROVED" || !messages.some((candidate) => candidate.message_type === "quote")}
+                                    disabled={sending || meta.is_locked || meta.proof_status !== "APPROVED" || !getAcceptedQuoteForProof(meta.proof_id)}
                                     className="bg-[#EC008C] px-3 py-2 font-black uppercase text-[9px] text-white border-2 border-[#1A1A1A] disabled:opacity-40"
                                   >
                                     Lock Cost
                                   </button>
+                                  {isMine && meta.source_message_id && !meta.is_locked && !customerApproved && !messages.some((candidate) => candidate.message_type === "quote" && String(candidate.metadata?.proof_id || "") === String(meta.proof_id || "")) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => unmarkDesignVersion(msg)}
+                                      disabled={sending}
+                                      className="border border-white/30 px-3 py-2 text-[9px] font-black uppercase text-white hover:bg-white/10 disabled:opacity-40"
+                                    >
+                                      Unmark version
+                                    </button>
+                                  )}
                                   </div>
                                 </div>
                               </div>
@@ -1428,12 +1661,12 @@ export default function OwnerMessagesPage() {
                               <p className="text-sm font-bold leading-relaxed">{msg.content}</p>
                             </div>
                           ) : msg.message_type === 'service_inquiry' ? (
-                            <div className="flex flex-col p-3 border-l-4 border-[#00FFFF] bg-white/5">
-                              <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#00FFFF] mb-1">Service Inquiry</p>
+                            <div className={`flex min-w-[260px] flex-col rounded-lg border-l-4 border-[#00FFFF] p-4 ${isMine ? "bg-white/5 text-white" : "bg-slate-50 text-slate-900"}`}>
+                              <p className="mb-1 font-mono text-[10px] font-black uppercase tracking-widest text-[#00AFC0]">Service Inquiry</p>
                               {msg.metadata?.service_name && (
-                                <p className="font-black uppercase text-sm mb-1">{msg.metadata.service_name}</p>
+                                <p className="mb-1 text-sm font-black uppercase">{msg.metadata.service_name}</p>
                               )}
-                               <div className="my-2 grid grid-cols-2 gap-x-4 gap-y-1 border-y border-white/15 py-2 font-mono text-[9px] uppercase">
+                               <div className={`my-2 grid grid-cols-2 gap-x-4 gap-y-1 border-y py-2 font-mono text-[9px] uppercase ${isMine ? "border-white/15" : "border-slate-200"}`}>
                                  <span className="opacity-60">Quantity</span><span className="text-right font-black">{msg.metadata?.quantity || 1}</span>
                                 {msg.metadata?.selected_specs?.size && <><span className="opacity-60">Size</span><span className="text-right font-black">{msg.metadata.selected_specs.size}</span></>}
                                 {msg.metadata?.selected_specs?.size_breakdown?.length > 0 && <><span className="opacity-60">Sizes</span><span className="text-right font-black">{msg.metadata.selected_specs.size_breakdown.map((row) => `${row.size} × ${row.quantity}`).join(", ")}</span></>}
@@ -1445,15 +1678,19 @@ export default function OwnerMessagesPage() {
                                  msg.metadata?.catalog_price_min_total ?? msg.metadata?.catalog_estimate_total,
                                  msg.metadata?.catalog_price_max_total ?? msg.metadata?.catalog_estimate_total
                                ) && (
-                                 <div className="mb-2 rounded-lg border border-[#FFF200]/40 bg-[#FFF200]/10 p-2 font-mono text-[9px] uppercase">
-                                   <div className="flex items-center justify-between gap-3">
-                                     <span className="text-[#FFF200]">Catalog range to verify</span>
-                                     <span className="font-black text-[#FFF200]">{formatCatalogPriceRange(msg.metadata?.catalog_price_min_total ?? msg.metadata?.catalog_estimate_total, msg.metadata?.catalog_price_max_total ?? msg.metadata?.catalog_estimate_total)} total</span>
+                                 <div className={`mb-3 rounded-xl border-2 p-3 font-mono ${isMine ? "border-[#FFF200]/60 bg-[#FFF200]/10" : "border-[#D6A900] bg-[#FFF9D6]"}`}>
+                                   <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                     <span className={`text-[10px] font-black uppercase tracking-wide ${isMine ? "text-[#FFF200]" : "text-[#785400]"}`}>Estimated total · Catalog range to verify</span>
+                                     <span className={`text-lg font-black leading-tight sm:text-xl ${isMine ? "text-[#FFF200]" : "text-[#785400]"}`}>
+                                       {formatCatalogPriceRange(msg.metadata?.catalog_price_min_total ?? msg.metadata?.catalog_estimate_total, msg.metadata?.catalog_price_max_total ?? msg.metadata?.catalog_estimate_total)}
+                                     </span>
                                    </div>
-                                   <p className="mt-1 opacity-70">Unit estimate: {formatCatalogPriceRange(msg.metadata?.catalog_price_min_unit ?? msg.metadata?.catalog_estimate_unit, msg.metadata?.catalog_price_max_unit ?? msg.metadata?.catalog_estimate_unit)} · Reference only; confirm requirements before sending the final quote.</p>
+                                   <p className={`mt-1 text-[10px] leading-relaxed ${isMine ? "text-white/70" : "text-slate-700"}`}>
+                                     Unit estimate: {formatCatalogPriceRange(msg.metadata?.catalog_price_min_unit ?? msg.metadata?.catalog_estimate_unit, msg.metadata?.catalog_price_max_unit ?? msg.metadata?.catalog_estimate_unit)} · Reference only; confirm requirements before sending the final quote.
+                                   </p>
                                  </div>
                                )}
-                               {msg.metadata?.selected_specs?.notes && <p className="mb-2 border border-white/15 bg-white/5 p-2 text-xs font-bold">{msg.metadata.selected_specs.notes}</p>}
+                               {msg.metadata?.selected_specs?.notes && <p className={`mb-2 border p-2 text-xs font-bold ${isMine ? "border-white/15 bg-white/5" : "border-slate-200 bg-white"}`}>{msg.metadata.selected_specs.notes}</p>}
                               <p className="whitespace-pre-wrap text-sm font-bold italic opacity-80">{msg.content}</p>
                             </div>
                           ) : msg.message_type === 'refund_dispute' ? (
@@ -1596,15 +1833,29 @@ export default function OwnerMessagesPage() {
                     {showDesign && (
                       <div className="absolute bottom-16 right-0 bg-white border-2 border-[#1A1A1A] p-4 shadow-[6px_6px_0px_0px_rgba(26,26,26,1)] flex flex-col gap-3 z-50 w-64">
                         <p className="font-black uppercase italic text-sm border-b-2 border-[#1A1A1A] pb-2">Upload Design Version</p>
-                        <label className="flex flex-col gap-1">
-                          <span className="font-mono text-[9px] uppercase font-black opacity-60">Version #</span>
-                          <input
-                            type="text"
-                            value={designVersion}
-                            onChange={(e) => setDesignVersion(e.target.value)}
-                            className="border-2 border-[#1A1A1A] px-2 py-2 text-sm font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
-                          />
-                        </label>
+                        <fieldset>
+                          <legend className="mb-2 font-mono text-[9px] uppercase font-black opacity-60">Choose version · 1–10</legend>
+                          <div className="grid grid-cols-5 gap-1" aria-label="Design version numbers">
+                            {Array.from({ length: MAX_DESIGN_VERSIONS }, (_, index) => index + 1).map((versionNumber) => {
+                              const isUsed = uploadMarkedVersions.has(versionNumber);
+                              const isSelected = designVersion === String(versionNumber);
+                              return (
+                                <button
+                                  key={versionNumber}
+                                  type="button"
+                                  disabled={sending || isUsed}
+                                  aria-pressed={isSelected && !isUsed}
+                                  title={isUsed ? `Version ${versionNumber} is already marked for this request` : `Select version ${versionNumber}`}
+                                  onClick={() => setDesignVersion(String(versionNumber))}
+                                  className={`border-2 px-2 py-1.5 font-mono text-[10px] font-black transition-colors ${isUsed ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400" : isSelected ? "border-[#1A1A1A] bg-[#00FFFF] text-[#1A1A1A]" : "border-[#1A1A1A] bg-[#FFF200] text-[#1A1A1A] hover:bg-[#00FFFF]"}`}
+                                >
+                                  {versionNumber}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <p className="mt-2 font-mono text-[9px] text-slate-500">Grey numbers are already used for this request.</p>
+                        </fieldset>
                         <div className="flex gap-2 mt-1">
                           <button
                             type="button"
@@ -1616,7 +1867,7 @@ export default function OwnerMessagesPage() {
                           <button
                             type="button"
                             onClick={() => fileInputRef.current?.click()}
-                            disabled={!designVersion || sending}
+                            disabled={!normalizeDesignVersion(designVersion) || uploadMarkedVersions.has(Number(designVersion)) || sending}
                             className="flex-1 bg-[#FFF200] border-2 border-[#1A1A1A] font-black uppercase text-[10px] py-2 hover:bg-[#00FFFF] hover:text-[#1A1A1A] transition-all text-center disabled:opacity-40"
                           >
                             {sending ? "..." : "Select File"}
@@ -1626,7 +1877,16 @@ export default function OwnerMessagesPage() {
                     )}
                     <button
                       type="button"
-                      onClick={() => { setShowDesign(!showDesign); setShowMeetingActions(false); setShowQuote(false); }}
+                      onClick={() => {
+                        if (!showDesign) {
+                          const firstAvailable = Array.from({ length: MAX_DESIGN_VERSIONS }, (_, index) => index + 1)
+                            .find((versionNumber) => !uploadMarkedVersions.has(versionNumber));
+                          setDesignVersion(firstAvailable ? String(firstAvailable) : "");
+                        }
+                        setShowDesign(!showDesign);
+                        setShowMeetingActions(false);
+                        setShowQuote(false);
+                      }}
                       disabled={sending}
                       className="w-14 h-14 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] flex items-center justify-center hover:bg-[#FFF200] transition-all disabled:opacity-40"
                       title="Upload Design Version"
@@ -1646,9 +1906,10 @@ export default function OwnerMessagesPage() {
                             step="0.01"
                             value={quoteAmount}
                             onChange={(e) => setQuoteAmount(e.target.value)}
-                            placeholder="e.g. 1500"
+                            placeholder={quotePriceRange || "e.g. 1500"}
                             className="border-2 border-[#1A1A1A] px-2 py-2 text-sm font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
                           />
+                          {quotePriceRange && <span className="font-mono text-[9px] leading-relaxed text-amber-800">Catalog estimate for this request: {quotePriceRange}. Enter the final subtotal after reviewing the specifications.</span>}
                         </label>
                         <div className="grid grid-cols-2 gap-2">
                           <label className="flex flex-col gap-1">
@@ -1686,23 +1947,7 @@ export default function OwnerMessagesPage() {
                             className="resize-none border-2 border-[#1A1A1A] px-2 py-2 text-xs font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
                           />
                         </label>
-                        <label className="flex flex-col gap-1">
-                          <span className="font-mono text-[9px] uppercase font-black opacity-60">Design version for this quote</span>
-                          <select
-                            value={selectedQuoteProofId || defaultQuoteProofId}
-                            onChange={(e) => setSelectedQuoteProofId(e.target.value)}
-                            className="border-2 border-[#1A1A1A] bg-white px-2 py-2 text-xs font-mono focus:outline-none focus:ring-2 ring-[#00FFFF]"
-                          >
-                            <option value="">Use latest approved version</option>
-                            <option value="__none__">Send without a proof version</option>
-                            {quoteDesignProofs.map((proof) => (
-                              <option key={proof.metadata.proof_id} value={String(proof.metadata.proof_id)}>
-                                Version {proof.metadata.version} · {proof.metadata.proof_status || "PENDING"}
-                              </option>
-                            ))}
-                          </select>
-                          <span className="font-mono text-[9px] uppercase opacity-50">Choose the exact design version the customer will see on this quote.</span>
-                        </label>
+                        <p className="font-mono text-[9px] leading-relaxed text-slate-600">The customer will preview available design versions and choose one before accepting this quote.</p>
                         <p className="font-mono text-[9px] uppercase opacity-60">Valid for 14 days · currency PHP · total = subtotal + tax − discount</p>
                         <div className="flex gap-2 mt-1">
                           <button

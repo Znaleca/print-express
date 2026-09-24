@@ -15,9 +15,11 @@ test("browse map uses a person marker for the customer and pins for shops", asyn
   const browse = await source("app/browse/page.jsx");
 
   assert.match(map, /createShopPinIcon/);
-  assert.match(map, /border-radius: 50% 50% 50% 0/);
+  assert.match(map, /border-radius: 50%/);
   assert.match(map, /createUserLocationIcon/);
   assert.match(map, /aria-label="Your location"/);
+  assert.match(map, /border-radius: 50% 50% 50% 0/);
+  assert.match(map, /transform: rotate\(-45deg\)/);
   assert.match(map, /<svg width="23" height="23"/);
   assert.match(map, /<circle cx="12" cy="7\.5"/);
   assert.match(map, /<path d="M4 20a8 8 0 0 1 16 0H4Z"/);

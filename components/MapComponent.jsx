@@ -49,9 +49,14 @@ const createShopPinIcon = (color = "#00FFFF", isClosed = false, isSelected = fal
   });
 };
 
-const createUserLocationIcon = () => new L.DivIcon({
-  className: "user-location-marker-container",
-  html: `
+const createUserLocationIcon = (locationLabel = "Your location") => {
+  const locationAttributes = locationLabel === "Your location"
+    ? 'aria-label="Your location" title="Your location"'
+    : `aria-label="${locationLabel}" title="${locationLabel}"`;
+
+  return new L.DivIcon({
+    className: "user-location-marker-container",
+    html: `
     <div style="
       width: 42px;
       height: 42px;
@@ -62,17 +67,18 @@ const createUserLocationIcon = () => new L.DivIcon({
       display: flex;
       align-items: center;
       justify-content: center;
-    " role="img" aria-label="Your location" title="Your location">
+    " role="img" ${locationAttributes}>
       <svg width="23" height="23" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <circle cx="12" cy="7.5" r="3.5" fill="#1A1A1A" />
         <path d="M4 20a8 8 0 0 1 16 0H4Z" fill="#1A1A1A" />
       </svg>
     </div>
-  `,
-  iconSize: [42, 42],
-  iconAnchor: [21, 21],
-  popupAnchor: [0, -24],
-});
+    `,
+    iconSize: [42, 42],
+    iconAnchor: [21, 21],
+    popupAnchor: [0, -24],
+  });
+};
 
 function MapController({ center, selectedBusinessId, markerRefs, routePoints, shopPoints, hasUserLocation }) {
   const map = useMap();
@@ -191,7 +197,41 @@ function MapResizeHandler() {
   return null;
 }
 
-export default function MapComponent({ businesses, selectedBusinessId, userLocation, nearestBusinessId, emptyMessage }) {
+function MapClickHandler({ enabled, onLocationSelect }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!enabled || typeof onLocationSelect !== "function") return undefined;
+
+    const handleMapClick = (event) => {
+      const coordinates = normalizeCoordinates(event?.latlng?.lat, event?.latlng?.lng);
+      if (coordinates) onLocationSelect(coordinates);
+    };
+
+    map.on("click", handleMapClick);
+    const mapContainer = map.getContainer?.();
+    const previousCursor = mapContainer?.style.cursor;
+    if (mapContainer) mapContainer.style.cursor = "crosshair";
+
+    return () => {
+      map.off("click", handleMapClick);
+      if (mapContainer) mapContainer.style.cursor = previousCursor || "";
+    };
+  }, [enabled, map, onLocationSelect]);
+
+  return null;
+}
+
+export default function MapComponent({
+  businesses,
+  selectedBusinessId,
+  userLocation,
+  userLocationLabel = "Your location",
+  nearestBusinessId,
+  emptyMessage,
+  isSelectingLocation = false,
+  onMapLocationSelect,
+}) {
   const router = useRouter();
   const markerRefs = useRef({});
   const [isMounted, setIsMounted] = useState(false);
@@ -213,7 +253,7 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
     () => normalizeCoordinates(userLocation?.lat, userLocation?.lng),
     [userLocation]
   );
-  const userLocationIcon = useMemo(() => createUserLocationIcon(), []);
+  const userLocationIcon = useMemo(() => createUserLocationIcon(userLocationLabel), [userLocationLabel]);
   const markerIcons = useMemo(() => Object.fromEntries(
     mapBusinesses.map((business) => {
       const isSelected = selectedBusinessId === business.id;
@@ -255,6 +295,7 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
         zoomControl={false}
       >
         <MapResizeHandler />
+        <MapClickHandler enabled={isSelectingLocation} onLocationSelect={onMapLocationSelect} />
         <MapController
           center={center}
           selectedBusinessId={selectedBusinessId}
@@ -274,10 +315,10 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
             position={[safeUserLocation.lat, safeUserLocation.lng]}
             icon={userLocationIcon}
             zIndexOffset={1000}
-            title="Your location"
-            alt="Your location"
+            title={userLocationLabel}
+            alt={userLocationLabel}
           >
-            <Popup closeButton={false}>You are here</Popup>
+            <Popup closeButton={false}>{userLocationLabel}</Popup>
           </Marker>
         )}
 
@@ -370,6 +411,14 @@ export default function MapComponent({ businesses, selectedBusinessId, userLocat
           </div>
         </div>
       </div>
+
+      {isSelectingLocation && (
+        <div className="pointer-events-none absolute inset-x-0 top-4 z-[600] flex justify-center px-20 text-center">
+          <div className="rounded-full border-2 border-[#EC008C] bg-white px-4 py-2 text-xs font-black text-slate-900 shadow-xl">
+            Click anywhere on the map to pin this location
+          </div>
+        </div>
+      )}
 
       {mapBusinesses.length === 0 && !safeUserLocation && (
         <div className="pointer-events-none absolute inset-x-4 top-24 z-10 flex justify-center sm:top-20">

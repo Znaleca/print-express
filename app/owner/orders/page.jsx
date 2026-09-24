@@ -301,7 +301,7 @@ export default function OwnerOrdersPage() {
 
         const { data: biz, error: businessError } = await supabase
           .from("businesses")
-          .select("id, name, address, phone")
+          .select("id, name, address, phone, lat, lng")
           .eq("owner_id", user.id)
           .order("created_at", { ascending: false })
           .limit(1)
@@ -366,7 +366,7 @@ export default function OwnerOrdersPage() {
       if (!business) {
         const { data, error } = await supabase
           .from("businesses")
-          .select("id, name, address, phone")
+          .select("id, name, address, phone, lat, lng")
           .eq("owner_id", user.id)
           .order("created_at", { ascending: false })
           .limit(1)
@@ -1094,7 +1094,14 @@ export default function OwnerOrdersPage() {
               <button type="button" onClick={() => setViewMapOrder(null)} aria-label="Close delivery map" className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00AFC0]"><X size={18} /></button>
             </div>
             <div className="h-[min(65vh,420px)] p-4 sm:p-5">
-              <LocationPicker {...getDeliveryCoordinates(viewMapOrder)} readOnly />
+              <LocationPicker
+                {...getDeliveryCoordinates(viewMapOrder)}
+                routePoints={viewMapOrder.businesses?.lat != null && viewMapOrder.businesses?.lng != null
+                  ? [[viewMapOrder.businesses.lat, viewMapOrder.businesses.lng], [getDeliveryCoordinates(viewMapOrder).lat, getDeliveryCoordinates(viewMapOrder).lng]]
+                  : null}
+                markerType="customer"
+                readOnly
+              />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-[#F6F6F2] px-5 py-3 text-[11px] text-slate-500 sm:px-6">
               <span>Map pin from the customer’s saved delivery location.</span>

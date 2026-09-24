@@ -33,6 +33,19 @@ const LocationPicker = dynamic(() => import("@/components/owner/LocationPicker")
 
 const MANILA_TIME_ZONE = "Asia/Manila";
 
+const getGeolocationErrorMessage = (error) => {
+  switch (error?.code) {
+    case 1:
+      return "Location permission is blocked for this site. Allow location access for localhost, then try again.";
+    case 2:
+      return "Your device could not determine your location. Turn on location services or place the pin manually.";
+    case 3:
+      return "Finding your location took too long. Try again or place the pin manually.";
+    default:
+      return "Could not get your location. Check browser permissions or place the pin manually.";
+  }
+};
+
 async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 8000) {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -318,8 +331,16 @@ export default function CheckoutPage({ params }) {
   };
 
   const getCurrentLocation = () => {
-    if (navigator.geolocation) {
-      setDeliveryLocationLoading(true);
+    if (!navigator.geolocation) {
+      setCheckoutMessage({ type: "error", text: "Location is not supported by this browser. Place the pin manually." });
+      setDeliveryLocationLoading(false);
+      return;
+    }
+
+    setCheckoutMessage(null);
+    setDeliveryLocationLoading(true);
+    let usedFallback = false;
+    const requestPosition = (options) => {
       navigator.geolocation.getCurrentPosition(
         (position) => {
           const coordinates = normalizeCoordinates(position.coords.latitude, position.coords.longitude);
@@ -332,14 +353,26 @@ export default function CheckoutPage({ params }) {
           reverseGeocode(coordinates.lat, coordinates.lng);
         },
         (error) => {
-          console.error("Geolocation error:", error);
-          setCheckoutMessage({ type: "error", text: "Could not get your location. Check browser permissions or place the pin manually." });
+          // High-accuracy GPS can time out indoors or on desktop browsers.
+          // Retry once with a cached/network location before asking the user
+          // to place the pin manually.
+          if (!usedFallback && error?.code !== 1) {
+            usedFallback = true;
+            requestPosition({ enableHighAccuracy: false, timeout: 20000, maximumAge: 120000 });
+            return;
+          }
+
+          console.warn("Geolocation unavailable:", {
+            code: error?.code ?? null,
+            message: error?.message || "Unknown geolocation error",
+          });
+          setCheckoutMessage({ type: "error", text: getGeolocationErrorMessage(error) });
           setDeliveryLocationLoading(false);
         }
       );
-    } else {
-      setCheckoutMessage({ type: "error", text: "Location is not supported by this browser. Place the pin manually." });
-    }
+    };
+
+    requestPosition({ enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
   };
 
   const handleExecuteOrder = async () => {
@@ -508,6 +541,10 @@ export default function CheckoutPage({ params }) {
       customerCoordinates: deliveryCoordinates,
       settings: normalizeDeliverySettings(business || {}),
     });
+  const shopCoordinates = normalizeCoordinates(business?.lat, business?.lng);
+  const deliveryRoutePoints = shopCoordinates && deliveryCoordinates
+    ? [[shopCoordinates.lat, shopCoordinates.lng], [deliveryCoordinates.lat, deliveryCoordinates.lng]]
+    : null;
 
   if (loading) {
     return (
@@ -818,8 +855,8 @@ export default function CheckoutPage({ params }) {
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="text-xs font-semibold text-slate-700">Delivery Address</label>
-                          <button type="button" onClick={getCurrentLocation} className="text-xs font-medium text-[#EC008C] flex items-center gap-1 hover:underline">
-                            <MapPin size={12} /> Use My Location
+                          <button type="button" onClick={getCurrentLocation} disabled={deliveryLocationLoading} className="text-xs font-medium text-[#EC008C] flex items-center gap-1 hover:underline disabled:cursor-wait disabled:opacity-50">
+                            {deliveryLocationLoading ? <Loader2 size={12} className="animate-spin" /> : <MapPin size={12} />} {deliveryLocationLoading ? "Finding location…" : "Use My Location"}
                           </button>
                         </div>
                         <div className="flex gap-2">
@@ -842,6 +879,8 @@ export default function CheckoutPage({ params }) {
                           <LocationPicker
                             lat={deliveryCoordinates?.lat}
                             lng={deliveryCoordinates?.lng}
+                            routePoints={deliveryRoutePoints}
+                            markerType="customer"
                             onChange={(lat, lng) => {
                               const coordinates = normalizeCoordinates(lat, lng);
                               if (!coordinates) return;

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useEffect, useMemo, useRef } from "react";
+import { Suspense, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search, Star, Loader2, Map as MapIcon, ChevronRight, MapPin, SlidersHorizontal, UserRound, X } from "lucide-react";
@@ -45,44 +45,68 @@ function BrowsePageContent() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
+  const [locationSource, setLocationSource] = useState(null);
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationStatus, setLocationStatus] = useState("idle");
+  const [isSelectingLocation, setIsSelectingLocation] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
   const mapSectionRef = useRef(null);
 
   const requestLocation = () => {
     if (!navigator.geolocation) {
-      setUserLocation(null);
       setLocationStatus("unavailable");
       return;
     }
 
     setLocationLoading(true);
     setLocationStatus("loading");
+    setIsSelectingLocation(false);
     setSelectedId(null);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const coordinates = normalizeCoordinates(pos.coords.latitude, pos.coords.longitude);
         if (!coordinates) {
-          setUserLocation(null);
           setLocationLoading(false);
           setLocationStatus("invalid");
           return;
         }
         setUserLocation(coordinates);
+        setLocationSource("current");
         setSortMode("nearest");
         setLocationLoading(false);
         setLocationStatus("granted");
       },
       (error) => {
-        setUserLocation(null);
         setLocationLoading(false);
         setLocationStatus(error?.code === 1 ? "denied" : error?.code === 3 ? "timeout" : "unavailable");
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   };
+
+  const startPinningLocation = () => {
+    const nextSelectingState = !isSelectingLocation;
+    setIsSelectingLocation(nextSelectingState);
+    setLocationLoading(false);
+    setSelectedId(null);
+    setLocationStatus(nextSelectingState ? "pinning" : locationSource ? locationSource === "pinned" ? "pinned" : "granted" : "idle");
+    if (nextSelectingState) {
+      requestAnimationFrame(() => {
+        mapSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    }
+  };
+
+  const handleMapLocationSelect = useCallback((coordinates) => {
+    setUserLocation(coordinates);
+    setLocationSource("pinned");
+    setLocationStatus("pinned");
+    setIsSelectingLocation(false);
+    setLocationLoading(false);
+    setSelectedId(null);
+    setSortMode("nearest");
+  }, []);
 
   const haversineKm = (lat1, lon1, lat2, lon2) => {
     const toRad = (deg) => (deg * Math.PI) / 180;
@@ -366,7 +390,7 @@ function BrowsePageContent() {
             Find print <span className="text-[#00FFFF]">shops.</span>
           </h1>
           <p className="mx-auto mt-3 max-w-xl text-xs leading-relaxed text-white/65 sm:text-sm">
-            Search printing shops or an area. Select a result to focus its pin on the map.
+            Search printing shops or an area, use your current location, or pin any location on the map.
           </p>
           {categoryFilter && (
             <div className="mx-auto mt-3 inline-flex items-center gap-2 rounded-full border border-[#00FFFF]/35 bg-[#00FFFF]/10 px-3 py-1.5 text-[11px] font-bold text-[#00FFFF]">
@@ -478,8 +502,10 @@ function BrowsePageContent() {
           <div className="mt-3 flex flex-wrap items-center justify-center gap-3 text-[11px]">
             <span className="flex items-center gap-2 font-bold text-white/70">
               <span className="h-2 w-2 rounded-full bg-[#EC008C]" />
-              {userLocation
-                ? `${displayedBusinesses.length} ${displayedBusinesses.length === 1 ? "nearby shop" : "nearby shops"} around you`
+              {locationSource === "pinned"
+                ? `${displayedBusinesses.length} ${displayedBusinesses.length === 1 ? "nearby shop" : "nearby shops"} around your pinned location`
+                : userLocation
+                  ? `${displayedBusinesses.length} ${displayedBusinesses.length === 1 ? "nearby shop" : "nearby shops"} around you`
                 : `${displayedBusinesses.length} ${displayedBusinesses.length === 1 ? "shop" : "shops"} on the map`}
             </span>
             <label className="flex items-center gap-2 font-semibold text-white/55">
@@ -501,11 +527,21 @@ function BrowsePageContent() {
               disabled={locationLoading}
               aria-busy={locationLoading}
               title={locationLoading ? "Finding your location" : "Use your current device location to find nearby shops"}
-              aria-label={locationLoading ? "Finding your current location" : userLocation ? "Refresh nearby shops using my current location" : "See nearby shops using my current location"}
+              aria-label={locationLoading ? "Finding your current location" : locationSource === "current" ? "Refresh nearby shops using my current location" : "See nearby shops using my current location"}
               className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] font-bold text-white/75 transition-colors hover:border-[#00FFFF]/50 hover:text-white disabled:cursor-wait disabled:opacity-60"
             >
               <UserRound size={13} className="text-[#FFF200]" aria-hidden="true" />
-              {locationLoading ? "Finding your location..." : userLocation ? "Refresh nearby" : "See nearby shops"}
+              {locationLoading ? "Finding your location..." : locationSource === "current" ? "Refresh nearby" : "See nearby shops"}
+            </button>
+            <button
+              type="button"
+              onClick={startPinningLocation}
+              aria-pressed={isSelectingLocation}
+              aria-label={isSelectingLocation ? "Cancel pin location mode" : "Pin a custom location on the map"}
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold transition-colors ${isSelectingLocation ? "border-[#EC008C] bg-[#EC008C] text-white" : "border-[#EC008C]/45 bg-[#EC008C]/10 text-[#FF8AC7] hover:border-[#EC008C] hover:bg-[#EC008C]/20 hover:text-white"}`}
+            >
+              {isSelectingLocation ? <X size={13} aria-hidden="true" /> : <MapPin size={13} aria-hidden="true" />}
+              {isSelectingLocation ? "Cancel pin" : locationSource === "pinned" ? "Move pinned location" : "Pin a location"}
             </button>
             {nearestBusiness && (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-[#FFF200]/45 bg-[#FFF200]/10 px-3 py-1.5 text-[11px] font-bold text-[#FFF200]">
@@ -541,7 +577,10 @@ function BrowsePageContent() {
           businesses={displayedBusinesses}
           selectedBusinessId={selectedId}
           userLocation={userLocation}
+          userLocationLabel={locationSource === "pinned" ? "Pinned location" : "Your location"}
           nearestBusinessId={nearestBusinessId}
+          isSelectingLocation={isSelectingLocation}
+          onMapLocationSelect={handleMapLocationSelect}
           emptyMessage={search.trim() && filtered.length === 0 ? "No approved shops match this search." : null}
         />
       </section>

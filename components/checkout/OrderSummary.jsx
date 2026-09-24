@@ -24,6 +24,12 @@ export default function OrderSummary({
   handleExecuteOrder,
   openDesignFiles,
 }) {
+  const sliderMin = Math.min(100, Math.max(0, Number(minimumDownpaymentPercent) || 0));
+  const sliderValue = Math.min(100, Math.max(sliderMin, Number(effectiveDownpaymentPercent) || sliderMin));
+  const sliderProgress = sliderMin >= 100
+    ? 100
+    : ((sliderValue - sliderMin) / (100 - sliderMin)) * 100;
+
   return (
     <aside className="lg:sticky lg:top-20 space-y-6">
       <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-md">
@@ -108,21 +114,63 @@ export default function OrderSummary({
             <span className="text-xl font-black text-slate-900">₱{total.toFixed(2)}</span>
           </div>
 
-          <div className="border-t border-slate-100 pt-3">
-            <div className="mb-1.5 flex items-center justify-between text-xs">
-              <span className="font-semibold text-slate-700">Downpayment Percent</span>
-              <span className="font-bold text-[#EC008C]">{effectiveDownpaymentPercent}%</span>
+          <div className="rounded-2xl border-2 border-[#EC008C]/30 bg-[#FFF7FB] p-4 shadow-sm">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-slate-900">Downpayment percent</p>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-slate-600">
+                  Choose how much you want to pay now.
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full border-2 border-[#EC008C] bg-white px-3 py-1 text-lg font-black leading-none text-[#EC008C] shadow-sm">
+                {sliderValue}%
+              </span>
             </div>
             <input
               type="range"
-              min={minimumDownpaymentPercent}
+              min={sliderMin}
               max="100"
               step="5"
-              value={effectiveDownpaymentPercent}
+              value={sliderValue}
               onChange={(event) => setUserSelectedDownpaymentPercent(Number(event.target.value))}
-              className="h-1.5 w-full cursor-pointer appearance-none rounded-lg bg-slate-200 accent-[#EC008C]"
+              style={{
+                background: `linear-gradient(to right, #EC008C 0%, #EC008C ${sliderProgress}%, #CBD5E1 ${sliderProgress}%, #CBD5E1 100%)`,
+              }}
+              className="downpayment-range h-3 w-full cursor-pointer appearance-none rounded-full border border-[#EC008C]/20 shadow-inner"
               aria-label="Downpayment percentage"
+              aria-valuemin={sliderMin}
+              aria-valuemax="100"
+              aria-valuenow={sliderValue}
             />
+            <div className="mt-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-slate-500">
+              <span>{sliderMin}% minimum</span>
+              <span>100% full payment</span>
+            </div>
+            <style jsx>{`
+              .downpayment-range::-webkit-slider-thumb {
+                width: 24px;
+                height: 24px;
+                appearance: none;
+                border: 4px solid #ffffff;
+                border-radius: 9999px;
+                background: #ec008c;
+                box-shadow: 0 1px 5px rgba(15, 23, 42, 0.3);
+              }
+
+              .downpayment-range::-moz-range-thumb {
+                width: 18px;
+                height: 18px;
+                border: 4px solid #ffffff;
+                border-radius: 9999px;
+                background: #ec008c;
+                box-shadow: 0 1px 5px rgba(15, 23, 42, 0.3);
+              }
+
+              .downpayment-range:focus-visible {
+                outline: 3px solid rgba(236, 0, 140, 0.25);
+                outline-offset: 4px;
+              }
+            `}</style>
           </div>
 
           <div className="flex items-center justify-between pt-2">
